@@ -2,6 +2,44 @@
 
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
+## Building the App
+
+**ALWAYS use devenv shell** for all build commands. Run from project root:
+
+```bash
+cd /home/antono/Code/cerbo
+source .devenv/shell-f9869ee86e556cee.sh   # or: bash -c 'source .devenv/shell-f9869ee86e556cee.sh && <command>'
+```
+
+### Frontend (Svelte + Vite)
+
+```bash
+# Development (hot reload)
+bun run dev
+
+# TypeScript check
+bun run check
+
+# Production build
+bun run build
+
+# Preview production
+bun run preview
+```
+
+### Tauri App (Rust backend)
+
+```bash
+# Development (hot reload for Rust)
+cargo tauri dev
+
+# Build production binary
+cargo tauri build
+
+# Run clippy lints
+cargo clippy
+```
+
 ## Quick Reference
 
 ```bash
