@@ -17,6 +17,8 @@
     openssl
     glib
     gtk3
+    gsettings-desktop-schemas
+    adwaita-icon-theme
     cairo
     gdk-pixbuf
     librsvg
@@ -27,6 +29,7 @@
   env = {
     PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
     WEBKIT_DISABLE_COMPOSITING_MODE = "1"; # prevents rendering issues on some setups
+    XDG_DATA_DIRS = "${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:$XDG_DATA_DIRS";
   };
 
   enterShell = ''
