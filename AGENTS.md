@@ -4,10 +4,29 @@ This project uses **bd** (beads) for issue tracking. Run `bd prime` for full wor
 
 ## Building the App
 
-**ALWAYS use devenv shell** for all build commands. Run from project root:
+**ALWAYS use devenv shell** for all build commands. Run commands in the shell directly:
 
 ```bash
-source .devenv/shell-f9869ee86e556cee.sh   # from project root
+# Enter the devenv shell
+devenv shell
+
+# Now run build commands (inside the shell)
+# Frontend (Svelte + Vite)
+bun run dev
+
+# Tauri App (Rust backend)
+cargo tauri dev
+```
+
+### Alternatively, run commands without entering a shell:
+
+```bash
+# Frontend
+devenv run bun run build
+
+# Tauri App
+devenv run cargo tauri build
+devenv run cargo clippy
 ```
 
 ### Frontend (Svelte + Vite)
