@@ -1,7 +1,53 @@
-# Tauri + SvelteKit + TypeScript
+# Cerbo
 
-This template should help get you started developing with Tauri, SvelteKit and TypeScript in Vite.
+**Cerbo** is a local-first markdown wiki editor that treats the filesystem as a first-class citizen. It stores all knowledge as plain files you fully own, with wikilink-based graph navigation as the core interaction model.
 
-## Recommended IDE Setup
+## Core Features
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer).
+- **Local-First & Private**: Your data stays on your machine in plain Markdown files and folders. No cloud dependency, no proprietary formats.
+- **Wikilink-Based Graph**: Navigate and link ideas naturally with `[[Wikilinks]]`.
+- **Page-as-Folder Structure**: Each page is a `<slug>/page.md` folder, allowing you to co-locate assets (images, PDFs) directly with your notes.
+- **Rename Cascade**: Renaming a page automatically updates all links to it across your entire vault.
+- **Backlinks Panel**: See the context of your knowledge with a built-in backlinks explorer.
+- **Multiple Vaults**: Manage multiple isolated knowledge bases (vaults) anywhere on your disk.
+- **XDG Compliant**: App configuration and caches follow the XDG Base Directory Specification.
+
+## Tech Stack
+
+- **Backend**: Rust + [Tauri v2](https://tauri.app/)
+- **Frontend**: [Svelte 5](https://svelte.dev/) + [Carta](https://github.com/bearz-io/carta) (Markdown Editor) + Tailwind CSS
+- **Package Manager**: [Bun](https://bun.sh/)
+- **Environment**: [devenv.sh](https://devenv.sh/)
+
+## Getting Started
+
+This project uses `devenv` to manage the development environment, including Rust, Bun, and build dependencies.
+
+### 1. Enter the Environment
+```bash
+devenv shell
+```
+
+### 2. Run Development Tasks
+Inside the shell, use `devenv tasks` to manage the project:
+
+```bash
+devenv tasks run app:dev       # Start Tauri app with hot reload
+devenv tasks run frontend:dev  # Start Vite dev server (frontend only)
+devenv tasks run app:check     # Run Rust type checks (clippy)
+```
+
+### 3. Build for Production
+```bash
+devenv tasks run app:build
+```
+
+## Data Storage
+
+- **Configuration**: `$XDG_CONFIG_HOME/cerbo/vaults.json` (defaults to `~/.config/cerbo/`). Stores only vault names and paths.
+- **Cache**: `$XDG_CACHE_HOME/cerbo/` (defaults to `~/.cache/cerbo/`). Stores the link index and derived data.
+- **Vaults**: Pure markdown and assets. Cerbo does not store hidden metadata inside your vault directories.
+
+## License
+
+LGPL-3.0-or-later
