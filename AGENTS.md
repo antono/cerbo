@@ -7,8 +7,7 @@ This project uses **bd** (beads) for issue tracking. Run `bd prime` for full wor
 **ALWAYS use devenv shell** for all build commands. Run from project root:
 
 ```bash
-cd /home/antono/Code/cerbo
-source .devenv/shell-f9869ee86e556cee.sh   # or: bash -c 'source .devenv/shell-f9869ee86e556cee.sh && <command>'
+source .devenv/shell-f9869ee86e556cee.sh   # from project root
 ```
 
 ### Frontend (Svelte + Vite)
