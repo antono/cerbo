@@ -13,6 +13,7 @@ export interface Vault {
   id: string;
   name: string;
   path: string;
+  lastOpenPage: string | null;
 }
 
 export interface PageMeta {
@@ -23,6 +24,11 @@ export interface PageMeta {
 export interface BacklinkEntry {
   slug: string;
   title: string;
+}
+
+export interface VaultsFile {
+  vaults: Vault[];
+  activeVaultId: string | null;
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -37,8 +43,6 @@ export const app = $state({
   loading: false,
   loadingMessage: '',
   error: null as string | null,
-  // Per-vault last-open page (vault_id → slug)
-  lastOpenPage: {} as Record<string, string>,
 });
 
 // ── Computed helpers ──────────────────────────────────────────────────────────
@@ -55,15 +59,16 @@ export function pageSlugs(): string[] {
 
 export async function loadVaults(): Promise<void> {
   try {
-    const vaults = await invoke<Vault[]>('vault_list');
-    app.vaults = vaults;
+    const res = await invoke<VaultsFile>('vault_list');
+    app.vaults = res.vaults;
+    app.activeVaultId = res.activeVaultId;
 
-    // Determine active vault
-    if (app.activeVaultId && !vaults.find((v) => v.id === app.activeVaultId)) {
+    // Fallback if activeVaultId is invalid
+    if (app.activeVaultId && !app.vaults.find((v) => v.id === app.activeVaultId)) {
       app.activeVaultId = null;
     }
-    if (!app.activeVaultId && vaults.length > 0) {
-      app.activeVaultId = vaults[0].id;
+    if (!app.activeVaultId && app.vaults.length > 0) {
+      app.activeVaultId = app.vaults[0].id;
     }
   } catch (e) {
     setError(String(e));
@@ -77,14 +82,26 @@ export async function openVault(vaultId: string): Promise<void> {
   try {
     await invoke('vault_open', { vaultId });
     app.activeVaultId = vaultId;
+    await invoke('vault_set_active', { id: vaultId });
     await loadPages();
 
+    const vault = activeVault();
+    if (!vault) return;
+
+    // Create Index page if vault is completely empty
+    if (app.pages.length === 0) {
+      await createPage('Index');
+      return;
+    }
+
     // Restore last-open page
-    const last = app.lastOpenPage[vaultId];
+    const last = vault.lastOpenPage;
     if (last && app.pages.find((p) => p.slug === last)) {
       await openPage(last);
     } else if (app.pages.length > 0) {
-      await openPage(app.pages[0].slug);
+      // Try to find 'index' slug first, otherwise first available
+      const indexPage = app.pages.find((p) => p.slug === 'index');
+      await openPage(indexPage ? indexPage.slug : app.pages[0].slug);
     } else {
       app.currentSlug = null;
       app.currentContent = '';
@@ -125,7 +142,11 @@ export async function openPage(slug: string): Promise<void> {
     const content = await invoke<string>('page_read', { vaultId: app.activeVaultId, slug });
     app.currentSlug = slug;
     app.currentContent = content;
-    app.lastOpenPage[app.activeVaultId] = slug;
+    await invoke('vault_update_last_page', { vaultId: app.activeVaultId, slug });
+    // Update local state too so we don't have to reload all vaults
+    const v = activeVault();
+    if (v) v.lastOpenPage = slug;
+    
     await loadBacklinks(slug);
   } catch (e) {
     setError(String(e));

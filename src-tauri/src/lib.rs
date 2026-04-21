@@ -19,6 +19,7 @@ pub fn run() {
             vault::vault_list,
             vault::vault_set_active,
             vault::vault_relocate,
+            vault::vault_update_last_page,
             // index
             index::backlinks_get,
             vault_open,

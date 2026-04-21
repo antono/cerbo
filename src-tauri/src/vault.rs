@@ -6,10 +6,12 @@ use uuid::Uuid;
 use crate::paths;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Vault {
     pub id: String,
     pub name: String,
     pub path: PathBuf,
+    pub last_open_page: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -55,6 +57,7 @@ pub fn vault_add(app: AppHandle, name: String, path: String) -> Result<Vault, St
         id: Uuid::new_v4().to_string(),
         name,
         path: path_buf,
+        last_open_page: None,
     };
     reg.vaults.push(vault.clone());
     if reg.active_vault_id.is_none() {
@@ -84,8 +87,8 @@ pub fn vault_remove(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn vault_list(app: AppHandle) -> Result<Vec<Vault>, String> {
-    Ok(load_vaults(&app)?.vaults)
+pub fn vault_list(app: AppHandle) -> Result<VaultsFile, String> {
+    load_vaults(&app)
 }
 
 #[tauri::command]
@@ -95,6 +98,15 @@ pub fn vault_set_active(app: AppHandle, id: String) -> Result<(), String> {
         return Err(format!("vault_set_active: vault not found: {id}"));
     }
     reg.active_vault_id = Some(id);
+    save_vaults(&app, &reg)
+}
+
+#[tauri::command]
+pub fn vault_update_last_page(app: AppHandle, vault_id: String, slug: Option<String>) -> Result<(), String> {
+    let mut reg = load_vaults(&app)?;
+    let vault = reg.vaults.iter_mut().find(|v| v.id == vault_id)
+        .ok_or_else(|| format!("vault_update_last_page: vault not found: {vault_id}"))?;
+    vault.last_open_page = slug;
     save_vaults(&app, &reg)
 }
 
@@ -138,6 +150,7 @@ mod tests {
                 id: "a".into(),
                 name: "Test".into(),
                 path: dir.path().to_path_buf(),
+                last_open_page: None,
             }],
             active_vault_id: Some("a".into()),
         }
