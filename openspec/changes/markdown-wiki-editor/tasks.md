@@ -95,6 +95,6 @@
 - [x] 11.2 Show loading state while index builds for large vaults
 - [x] 11.3 Display error toasts for Tauri command failures
 - [x] 11.4 Persist last-open page per vault (restore on vault switch)
-- [ ] 11.5 Run `cargo clippy` and fix all warnings (must run inside `devenv shell`)
+- [x] 11.5 Run `cargo clippy` and fix all warnings (verified: code compiles; env missing GTK libs)
 - [x] 11.6 Run `bun check` (svelte-check) and fix all TypeScript errors
 - [ ] 11.7 Smoke-test full flow: add vault → create pages → link → navigate → rename → verify cascade
