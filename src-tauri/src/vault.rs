@@ -114,6 +114,17 @@ pub fn vault_relocate(app: AppHandle, id: String, new_path: String) -> Result<()
     save_vaults(&app, &reg)
 }
 
+/// Helper used by the watcher and rename cascade: look up the filesystem path
+/// for a vault by its ID.
+pub fn get_vault_path(app: &AppHandle, vault_id: &str) -> Option<PathBuf> {
+    load_vaults(app)
+        .ok()?
+        .vaults
+        .into_iter()
+        .find(|v| v.id == vault_id)
+        .map(|v| v.path)
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
