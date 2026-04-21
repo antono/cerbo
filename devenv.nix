@@ -36,9 +36,27 @@
     cargo tauri --version 2>/dev/null || echo "  cargo-tauri: available"
   '';
 
-  scripts = {
-    dev.exec = "cargo tauri dev";
-    build.exec = "cargo tauri build";
-    check.exec = "cargo check";
+  tasks = {
+    "app:dev" = {
+      exec = "cargo tauri dev";
+      cwd = "src-tauri";
+    };
+    "app:build" = {
+      exec = "cargo tauri build";
+      cwd = "src-tauri";
+    };
+    "app:check" = {
+      exec = "cargo clippy";
+      cwd = "src-tauri";
+    };
+    "frontend:dev" = {
+      exec = "bun run dev";
+    };
+    "frontend:build" = {
+      exec = "bun run build";
+    };
+    "frontend:check" = {
+      exec = "bun run check";
+    };
   };
 }

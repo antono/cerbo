@@ -1,32 +1,33 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
+This project uses **bd** (beads) for issue tracking. Run `bd prime` for full
+workflow context.
 
 ## Building the App
 
-**ALWAYS use devenv shell** for all build commands. Run commands in the shell directly:
+**ALWAYS use devenv tasks** for all build commands:
 
 ```bash
-# Enter the devenv shell
+# Enter the devenv shell (for ad-hoc commands)
 devenv shell
 
-# Now run build commands (inside the shell)
-# Frontend (Svelte + Vite)
-bun run dev
+# Run defined tasks (inside the shell)
+devenv tasks run app:dev      # Tauri App (hot reload)
+devenv tasks run app:build     # Tauri production build
+devenv tasks run app:check    # Rust type check (clippy)
 
-# Tauri App (Rust backend)
-cargo tauri dev
+# Frontend commands (inside the shell)
+devenv tasks run frontend:dev    # Vite dev server (hot reload)
+devenv tasks run frontend:build   # Vite production build
+devenv tasks run frontend:check   # TypeScript check
 ```
 
-### Alternatively, run commands without entering a shell:
+### Alternative: run commands in a one-liner
 
 ```bash
-# Frontend
-devenv run bun run build
-
-# Tauri App
-devenv run cargo tauri build
-devenv run cargo clippy
+devenv shell --no-tui -c "devenv tasks run frontend:build"
+devenv shell --no-tui -c "devenv tasks run app:build"
+devenv shell --no-tui -c "devenv tasks run app:check"
 ```
 
 ### Frontend (Svelte + Vite)
@@ -36,7 +37,7 @@ devenv run cargo clippy
 bun run dev
 
 # TypeScript check
-bun run check
+bun run check # Assumes 'check' script is defined in package.json
 
 # Production build
 bun run build
@@ -49,7 +50,7 @@ bun run preview
 
 ```bash
 # Development (hot reload for Rust)
-cargo tauri dev
+tauri dev # (requires tauri-cli, not cargo)
 
 # Build production binary
 cargo tauri build
@@ -70,11 +71,15 @@ bd dolt push          # Push beads data to remote
 
 ## Non-Interactive Shell Commands
 
-**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
+**ALWAYS use non-interactive flags** with file operations to avoid hanging on
+confirmation prompts.
 
-Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
+Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i`
+(interactive) mode on some systems, causing the agent to hang indefinitely
+waiting for y/n input.
 
 **Use these forms instead:**
+
 ```bash
 # Force overwrite without prompting
 cp -f source dest           # NOT: cp source dest
@@ -87,15 +92,17 @@ cp -rf source dest          # NOT: cp -r source dest
 ```
 
 **Other commands that may prompt:**
+
 - `scp` - use `-o BatchMode=yes` for non-interactive
 - `ssh` - use `-o BatchMode=yes` to fail instead of prompting
 - `apt-get` - use `-y` flag
-- `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
+
 ## Beads Issue Tracker
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full
+workflow context and commands.
 
 ### Quick Reference
 
@@ -108,17 +115,20 @@ bd close <id>         # Complete work
 
 ### Rules
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown
+  TODO lists
 - Run `bd prime` for detailed command reference and session close protocol
 - Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
 
 ## Session Completion
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+**When ending a work session**, you MUST complete ALL steps below. Work is NOT
+complete until `git push` succeeds.
 
 **MANDATORY WORKFLOW:**
 
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
+1. **File issues for remaining work** - Create issues for anything that needs
+   follow-up
 2. **Run quality gates** (if code changed) - Tests, linters, builds
 3. **Update issue status** - Close finished work, update in-progress items
 4. **PUSH TO REMOTE** - This is MANDATORY:
@@ -133,8 +143,10 @@ bd close <id>         # Complete work
 7. **Hand off** - Provide context for next session
 
 **CRITICAL RULES:**
+
 - Work is NOT complete until `git push` succeeds
 - NEVER stop before pushing - that leaves work stranded locally
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
+
 <!-- END BEADS INTEGRATION -->
