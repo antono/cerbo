@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { open } from '@tauri-apps/plugin-dialog';
+  import { homeDir } from '@tauri-apps/api/path';
   import { app, addVault, openVault, loadVaults } from './stores.svelte';
 
   let { onClose }: { onClose: () => void } = $props();
@@ -29,6 +31,27 @@
       addError = String(e);
     } finally {
       adding = false;
+    }
+  }
+
+  async function selectFolder() {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: await homeDir(),
+      });
+      if (selected && typeof selected === 'string') {
+        newPath = selected;
+        // If name is empty, try to use the folder name
+        if (!newName.trim()) {
+          const parts = selected.split(/[\\/]/);
+          const last = parts.pop() || parts.pop(); // handle trailing slash
+          if (last) newName = last;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to open dialog', e);
     }
   }
 </script>
@@ -62,12 +85,17 @@
           bind:value={newName}
           onkeydown={(e) => e.key === 'Enter' && handleAdd()}
         />
-        <input
-          class="input"
-          placeholder="/path/to/folder"
-          bind:value={newPath}
-          onkeydown={(e) => e.key === 'Enter' && handleAdd()}
-        />
+        <div class="path-input-row">
+          <input
+            class="input"
+            placeholder="/path/to/folder"
+            bind:value={newPath}
+            onkeydown={(e) => e.key === 'Enter' && handleAdd()}
+          />
+          <button class="btn-browse" onclick={selectFolder} title="Browse">
+            📂
+          </button>
+        </div>
         {#if addError}
           <p class="error">{addError}</p>
         {/if}
@@ -92,7 +120,7 @@
   .vault-switcher {
     display: flex;
     flex-direction: column;
-    min-width: 220px;
+    min-width: 240px;
     background: var(--bg-overlay, #fff);
     border: 1px solid var(--border, #e2e8f0);
     border-radius: 0.5rem;
@@ -124,6 +152,19 @@
     padding: 0.5rem;
   }
   .add-form { display: flex; flex-direction: column; gap: 0.375rem; }
+  .path-input-row {
+    display: flex;
+    gap: 0.25rem;
+  }
+  .btn-browse {
+    padding: 0.25rem 0.5rem;
+    background: var(--accent, #f1f5f9);
+    border: 1px solid var(--border, #e2e8f0);
+    border-radius: 0.375rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  .btn-browse:hover { background: var(--accent-hover, #e2e8f0); }
   .add-form-actions { display: flex; gap: 0.375rem; }
   .input {
     padding: 0.375rem 0.5rem;
