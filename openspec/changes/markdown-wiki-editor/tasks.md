@@ -1,46 +1,46 @@
 ## 1. Project Scaffold
 
-- [ ] 1.1 Run `bun create tauri-app cerbo` with SvelteKit template
-- [ ] 1.2 Configure `devenv.sh` with Rust stable toolchain, Bun, and Tauri CLI
-- [ ] 1.3 Add devenv shell scripts: `dev` (tauri dev), `build` (tauri build), `check` (cargo check)
-- [ ] 1.4 Add Rust dependencies: `serde`, `serde_json`, `uuid`, `walkdir`, `notify`
-- [ ] 1.5 Add frontend dependencies: `carta-md`, `shadcn-svelte`
+- [x] 1.1 Run `bun create tauri-app cerbo` with SvelteKit template
+- [x] 1.2 Configure `devenv.sh` with Rust stable toolchain, Bun, and Tauri CLI
+- [x] 1.3 Add devenv shell scripts: `dev` (tauri dev), `build` (tauri build), `check` (cargo check)
+- [x] 1.4 Add Rust dependencies: `serde`, `serde_json`, `uuid`, `walkdir`, `notify`
+- [x] 1.5 Add frontend dependencies: `carta-md`, `shadcn-svelte`
 - [ ] 1.6 Verify `bun tauri dev` launches the app window
 
 ## 2. XDG Paths
 
-- [ ] 2.1 Add helper `config_dir()` using Tauri's `app_config_dir()` → `$XDG_CONFIG_HOME/cerbo/`
-- [ ] 2.2 Add helper `cache_dir(vault_id)` using Tauri's `app_cache_dir()` → `$XDG_CACHE_HOME/cerbo/<vault-id>/`
-- [ ] 2.3 Ensure directories are created on first use (mkdir -p equivalent)
+- [x] 2.1 Add helper `config_dir()` using Tauri's `app_config_dir()` → `$XDG_CONFIG_HOME/cerbo/`
+- [x] 2.2 Add helper `cache_dir(vault_id)` using Tauri's `app_cache_dir()` → `$XDG_CACHE_HOME/cerbo/<vault-id>/`
+- [x] 2.3 Ensure directories are created on first use (mkdir -p equivalent)
 
 ## 3. Vault Registry
 
-- [ ] 3.1 Define `Vault` and `VaultsFile` structs (id, name, path, activeVaultId)
-- [ ] 3.2 Implement `load_vaults()` — read and deserialize `vaults.json` (return empty registry if missing)
-- [ ] 3.3 Implement `save_vaults()` — serialize and write `vaults.json` atomically
-- [ ] 3.4 Implement `vault_add(name, path)` Tauri command — validate path exists, assign UUID, persist
-- [ ] 3.5 Implement `vault_remove(id)` Tauri command — remove from registry, delete cache dir
-- [ ] 3.6 Implement `vault_list()` Tauri command — return all registered vaults
-- [ ] 3.7 Implement `vault_set_active(id)` Tauri command — update `activeVaultId` in registry
-- [ ] 3.8 Implement `vault_relocate(id, new_path)` Tauri command — update path, keep ID and cache
-- [ ] 3.9 Write unit tests for vault add, remove, and relocate
+- [x] 3.1 Define `Vault` and `VaultsFile` structs (id, name, path, activeVaultId)
+- [x] 3.2 Implement `load_vaults()` — read and deserialize `vaults.json` (return empty registry if missing)
+- [x] 3.3 Implement `save_vaults()` — serialize and write `vaults.json` atomically
+- [x] 3.4 Implement `vault_add(name, path)` Tauri command — validate path exists, assign UUID, persist
+- [x] 3.5 Implement `vault_remove(id)` Tauri command — remove from registry, delete cache dir
+- [x] 3.6 Implement `vault_list()` Tauri command — return all registered vaults
+- [x] 3.7 Implement `vault_set_active(id)` Tauri command — update `activeVaultId` in registry
+- [x] 3.8 Implement `vault_relocate(id, new_path)` Tauri command — update path, keep ID and cache
+- [x] 3.9 Write unit tests for vault add, remove, and relocate
 
 ## 4. Slug Derivation
 
-- [ ] 4.1 Implement `derive_slug(title: &str) -> String` in Rust (NFKD → strip diacritics → lowercase → kebab → trim)
-- [ ] 4.2 Add Rust crate `unicode-normalization` for NFKD support
-- [ ] 4.3 Expose `slug_from_title(title)` as Tauri command
-- [ ] 4.4 Write unit tests covering ASCII, diacritics, special chars, leading/trailing punctuation
+- [x] 4.1 Implement `derive_slug(title: &str) -> String` in Rust (NFKD → strip diacritics → lowercase → kebab → trim)
+- [x] 4.2 Add Rust crate `unicode-normalization` for NFKD support
+- [x] 4.3 Expose `slug_from_title(title)` as Tauri command
+- [x] 4.4 Write unit tests covering ASCII, diacritics, special chars, leading/trailing punctuation
 
 ## 5. Page CRUD
 
-- [ ] 5.1 Implement `page_create(vault_id, title)` Tauri command — derive slug, mkdir, write `# Title` to `page.md`
-- [ ] 5.2 Implement `page_read(vault_id, slug)` Tauri command — read `<slug>/page.md` raw content
-- [ ] 5.3 Implement `page_write(vault_id, slug, content)` Tauri command — write content atomically
-- [ ] 5.4 Implement `page_delete(vault_id, slug)` Tauri command — remove entire page folder
-- [ ] 5.5 Implement `page_list(vault_id)` Tauri command — scan vault for folders containing `page.md`, return slug + title
-- [ ] 5.6 Reject `page_create` if slug already exists (return descriptive error)
-- [ ] 5.7 Write unit tests for create, read, write, delete, and list
+- [x] 5.1 Implement `page_create(vault_id, title)` Tauri command — derive slug, mkdir, write `# Title` to `page.md`
+- [x] 5.2 Implement `page_read(vault_id, slug)` Tauri command — read `<slug>/page.md` raw content
+- [x] 5.3 Implement `page_write(vault_id, slug, content)` Tauri command — write content atomically
+- [x] 5.4 Implement `page_delete(vault_id, slug)` Tauri command — remove entire page folder
+- [x] 5.5 Implement `page_list(vault_id)` Tauri command — scan vault for folders containing `page.md`, return slug + title
+- [x] 5.6 Reject `page_create` if slug already exists (return descriptive error)
+- [x] 5.7 Write unit tests for create, read, write, delete, and list
 
 ## 6. Link Index
 

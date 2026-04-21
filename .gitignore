@@ -1,4 +1,20 @@
 
+# Dependencies
+node_modules/
+
+# Build outputs
+target/
+build/
+dist/
+.svelte-kit/
+
+# devenv
+.devenv/
+
+# Misc
+*.db-shm
+*.db-wal
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
