@@ -122,7 +122,8 @@ mod tests {
     /// Create a minimal fake vault directory and a Vault entry manually.
     fn setup_vault() -> (TempDir, PathBuf) {
         let tmp = TempDir::new().unwrap();
-        (tmp.clone(), tmp.path().to_path_buf())
+        let path = tmp.path().to_path_buf();
+        (tmp, path)
     }
 
     fn create_page_manually(root: &PathBuf, slug: &str, title: &str) {

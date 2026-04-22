@@ -17,6 +17,12 @@ pub struct PageEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BacklinkEntry {
+    pub slug: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinkIndex {
     pub version: u32,
@@ -134,7 +140,7 @@ fn index_path(app: &AppHandle, vault_id: &str) -> Result<PathBuf, String> {
 // ---------------------------------------------------------------------------
 
 /// Return all slugs that link *to* `target_slug`.
-pub fn compute_backlinks(index: &LinkIndex, target_slug: &str) -> Vec<String> {
+pub fn compute_backlinks(index: &LinkIndex, target_slug: &str) -> Vec<BacklinkEntry> {
     // We compare wikilink text (titles) against the title of the target page.
     let target_title = index
         .pages
@@ -150,7 +156,10 @@ pub fn compute_backlinks(index: &LinkIndex, target_slug: &str) -> Vec<String> {
                 l.eq_ignore_ascii_case(target_title) || l.eq_ignore_ascii_case(target_slug)
             });
             if links_to && slug != target_slug {
-                Some(slug.clone())
+                Some(BacklinkEntry {
+                    slug: slug.clone(),
+                    title: entry.title.clone(),
+                })
             } else {
                 None
             }
@@ -167,7 +176,7 @@ pub fn backlinks_get(
     app: AppHandle,
     vault_id: String,
     slug: String,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<BacklinkEntry>, String> {
     let index = load_index(&app, &vault_id)
         .ok_or_else(|| format!("No index for vault {vault_id}"))?;
     Ok(compute_backlinks(&index, &slug))
@@ -294,11 +303,14 @@ mod tests {
         let index = LinkIndex::new(pages);
 
         let mut bl = compute_backlinks(&index, "svelte");
-        bl.sort();
-        assert_eq!(bl, vec!["other", "rust"]);
+        bl.sort_by_key(|b| b.slug.clone());
+        assert_eq!(bl.len(), 2);
+        assert_eq!(bl[0].slug, "other");
+        assert_eq!(bl[1].slug, "rust");
 
         let bl2 = compute_backlinks(&index, "rust");
-        assert_eq!(bl2, vec!["other"]);
+        assert_eq!(bl2.len(), 1);
+        assert_eq!(bl2[0].slug, "other");
     }
 
     #[test]
