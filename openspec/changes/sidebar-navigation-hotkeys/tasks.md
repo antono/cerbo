@@ -14,7 +14,7 @@
 
 ## 3. Verification
 
-- [ ] 3.1 Manually verify `Tab` cycles focus through all pages in the sidebar.
-- [ ] 3.2 Manually verify `ArrowUp`/`ArrowDown` move focus and wrap correctly.
-- [ ] 3.3 Manually verify `j`/`k` move focus and do not trigger when typing in inputs.
-- [ ] 3.4 Confirm new shortcuts are accurately displayed in the F1 Help modal.
+- [x] 3.1 Manually verify `Tab` cycles focus through all pages in the sidebar.
+- [x] 3.2 Manually verify `ArrowUp`/`ArrowDown` move focus and wrap correctly.
+- [x] 3.3 Manually verify `j`/`k` move focus and do not trigger when typing in inputs.
+- [x] 3.4 Confirm new shortcuts are accurately displayed in the F1 Help modal.
