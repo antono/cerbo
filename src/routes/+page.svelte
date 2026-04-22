@@ -21,8 +21,6 @@
     <!-- Page title bar -->
     <div class="page-title-bar">
       <div class="title-left">
-        <h1 class="page-title">{currentPage?.title ?? app.currentSlug}</h1>
-        
         <button 
           class="mode-toggle" 
           onclick={() => isEditing = !isEditing}
@@ -35,6 +33,8 @@
           {/if}
         </button>
 
+        <h1 class="page-title">{currentPage?.title ?? app.currentSlug}</h1>
+        
         {#if isSaving}
           <div class="save-indicator">Saving…</div>
         {/if}
