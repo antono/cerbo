@@ -19,3 +19,7 @@ dist/
 .dolt/
 *.db
 .beads-credential-key
+.codanna
+.fastembed_cache
+.codannaignore
+*.log

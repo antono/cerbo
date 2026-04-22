@@ -6,14 +6,15 @@ use notify::Watcher;
 pub use cerbo_core::index::WatcherState;
 
 #[tauri::command]
+#[allow(non_snake_case)]
 pub fn backlinks_get(
     app: AppHandle,
-    vault_id: String,
+    vaultId: String,
     slug: String,
 ) -> Result<Vec<BacklinkEntry>, String> {
     let ctx = get_context(&app)?;
-    let index = index::load_index(&ctx, &vault_id)
-        .ok_or_else(|| format!("No index for vault {vault_id}"))?;
+    let index = index::load_index(&ctx, &vaultId)
+        .ok_or_else(|| format!("No index for vault {vaultId}"))?;
     Ok(index::compute_backlinks(&index, &slug))
 }
 

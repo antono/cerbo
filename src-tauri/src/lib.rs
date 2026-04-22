@@ -55,22 +55,23 @@ pub fn run() {
 }
 
 #[tauri::command]
+#[allow(non_snake_case)]
 fn vault_open(
     app: tauri::AppHandle,
-    vault_id: String,
+    vaultId: String,
     watcher_state: tauri::State<WatcherState>,
 ) -> Result<(), String> {
     let ctx = get_context(&app)?;
-    let vault_path = cerbo_core::vault::get_vault_path(&ctx, &vault_id)
-        .ok_or_else(|| format!("vault_open: vault not found: {vault_id}"))?;
+    let vault_path = cerbo_core::vault::get_vault_path(&ctx, &vaultId)
+        .ok_or_else(|| format!("vault_open: vault not found: {vaultId}"))?;
 
     // Build/refresh index if cache is missing
-    if cerbo_core::index::load_index(&ctx, &vault_id).is_none() {
+    if cerbo_core::index::load_index(&ctx, &vaultId).is_none() {
         let idx = cerbo_core::index::build_index(&vault_path)?;
-        cerbo_core::index::save_index(&ctx, &vault_id, &idx)?;
+        cerbo_core::index::save_index(&ctx, &vaultId, &idx)?;
     }
 
     // Start FS watcher
-    index::start_watcher(&app, &vault_id, vault_path, &watcher_state)?;
+    index::start_watcher(&app, &vaultId, vault_path, &watcher_state)?;
     Ok(())
 }

@@ -23,11 +23,13 @@ pub fn vault_set_active(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn vault_update_last_page(app: AppHandle, vault_id: String, slug: Option<String>) -> Result<(), String> {
-    vault::vault_update_last_page(&get_context(&app)?, vault_id, slug)
+#[allow(non_snake_case)]
+pub fn vault_update_last_page(app: AppHandle, vaultId: String, slug: Option<String>) -> Result<(), String> {
+    vault::vault_update_last_page(&get_context(&app)?, vaultId, slug)
 }
 
 #[tauri::command]
-pub fn vault_relocate(app: AppHandle, id: String, new_path: String) -> Result<(), String> {
-    vault::vault_relocate(&get_context(&app)?, id, new_path)
+#[allow(non_snake_case)]
+pub fn vault_relocate(app: AppHandle, id: String, newPath: String) -> Result<(), String> {
+    vault::vault_relocate(&get_context(&app)?, id, newPath)
 }

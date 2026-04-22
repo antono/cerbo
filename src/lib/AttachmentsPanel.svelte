@@ -12,7 +12,7 @@
     loading = true;
     try {
       attachments = await invoke<string[]>('attachment_list', {
-        vault_id: app.activeVaultId,
+        vaultId: app.activeVaultId,
         slug
       });
     } catch (e) {
@@ -28,7 +28,7 @@
 
     try {
       await invoke('attachment_delete', {
-        vault_id: app.activeVaultId,
+        vaultId: app.activeVaultId,
         slug,
         filename
       });
