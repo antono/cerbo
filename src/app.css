@@ -135,52 +135,10 @@ html, body {
   resize: none !important;
 }
 
-/* Tabbed mode styling (GitHub-like) */
+/* Tabbed mode styling - Hidden because we use a single toggle button */
 .carta-toolbar-left {
-  display: flex !important;
-  flex-direction: row !important;
-  gap: 0.25rem !important;
-  padding: 0 1rem !important;
-  align-items: flex-end !important;
-  overflow-x: auto !important; /* Allow scrolling if tabs too many */
-  overflow-y: hidden !important;
-  height: 100% !important;
+  display: none !important;
 }
-
-.carta-toolbar-left button {
-  padding: 0 1.25rem !important;
-  height: 34px !important;
-  border: 1px solid transparent !important;
-  border-bottom: none !important;
-  border-radius: var(--radius) var(--radius) 0 0 !important;
-  cursor: pointer !important;
-  font-size: 0.8125rem !important;
-  font-weight: 500 !important;
-  color: var(--muted-foreground) !important;
-  transition: all 0.15s !important;
-  background: transparent !important;
-  margin-bottom: -1px !important;
-  flex: 0 0 auto !important;
-  width: auto !important;
-  white-space: nowrap !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  box-sizing: border-box !important;
-}
-
-.carta-toolbar-left button:hover {
-  color: var(--fg) !important;
-}
-
-.carta-toolbar-left button.carta-active {
-  background-color: var(--bg) !important;
-  border-color: var(--border) !important;
-  color: var(--primary) !important; /* Brighter color for active tab */
-  font-weight: 600 !important; /* Consistent bolding for active tab */
-  margin-bottom: -1px !important;
-}
-
 
 /* Fix for Carta's default theme classes in Dark Mode */
 .carta-theme__default {
@@ -203,54 +161,84 @@ html, body {
 
 /* Markdown Preview Styling */
 .carta-renderer {
-  line-height: 1.6;
-  font-size: 1rem;
+  line-height: 1.7;
+  font-size: 1.05rem;
+  color: var(--fg);
 }
 
 .carta-renderer h1 {
-  font-size: 2rem;
+  font-size: 2.25rem;
   font-weight: 800;
   margin-top: 0;
   margin-bottom: 1.5rem;
   padding-bottom: 0.5rem;
   border-bottom: 1px solid var(--border);
+  line-height: 1.2;
 }
 
 .carta-renderer h2 {
-  font-size: 1.5rem;
+  font-size: 1.75rem;
   font-weight: 700;
+  margin-top: 2.5rem;
+  margin-bottom: 1.25rem;
+  line-height: 1.3;
+}
+
+.carta-renderer h3 {
+  font-size: 1.375rem;
+  font-weight: 600;
   margin-top: 2rem;
   margin-bottom: 1rem;
 }
 
 .carta-renderer p {
-  margin-bottom: 1rem;
+  margin-bottom: 1.25rem;
 }
 
 .carta-renderer a {
   color: var(--primary);
   text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.15s;
 }
 
 .carta-renderer a:hover {
-  text-decoration: underline;
+  border-bottom-color: var(--primary);
 }
 
-.carta-renderer ul, .carta-renderer ol {
-  padding-left: 2rem;
-  margin-bottom: 1rem;
+.carta-renderer ul {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.carta-renderer ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+  margin-bottom: 1.25rem;
 }
 
 .carta-renderer li {
-  margin-bottom: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.carta-renderer li > ul, 
+.carta-renderer li > ol {
+  margin-top: 0.5rem;
+  margin-bottom: 0.5rem;
 }
 
 .carta-renderer blockquote {
-  margin: 1rem 0;
-  padding-left: 1rem;
-  border-left: 4px solid var(--border);
-  color: var(--muted-foreground);
-  font-style: italic;
+  margin: 1.5rem 0;
+  padding: 0.5rem 1.5rem;
+  border-left: 4px solid var(--primary);
+  background-color: var(--accent);
+  color: var(--fg);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.carta-renderer blockquote p:last-child {
+  margin-bottom: 0;
 }
 
 .carta-renderer code {
@@ -258,47 +246,68 @@ html, body {
   padding: 0.2rem 0.4rem;
   border-radius: var(--radius);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 0.875em;
+  font-size: 0.9em;
+  color: var(--primary);
 }
 
 .carta-renderer pre {
   background-color: var(--accent);
-  padding: 1rem;
+  padding: 1.25rem;
   border-radius: var(--radius);
   overflow-x: auto;
-  margin-bottom: 1rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--border);
+}
+
+.carta-renderer pre code {
+  background-color: transparent;
+  padding: 0;
+  color: inherit;
+  font-size: 0.875rem;
 }
 
 .carta-renderer hr {
   border: none;
-  border-top: 1px solid var(--border);
-  margin: 2rem 0;
+  border-top: 2px solid var(--border);
+  margin: 3rem 0;
 }
 
 .carta-renderer table {
   width: 100%;
   border-collapse: collapse;
   margin-bottom: 1.5rem;
+  font-size: 0.9375rem;
 }
 
 .carta-renderer th, .carta-renderer td {
   border: 1px solid var(--border);
-  padding: 0.5rem 0.75rem;
+  padding: 0.75rem 1rem;
   text-align: left;
 }
 
 .carta-renderer th {
   background-color: var(--sidebar-bg);
-  font-weight: 600;
+  font-weight: 700;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
 }
 
 .carta-renderer tr:nth-child(even) {
-  background-color: var(--accent);
+  background-color: rgba(0, 0, 0, 0.02);
+}
+
+:root.dark .carta-renderer tr:nth-child(even) {
+  background-color: rgba(255, 255, 255, 0.02);
 }
 
 .carta-renderer img {
   max-width: 100%;
   height: auto;
   border-radius: var(--radius);
-  margin: 1rem 0;
+  margin: 2rem auto;
+  display: block;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
 }
+

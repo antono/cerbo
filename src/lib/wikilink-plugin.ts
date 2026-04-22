@@ -1,18 +1,13 @@
 /**
- * Carta plugin for [[wikilink]] syntax.
- *
- * Features:
- * - Tokenizes [[Page Title]] in markdown (remark pass)
- * - Renders as <a data-wikilink> with resolved/broken class (rehype pass)
- * - Exposes findAndReplace helper for reactive page list updates
- * - Provides autocomplete component injected into Carta input
+ * Carta plugin for [[wikilink]] syntax and local assets.
  */
 
 import type { Plugin } from 'carta-md';
 import { findAndReplace, type ReplaceFunction } from 'mdast-util-find-and-replace';
 import { visit } from 'unist-util-visit';
-import type { Root as MdastRoot, PhrasingContent, Text } from 'mdast';
+import type { Root as MdastRoot, Image } from 'mdast';
 import type { Root as HastRoot, Element } from 'hast';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import WikilinkAutocomplete from './WikilinkAutocomplete.svelte';
 
 // ── Custom mdast node ─────────────────────────────────────────────────────────
@@ -57,6 +52,12 @@ export interface WikilinkPluginOptions {
   onNavigate: (slug: string) => void;
   /** Called when the user clicks a broken wikilink (offer to create). */
   onCreate: (title: string) => void;
+  /** The current vault root path getter. */
+  getVaultPath: () => string | null | undefined;
+  /** The current page slug getter. */
+  getSlug: () => string | null | undefined;
+  /** Called when an asset link is clicked. */
+  onOpenAsset?: (filename: string) => void;
 }
 
 export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
@@ -82,7 +83,6 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
                         'data-wikilink': 'true',
                         'data-wikilink-title': title,
                         'data-wikilink-slug': slug,
-                        // resolved/broken is set in the rehype pass
                         class: 'wikilink',
                       },
                       hChildren: [{ type: 'text', value: title }],
@@ -95,14 +95,18 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
         },
       },
 
-      // ── 2. Rehype transformer: apply resolved/broken classes ────────────────
+      // ── 2. Rehype transformer: apply resolved/broken and handle assets ───────
       {
         execution: 'sync',
         type: 'rehype',
         transform({ processor }) {
           processor.use(() => (tree: HastRoot) => {
             const pages = options.getPages();
+            const vaultPath = options.getVaultPath();
+            const slug = options.getSlug();
+
             visit(tree, 'element', (node: Element) => {
+              // Wikilinks
               if (
                 node.tagName === 'a' &&
                 node.properties?.['data-wikilink'] === 'true'
@@ -111,8 +115,45 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
                 const resolved = pages.includes(slug);
                 node.properties['data-wikilink-resolved'] = String(resolved);
                 node.properties.class = `wikilink ${resolved ? 'wikilink-resolved' : 'wikilink-broken'}`;
-                // Prevent href navigation; clicks handled via JS
                 node.properties.href = '#';
+              }
+
+              // Asset Links
+              if (node.tagName === 'a') {
+                const href = node.properties?.href as string;
+                if (href && (href.startsWith('assets/') || href.startsWith('./assets/'))) {
+                  const cleanPath = href.startsWith('./') ? href.slice(2) : href;
+                  const encodedFilename = cleanPath.replace('assets/', '');
+                  const filename = decodeURIComponent(encodedFilename);
+                  
+                  node.properties['data-asset'] = 'true';
+                  node.properties['data-asset-filename'] = filename;
+                  node.properties.href = '#';
+                }
+              }
+
+              // Images
+              if (node.tagName === 'img') {
+                const src = node.properties?.src as string;
+                console.log('Rehype found img tag:', { src, allProps: node.properties });
+                if (src && (src.startsWith('assets/') || src.startsWith('./assets/'))) {
+                  const cleanPath = src.startsWith('./') ? src.slice(2) : src;
+                  const encodedFilename = cleanPath.replace('assets/', '');
+                  const filename = decodeURIComponent(encodedFilename);
+                  
+                  const vaultPath = options.getVaultPath();
+                  const slug = options.getSlug();
+
+                  if (vaultPath && slug) {
+                    const base = vaultPath.endsWith('/') ? vaultPath.slice(0, -1) : vaultPath;
+                    const fullPath = `${base}/${slug}/assets/${filename}`;
+                    const assetUrl = convertFileSrc(fullPath);
+                    console.log('Rehype: Transforming image src:', { fullPath, assetUrl });
+                    node.properties.src = assetUrl;
+                  } else {
+                    console.warn('Rehype: Missing context for image transformation:', { vaultPath, slug });
+                  }
+                }
               }
             });
           });
@@ -134,19 +175,34 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
 /** Attach a click listener to the preview container to handle wikilink clicks. */
 export function attachPreviewClickHandler(
   previewEl: HTMLElement,
-  options: Pick<WikilinkPluginOptions, 'onNavigate' | 'onCreate'>,
+  options: Pick<WikilinkPluginOptions, 'onNavigate' | 'onCreate' | 'onOpenAsset'>,
 ): () => void {
   function handler(ev: MouseEvent) {
-    const target = (ev.target as HTMLElement).closest('[data-wikilink]');
+    const target = (ev.target as HTMLElement).closest('a');
     if (!target) return;
-    ev.preventDefault();
-    const slug = target.getAttribute('data-wikilink-slug') ?? '';
-    const title = target.getAttribute('data-wikilink-title') ?? '';
-    const resolved = target.getAttribute('data-wikilink-resolved') === 'true';
-    if (resolved) {
-      options.onNavigate(slug);
-    } else {
-      options.onCreate(title);
+    
+    // Handle Wikilinks
+    if (target.hasAttribute('data-wikilink')) {
+      ev.preventDefault();
+      const slug = target.getAttribute('data-wikilink-slug') ?? '';
+      const title = target.getAttribute('data-wikilink-title') ?? '';
+      const resolved = target.getAttribute('data-wikilink-resolved') === 'true';
+      if (resolved) {
+        options.onNavigate(slug);
+      } else {
+        options.onCreate(title);
+      }
+      return;
+    }
+
+    // Handle Assets
+    if (target.hasAttribute('data-asset')) {
+      ev.preventDefault();
+      const filename = target.getAttribute('data-asset-filename');
+      if (filename && options.onOpenAsset) {
+        options.onOpenAsset(filename);
+      }
+      return;
     }
   }
   previewEl.addEventListener('click', handler);

@@ -1,6 +1,6 @@
 use crate::paths::cache_dir;
 use crate::CerboContext;
-use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Config, Event, RecommendedWatcher, Watcher};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
