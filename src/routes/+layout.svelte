@@ -29,6 +29,9 @@
   // Global keydown listener
   $effect(() => {
     function handleKeydown(e: KeyboardEvent) {
+      // Ignore if modal is open
+      if (app.showSearch || app.showExitPrompt) return;
+
       // 1. Global Search (Ctrl+P)
       if (isModKey(e, 'p')) {
         e.preventDefault();
@@ -42,43 +45,11 @@
         app.showExitPrompt = true;
         return;
       }
-
-      // 3. Panel Navigation (Ctrl+Arrows)
-      const arrow = isModArrow(e);
-      if (arrow) {
-        e.preventDefault();
-        navigatePanels(arrow === 'ArrowLeft' ? -1 : 1);
-        return;
-      }
     }
 
     window.addEventListener('keydown', handleKeydown);
     return () => window.removeEventListener('keydown', handleKeydown);
   });
-
-  function navigatePanels(direction: number) {
-    const panels: ('sidebar' | 'editor' | 'panels')[] = ['sidebar', 'editor', 'panels'];
-    let currentIdx = panels.indexOf(app.activePanel);
-    let nextIdx = (currentIdx + direction + panels.length) % panels.length;
-    
-    // Skip panels if side panels are hidden
-    if (panels[nextIdx] === 'panels' && !app.backlinksVisible) {
-      nextIdx = (nextIdx + direction + panels.length) % panels.length;
-    }
-
-    app.activePanel = panels[nextIdx];
-
-    // Focus corresponding element
-    if (app.activePanel === 'sidebar') {
-      sidebarEl?.focus();
-    } else if (app.activePanel === 'editor') {
-      mainEl?.focus();
-    } else if (app.activePanel === 'panels') {
-      // This is in +page.svelte, we'll need a way to focus it.
-      // For now, let's use a query selector or a store ref if needed.
-      document.querySelector<HTMLElement>('.right-panels')?.focus();
-    }
-  }
 
   $effect(() => {
     // Synchronize Tauri window theme with app theme
@@ -124,7 +95,6 @@
     style="width: {app.sidebarWidth}px;"
     bind:this={sidebarEl}
     tabindex="-1"
-    onfocus={() => app.activePanel = 'sidebar'}
   >
     <!-- Vault header -->
     <div class="vault-header">
@@ -176,7 +146,6 @@
     class="main-area"
     bind:this={mainEl}
     tabindex="-1"
-    onfocus={() => app.activePanel = 'editor'}
   >
     {#if app.loading}
       <div class="loading-overlay">

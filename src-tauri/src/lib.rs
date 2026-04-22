@@ -50,9 +50,15 @@ pub fn run() {
             page::attachment_upload,
             page::attachment_delete,
             page::attachment_open,
+            app_exit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[tauri::command]
+fn app_exit(app: tauri::AppHandle) {
+    app.exit(0);
 }
 
 #[tauri::command]

@@ -148,7 +148,19 @@
   // Handle 'i' and 'Esc' keys for mode switching
   $effect(() => {
     function handleKeydown(e: KeyboardEvent) {
-      if (isInputFocused()) return;
+      // Ignore if modal is open
+      if (app.showSearch || app.showExitPrompt) return;
+
+      if (isInputFocused()) {
+        // If in editor, only handle Escape to switch to preview
+        if (e.key === 'Escape' && app.editorTab === 'write') {
+          e.preventDefault();
+          e.stopPropagation();
+          app.editorTab = 'preview';
+          carta.input?.textarea?.blur();
+        }
+        return;
+      }
 
       if (e.key === 'i' && app.editorTab === 'preview') {
         e.preventDefault();
@@ -157,16 +169,12 @@
         setTimeout(() => {
           carta.input?.textarea?.focus();
         }, 50);
-      } else if (e.key === 'Escape' && app.editorTab === 'write') {
-        e.preventDefault();
-        app.editorTab = 'preview';
-        // Blur the textarea so focus can return to the panel or layout
-        carta.input?.textarea?.blur();
       }
     }
 
-    window.addEventListener('keydown', handleKeydown);
-    return () => window.removeEventListener('keydown', handleKeydown);
+    // Use capture phase to ensure we get the event before Carta or others consume it
+    window.addEventListener('keydown', handleKeydown, true);
+    return () => window.removeEventListener('keydown', handleKeydown, true);
   });
 
   function toggleMode() {

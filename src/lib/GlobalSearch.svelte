@@ -9,6 +9,36 @@
   let selectedIndex = $state(0);
   let inputEl = $state<HTMLInputElement | null>(null);
 
+  onMount(() => {
+    inputEl?.focus();
+
+    function handleWindowKeydown(e: KeyboardEvent) {
+      // Prevent leak to editor
+      e.stopPropagation();
+
+      const list = results();
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectedIndex = (selectedIndex + 1) % (list.length || 1);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectedIndex = (selectedIndex - 1 + (list.length || 1)) % (list.length || 1);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (list[selectedIndex]) {
+          openPage(list[selectedIndex].slug);
+          onClose();
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    }
+
+    window.addEventListener('keydown', handleWindowKeydown, true);
+    return () => window.removeEventListener('keydown', handleWindowKeydown, true);
+  });
+
   const results = $derived(() => {
     const q = query.toLowerCase().trim();
     if (!q) return app.pages.slice(0, 15);
@@ -18,28 +48,6 @@
         p.slug.toLowerCase().includes(q)
       )
       .slice(0, 15);
-  });
-
-  function handleKeydown(e: KeyboardEvent) {
-    const list = results();
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      selectedIndex = (selectedIndex + 1) % (list.length || 1);
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      selectedIndex = (selectedIndex - 1 + (list.length || 1)) % (list.length || 1);
-    } else if (e.key === 'Enter') {
-      if (list[selectedIndex]) {
-        openPage(list[selectedIndex].slug);
-        onClose();
-      }
-    } else if (e.key === 'Escape') {
-      onClose();
-    }
-  }
-
-  onMount(() => {
-    inputEl?.focus();
   });
 </script>
 
@@ -51,9 +59,9 @@
     onclick={(e) => e.stopPropagation()} 
     role="dialog" 
     aria-modal="true"
-    onkeydown={handleKeydown}
-    tabindex="0"
+    tabindex="-1"
   >
+
     <div class="search-input-wrap">
       <Search size={18} class="search-icon" />
       <input

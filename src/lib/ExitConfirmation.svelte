@@ -6,25 +6,38 @@
   let { onClose }: { onClose: () => void } = $props();
 
   let selectedIndex = $state(0); // 0 = Cancel, 1 = Quit
-
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Tab') {
-      e.preventDefault();
-      selectedIndex = selectedIndex === 0 ? 1 : 0;
-    } else if (e.key === 'Enter') {
-      if (selectedIndex === 1) {
-        quitApp();
-      } else {
-        onClose();
-      }
-    } else if (e.key === 'Escape') {
-      onClose();
-    }
-  }
+  let modalEl = $state<HTMLElement | null>(null);
 
   onMount(() => {
-    // We want the modal container or a button to catch initial focus if possible, 
-    // but the window listener in layout will handle global keys.
+    modalEl?.focus();
+
+    function handleWindowKeydown(e: KeyboardEvent) {
+      // Capture EVERYTHING when modal is open
+      e.stopPropagation();
+      
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Tab') {
+        e.preventDefault();
+        selectedIndex = selectedIndex === 0 ? 1 : 0;
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (selectedIndex === 1) {
+          quitApp();
+        } else {
+          onClose();
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      } else {
+        // Prevent all other keys from reaching anyone else
+        if (!['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
+          e.preventDefault();
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleWindowKeydown, true);
+    return () => window.removeEventListener('keydown', handleWindowKeydown, true);
   });
 </script>
 
@@ -36,8 +49,8 @@
     onclick={(e) => e.stopPropagation()} 
     role="dialog" 
     aria-modal="true"
-    onkeydown={handleKeydown}
-    tabindex="-1"
+    tabindex="0"
+    bind:this={modalEl}
   >
     <div class="modal-content">
       <div class="icon-wrap">

@@ -52,7 +52,6 @@ export const app = $state({
 
   // UI state
   editorTab: 'preview' as 'write' | 'preview',
-  activePanel: 'editor' as 'sidebar' | 'editor' | 'panels',
   showSearch: false,
   showExitPrompt: false,
 });
@@ -71,11 +70,12 @@ export function pageSlugs(): string[] {
 
 export async function quitApp(): Promise<void> {
   try {
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    const win = getCurrentWindow();
-    await win.close();
+    await invoke('app_exit');
   } catch (e) {
     console.error('Failed to quit app:', e);
+    // Last resort
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    await getCurrentWindow().destroy();
   }
 }
 
