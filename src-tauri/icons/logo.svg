@@ -1,0 +1,19 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <g fill="currentColor" transform="translate(36, 36)">
+    <!-- Letter C: Geometric open square, line weight 120, total size 440 -->
+    <path d="M 0 0 H 440 V 120 H 120 V 320 H 440 V 440 H 0 Z" />
+    
+    <!-- 
+      Square point inside C:
+      Inner area of C is 120 to 440 (width 320) and 120 to 320 (height 200).
+      Square size: 120x120.
+      Padding: 
+        Vertical: (200 - 120) / 2 = 40px (top and bottom)
+        Horizontal (left of square): 40px
+      Square Position:
+        x = 120 (inner edge of C) + 40 (padding) = 160
+        y = 120 (inner top edge of C) + 40 (padding) = 160
+    -->
+    <rect x="160" y="160" width="120" height="120" />
+  </g>
+</svg>
