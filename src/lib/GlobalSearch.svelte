@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Search, FileText } from 'lucide-svelte';
-  import { app, openPage } from './stores.svelte';
+  import { app, openPage, createPage, previewSlug } from './stores.svelte';
+  import { isModKey, isMac } from './hotkeys';
 
   let { onClose }: { onClose: () => void } = $props();
 
@@ -9,14 +10,47 @@
   let selectedIndex = $state(0);
   let inputEl = $state<HTMLInputElement | null>(null);
 
+  // Reset selection when query changes
+  $effect(() => {
+    query;
+    selectedIndex = 0;
+  });
+
+  async function handleCreate() {
+    const title = query.trim();
+    if (!title) return;
+    
+    try {
+      // Check if slug already exists to satisfy "if no such slug" requirement
+      const slug = await previewSlug(title);
+      const existing = app.pages.find(p => p.slug === slug);
+      if (existing) {
+        openPage(existing.slug);
+      } else {
+        await createPage(title);
+      }
+      onClose();
+    } catch (e) {
+      console.error('Failed to create/open page:', e);
+    }
+  }
+
   onMount(() => {
     inputEl?.focus();
 
-    function handleWindowKeydown(e: KeyboardEvent) {
+    async function handleWindowKeydown(e: KeyboardEvent) {
       // Prevent leak to editor
       e.stopPropagation();
 
       const list = results();
+
+      // Ctrl/Cmd + Enter always tries to create/open exact match
+      if (isModKey(e, 'Enter')) {
+        e.preventDefault();
+        await handleCreate();
+        return;
+      }
+
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         selectedIndex = (selectedIndex + 1) % (list.length || 1);
@@ -28,6 +62,9 @@
         if (list[selectedIndex]) {
           openPage(list[selectedIndex].slug);
           onClose();
+        } else if (query.trim()) {
+          // No results selected, create new page
+          await handleCreate();
         }
       } else if (e.key === 'Escape') {
         e.preventDefault();
@@ -89,13 +126,22 @@
         </li>
       {/each}
       {#if results().length === 0}
-        <li class="no-results">No pages found matching "{query}"</li>
+        <li class="no-results">
+          <p>No pages found matching "{query}"</p>
+          {#if query.trim()}
+            <button class="create-page-btn" onclick={handleCreate}>
+              <FileText size={16} />
+              Create page "{query}"
+            </button>
+          {/if}
+        </li>
       {/if}
     </ul>
 
     <div class="search-footer">
       <span><kbd>↑↓</kbd> to navigate</span>
       <span><kbd>↵</kbd> to open</span>
+      <span><kbd>{isMac ? '⌘' : 'Ctrl'} + ↵</kbd> to create</span>
       <span><kbd>esc</kbd> to close</span>
     </div>
   </div>
@@ -203,6 +249,32 @@
     padding: 2rem;
     text-align: center;
     color: var(--muted-foreground);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .no-results p {
+    margin: 0;
+  }
+
+  .create-page-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: var(--primary);
+    color: white;
+    border: none;
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius);
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+
+  .create-page-btn:hover {
+    opacity: 0.9;
   }
 
   .search-footer {
