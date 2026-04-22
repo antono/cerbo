@@ -121,7 +121,7 @@
   .page-editor :global(.carta-wrapper) {
     flex: 1;
     min-height: 0;
-    overflow-y: auto; /* Allow ONLY this to scroll */
+    overflow: hidden;
   }
 
   .page-editor :global(.carta-container) {
