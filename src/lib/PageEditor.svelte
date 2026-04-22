@@ -108,22 +108,30 @@
     flex-direction: column;
     height: 100%;
     min-height: 0;
+    background: var(--bg);
   }
 
   .page-editor :global(.carta-editor) {
     height: 100%;
     display: flex;
     flex-direction: column;
+    overflow: hidden; /* Prevent editor container from scrolling */
   }
 
   .page-editor :global(.carta-wrapper) {
     flex: 1;
     min-height: 0;
-    overflow-y: auto;
+    overflow-y: auto; /* Allow ONLY this to scroll */
   }
 
   .page-editor :global(.carta-container) {
     height: 100%;
+  }
+
+  /* Match editor radius and borders to app shell */
+  .page-editor :global(.carta-editor) {
+    border: none;
+    border-radius: 0;
   }
 
   /* Make sure links look interactive in preview */

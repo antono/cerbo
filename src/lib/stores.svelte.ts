@@ -43,6 +43,11 @@ export const app = $state({
   loading: false,
   loadingMessage: '',
   error: null as string | null,
+
+  // Layout state
+  sidebarWidth: 260,
+  backlinksWidth: 280,
+  backlinksVisible: true,
 });
 
 // ── Computed helpers ──────────────────────────────────────────────────────────

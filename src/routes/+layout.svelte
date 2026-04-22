@@ -30,13 +30,35 @@
   });
 
   let vault = $derived(app.vaults.find((v) => v.id === app.activeVaultId));
+
+  // ── Resizing Logic ──────────────────────────────────────────────────────────
+
+  let isResizingSidebar = $state(false);
+
+  function startSidebarResize() {
+    isResizingSidebar = true;
+    window.addEventListener('mousemove', handleSidebarResize);
+    window.addEventListener('mouseup', stopResizing);
+  }
+
+  function handleSidebarResize(e: MouseEvent) {
+    if (!isResizingSidebar) return;
+    // Enforce min/max constraints
+    app.sidebarWidth = Math.max(200, Math.min(600, e.clientX));
+  }
+
+  function stopResizing() {
+    isResizingSidebar = false;
+    window.removeEventListener('mousemove', handleSidebarResize);
+    window.removeEventListener('mouseup', stopResizing);
+  }
 </script>
 
 <ModeWatcher />
 
-<div class="app-shell">
+<div class="app-shell" class:is-resizing={isResizingSidebar}>
   <!-- Sidebar -->
-  <aside class="sidebar">
+  <aside class="sidebar" style="width: {app.sidebarWidth}px;">
     <!-- Vault header -->
     <div class="vault-header">
       <button
@@ -57,22 +79,30 @@
     </div>
 
     <!-- Page list -->
-    {#if vault}
-      <div class="page-list-wrap">
+    <div class="page-list-wrap">
+      {#if vault}
         <PageList />
-      </div>
-    {:else}
-      <div class="no-vault">
-        <p>Add a vault to get started.</p>
-        <button onclick={() => (showVaultSwitcher = true)}>Add Vault</button>
-      </div>
-    {/if}
+      {:else}
+        <div class="no-vault">
+          <p>Add a vault to get started.</p>
+          <button class="primary-btn" onclick={() => (showVaultSwitcher = true)}>Add Vault</button>
+        </div>
+      {/if}
+    </div>
 
     <!-- Bottom actions area -->
     <div class="sidebar-footer">
        <ThemeToggle />
     </div>
   </aside>
+
+  <!-- Resize Handle -->
+  <div 
+    class="resize-handle" 
+    onmousedown={startSidebarResize}
+    role="separator"
+    aria-orientation="vertical"
+  ></div>
 
   <!-- Main content -->
   <main class="main-area">
@@ -103,19 +133,52 @@
   }
 
   .sidebar {
-    width: var(--sidebar-width);
-    min-width: var(--sidebar-width);
     background: var(--sidebar-bg);
-    border-right: 1px solid var(--border);
+    border-right: none; /* Resize handle handles the divider */
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    height: 100%;
+  }
+
+  .resize-handle {
+    width: 1px;
+    background: var(--border);
+    cursor: col-resize;
+    transition: background 0.15s, width 0.15s;
+    position: relative;
+    z-index: 40;
+    flex-shrink: 0;
+  }
+
+  .resize-handle:hover, .is-resizing .resize-handle {
+    background: var(--primary);
+    width: 2px;
+  }
+
+  /* Transparent wider target area for the resize handle */
+  .resize-handle::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -4px;
+    right: -4px;
+  }
+
+  .is-resizing {
+    cursor: col-resize;
+    user-select: none;
   }
 
   .vault-header {
     position: relative;
-    padding: 0.75rem;
+    padding: 0 0.75rem;
+    height: var(--header-height);
+    display: flex;
+    align-items: center;
     border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
   }
 
   .vault-name-btn {
@@ -190,19 +253,25 @@
     margin: 0 0 0.75rem;
   }
 
-  .no-vault button {
-    padding: 0.4rem 0.9rem;
+  .no-vault .primary-btn {
+    padding: 0.5rem 1.25rem;
     background: var(--primary);
     color: #fff;
     border: none;
     border-radius: var(--radius);
     cursor: pointer;
     font-size: 0.875rem;
-    transition: background 0.15s;
+    font-weight: 600;
+    transition: background 0.15s, transform 0.1s;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
   }
 
-  .no-vault button:hover {
+  .no-vault .primary-btn:hover {
     background: var(--primary-hover);
+  }
+
+  .no-vault .primary-btn:active {
+    transform: translateY(1px);
   }
 
   .main-area {

@@ -110,8 +110,9 @@
         </div>
       </div>
     {:else}
-      <button class="btn-ghost add-btn" onclick={() => { showAddForm = true; }}>
-        <Plus size={14} class="mr-1" /> Add vault
+      <button class="add-vault-bump" onclick={() => { showAddForm = true; }}>
+        <Plus size={16} /> 
+        <span>Add vault</span>
       </button>
     {/if}
   </div>
@@ -144,7 +145,7 @@
     font-size: 0.875rem;
     text-align: left;
     color: inherit;
-    min-width: 0; /* Allow flex children to shrink */
+    min-width: 0;
   }
   .vault-item:hover { background: var(--accent-hover); }
   .vault-item.active { background: var(--accent); font-weight: 600; }
@@ -158,9 +159,34 @@
   .vault-check { margin-left: auto; flex-shrink: 0; color: var(--primary); }
   .vault-footer {
     border-top: 1px solid var(--border);
-    padding: 0.5rem;
+    padding: 0.75rem;
+    background: var(--sidebar-bg);
   }
-  .add-form { display: flex; flex-direction: column; gap: 0.375rem; }
+  .add-vault-bump {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.5rem 1rem;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: background 0.15s, transform 0.1s;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+  }
+  .add-vault-bump:hover {
+    background: var(--primary-hover);
+  }
+  .add-vault-bump:active {
+    transform: translateY(1px);
+  }
+  .add-form { display: flex; flex-direction: column; gap: 0.5rem; }
   .path-input-row {
     display: flex;
     gap: 0.25rem;
@@ -172,14 +198,16 @@
     border-radius: 0.375rem;
     cursor: pointer;
     font-size: 0.9rem;
+    display: flex;
+    align-items: center;
   }
   .btn-browse:hover { background: var(--accent-hover); }
   .add-form-actions { display: flex; gap: 0.375rem; }
   .input {
-    padding: 0.375rem 0.5rem;
+    padding: 0.5rem 0.75rem;
     font-size: 0.8125rem;
     border: 1px solid var(--border);
-    border-radius: 0.375rem;
+    border-radius: var(--radius);
     background: var(--bg);
     color: inherit;
     flex: 1;
@@ -187,27 +215,27 @@
     box-sizing: border-box;
   }
   .btn-primary {
-    padding: 0.375rem 0.75rem;
+    padding: 0.5rem 1rem;
     background: var(--primary);
     color: #fff;
     border: none;
-    border-radius: 0.375rem;
+    border-radius: var(--radius);
     cursor: pointer;
     font-size: 0.8125rem;
+    font-weight: 600;
     flex: 1;
   }
   .btn-primary:disabled { opacity: 0.6; }
   .btn-ghost {
-    padding: 0.375rem 0.75rem;
+    padding: 0.5rem 1rem;
     background: transparent;
     border: 1px solid var(--border);
-    border-radius: 0.375rem;
+    border-radius: var(--radius);
     cursor: pointer;
     font-size: 0.8125rem;
     color: inherit;
     width: 100%;
   }
-  .add-btn { margin-top: 0; }
   .error { font-size: 0.75rem; color: #dc2626; margin: 0; }
   .empty-hint { padding: 0.5rem 0.75rem; font-size: 0.8125rem; color: var(--muted-foreground); margin: 0; }
 </style>
