@@ -190,6 +190,7 @@ export async function createPage(title: string): Promise<string> {
   if (!app.activeVaultId) throw new Error('No active vault');
   const slug = await invoke<string>('page_create', { vaultId: app.activeVaultId, title });
   await loadPages();
+  app.editorTab = 'write';
   await openPage(slug);
   return slug;
 }

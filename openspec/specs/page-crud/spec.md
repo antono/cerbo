@@ -12,6 +12,7 @@ The system SHALL create a new page by deriving a slug from the provided title, c
 - **WHEN** the user creates a page with title "Rust Ownership"
 - **THEN** the folder `rust-ownership/` is created in the vault root
 - **THEN** `rust-ownership/page.md` is created with content `# Rust Ownership`
+- **THEN** the system SHALL switch the editor to "Write" mode for the new page
 
 #### Scenario: Create page with title that conflicts with existing slug
 - **WHEN** the user creates a page whose derived slug matches an existing page's slug
