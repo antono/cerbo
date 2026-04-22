@@ -256,14 +256,14 @@
     min-height: 0;
     background: var(--bg);
     position: relative;
-    overflow-y: auto;
+    overflow: hidden;
   }
 
   .mode-toggle-btn {
-    position: sticky;
+    position: absolute;
     top: 0;
     left: 0.5rem;
-    height: 0; /* Don't take up vertical space */
+    height: var(--header-height);
     width: 32px;
     display: flex;
     align-items: center;
@@ -275,23 +275,18 @@
     color: var(--muted-foreground);
     transition: all 0.15s;
     border-radius: var(--radius);
-    padding-top: var(--header-height); /* Center icon relative to header height */
-  }
-
-  .mode-toggle-btn :global(svg) {
-    transform: translateY(-50%);
   }
 
   .mode-toggle-btn:hover {
+    background: var(--accent-hover);
     color: var(--fg);
   }
 
   .page-editor :global(.carta-editor) {
-    height: auto;
-    min-height: 100%;
+    height: 100%;
     display: flex;
     flex-direction: column;
-    overflow: visible;
+    overflow: hidden;
     border: none;
     border-radius: 0;
   }
@@ -299,20 +294,21 @@
   .page-editor :global(.carta-wrapper) {
     flex: 1;
     min-height: 0;
-    overflow: visible;
+    overflow: hidden;
   }
 
   .page-editor :global(.carta-container) {
-    height: auto;
-    min-height: 100%;
+    height: 100%;
   }
 
   .page-editor :global(.carta-input) {
-    overflow: visible;
+    height: 100%;
+    overflow-y: auto;
   }
 
   .page-editor :global(.carta-renderer) {
-    overflow: visible;
+    height: 100%;
+    overflow-y: auto;
   }
 
   :global(.carta-renderer a.wikilink) {
