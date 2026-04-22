@@ -91,5 +91,5 @@ pub fn attachment_open(
 ) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     let path = page::attachment_path(&get_context(&app)?, vaultId, slug, filename)?;
-    app.opener().open_path(path.to_string_lossy(), None).map_err(|e| e.to_string())
+    app.opener().open_path(path.to_string_lossy(), None::<String>).map_err(|e| e.to_string())
 }
