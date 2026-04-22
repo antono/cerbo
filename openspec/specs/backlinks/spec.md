@@ -6,7 +6,7 @@ Enable users to discover relationships between pages by listing all incoming lin
 ## Requirements
 
 ### Requirement: Display backlinks panel
-The system SHALL display a backlinks panel for the currently open page, listing all pages in the active vault that contain a wikilink resolving to the current page.
+The system SHALL display a backlinks panel for the currently open page, listing all pages in the active vault that contain a wikilink resolving to the current page. The panel SHALL reside within a multi-section right sidebar.
 
 #### Scenario: Page with backlinks
 - **WHEN** the user opens a page that is linked from other pages
