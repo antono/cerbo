@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { AlertTriangle } from 'lucide-svelte';
   import { quitApp } from './stores.svelte';
 
   let { onClose }: { onClose: () => void } = $props();
@@ -54,7 +53,20 @@
   >
     <div class="modal-content">
       <div class="icon-wrap">
-        <AlertTriangle size={32} class="warning-icon" />
+        <svg 
+          xmlns="http://www.w3.org/2000/svg" 
+          width="32" 
+          height="32" 
+          viewBox="0 0 24 24" 
+          fill="none" 
+          stroke="currentColor" 
+          stroke-width="3" 
+          stroke-linecap="round" 
+          stroke-linejoin="round"
+        >
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>
       </div>
       <div class="text-wrap">
         <h3>Quit Application?</h3>
