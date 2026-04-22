@@ -3,14 +3,21 @@
   import { ModeWatcher, mode } from 'mode-watcher';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { Library } from 'lucide-svelte';
-  import { app, loadVaults, openVault } from '$lib/stores.svelte';
+  import { app, loadVaults, openVault, quitApp } from '$lib/stores.svelte';
   import VaultSwitcher from '$lib/VaultSwitcher.svelte';
   import PageList from '$lib/PageList.svelte';
   import ThemeToggle from '$lib/ThemeToggle.svelte';
+  import GlobalSearch from '$lib/GlobalSearch.svelte';
+  import ExitConfirmation from '$lib/ExitConfirmation.svelte';
+  import { isModKey, isModArrow, isInputFocused } from '$lib/hotkeys';
   import '../app.css';
 
   let { children } = $props();
   let showVaultSwitcher = $state(false);
+
+  // Focusable panel refs
+  let sidebarEl = $state<HTMLElement | null>(null);
+  let mainEl = $state<HTMLElement | null>(null);
 
   onMount(async () => {
     await loadVaults();
@@ -18,6 +25,60 @@
       await openVault(app.activeVaultId);
     }
   });
+
+  // Global keydown listener
+  $effect(() => {
+    function handleKeydown(e: KeyboardEvent) {
+      // 1. Global Search (Ctrl+P)
+      if (isModKey(e, 'p')) {
+        e.preventDefault();
+        app.showSearch = !app.showSearch;
+        return;
+      }
+
+      // 2. Quit App (Ctrl+Q)
+      if (isModKey(e, 'q')) {
+        e.preventDefault();
+        app.showExitPrompt = true;
+        return;
+      }
+
+      // 3. Panel Navigation (Ctrl+Arrows)
+      const arrow = isModArrow(e);
+      if (arrow) {
+        e.preventDefault();
+        navigatePanels(arrow === 'ArrowLeft' ? -1 : 1);
+        return;
+      }
+    }
+
+    window.addEventListener('keydown', handleKeydown);
+    return () => window.removeEventListener('keydown', handleKeydown);
+  });
+
+  function navigatePanels(direction: number) {
+    const panels: ('sidebar' | 'editor' | 'panels')[] = ['sidebar', 'editor', 'panels'];
+    let currentIdx = panels.indexOf(app.activePanel);
+    let nextIdx = (currentIdx + direction + panels.length) % panels.length;
+    
+    // Skip panels if side panels are hidden
+    if (panels[nextIdx] === 'panels' && !app.backlinksVisible) {
+      nextIdx = (nextIdx + direction + panels.length) % panels.length;
+    }
+
+    app.activePanel = panels[nextIdx];
+
+    // Focus corresponding element
+    if (app.activePanel === 'sidebar') {
+      sidebarEl?.focus();
+    } else if (app.activePanel === 'editor') {
+      mainEl?.focus();
+    } else if (app.activePanel === 'panels') {
+      // This is in +page.svelte, we'll need a way to focus it.
+      // For now, let's use a query selector or a store ref if needed.
+      document.querySelector<HTMLElement>('.right-panels')?.focus();
+    }
+  }
 
   $effect(() => {
     // Synchronize Tauri window theme with app theme
@@ -58,7 +119,13 @@
 
 <div class="app-shell" class:is-resizing={isResizingSidebar}>
   <!-- Sidebar -->
-  <aside class="sidebar" style="width: {app.sidebarWidth}px;">
+  <aside 
+    class="sidebar" 
+    style="width: {app.sidebarWidth}px;"
+    bind:this={sidebarEl}
+    tabindex="-1"
+    onfocus={() => app.activePanel = 'sidebar'}
+  >
     <!-- Vault header -->
     <div class="vault-header">
       <button
@@ -105,7 +172,12 @@
   ></div>
 
   <!-- Main content -->
-  <main class="main-area">
+  <main 
+    class="main-area"
+    bind:this={mainEl}
+    tabindex="-1"
+    onfocus={() => app.activePanel = 'editor'}
+  >
     {#if app.loading}
       <div class="loading-overlay">
         <div class="loading-spinner"></div>
@@ -116,6 +188,16 @@
     {/if}
   </main>
 </div>
+
+<!-- ── Modals ──────────────────────────────────────────────────────────────── -->
+
+{#if app.showSearch}
+  <GlobalSearch onClose={() => app.showSearch = false} />
+{/if}
+
+{#if app.showExitPrompt}
+  <ExitConfirmation onClose={() => app.showExitPrompt = false} />
+{/if}
 
 <!-- ── Error toast ─────────────────────────────────────────────────────────── -->
 {#if app.error}

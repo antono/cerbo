@@ -43,6 +43,12 @@ The system SHALL provide a unified editor interface using a tabbed layout (e.g.,
 - **THEN** the system SHALL provide syntax highlighting for code blocks
 - **THEN** the system SHALL support emoji shortcodes and a file attachment picker
 
+#### Scenario: Keyboard-driven mode switching
+- **WHEN** the user is in preview mode and presses `i` or `Ctrl+I` (Linux/Windows) or `Cmd+I` (Mac)
+- **THEN** the system SHALL switch to the "Write" (edit) mode and focus the editor
+- **WHEN** the user is in edit mode and presses `Esc`
+- **THEN** the system SHALL switch to the "Preview" mode
+
 ### Requirement: Write page
 The system SHALL write updated markdown content to a page's `page.md` file atomically.
 

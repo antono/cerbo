@@ -69,7 +69,12 @@
       ></div>
 
       <!-- Side Panels -->
-      <aside class="right-panels" style="width: {app.backlinksWidth}px;">
+      <aside 
+        class="right-panels" 
+        style="width: {app.backlinksWidth}px;"
+        tabindex="-1"
+        onfocus={() => app.activePanel = 'panels'}
+      >
         <div class="panel-section">
           <BacklinksPanel slug={app.currentSlug} />
         </div>

@@ -49,6 +49,12 @@ export const app = $state({
   sidebarWidth: 260,
   backlinksWidth: 280,
   backlinksVisible: true,
+
+  // UI state
+  editorTab: 'preview' as 'write' | 'preview',
+  activePanel: 'editor' as 'sidebar' | 'editor' | 'panels',
+  showSearch: false,
+  showExitPrompt: false,
 });
 
 // ── Computed helpers ──────────────────────────────────────────────────────────
@@ -62,6 +68,16 @@ export function pageSlugs(): string[] {
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
+
+export async function quitApp(): Promise<void> {
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window');
+    const win = getCurrentWindow();
+    await win.close();
+  } catch (e) {
+    console.error('Failed to quit app:', e);
+  }
+}
 
 export async function loadVaults(): Promise<void> {
   try {

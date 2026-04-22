@@ -30,13 +30,14 @@
     onSaving?: (s: boolean) => void;
   } = $props();
 
+  import { isInputFocused } from './hotkeys';
+
   // ── State ────────────────────────────────────────────────────────────────────
 
   let content = $state('');
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let saving = $state(false);
   let editorContainer = $state<HTMLElement | null>(null);
-  let selectedTab = $state<'write' | 'preview'>('write');
 
   // Notify parent of saving state
   $effect(() => {
@@ -144,19 +145,46 @@
     }
   });
 
+  // Handle 'i' and 'Esc' keys for mode switching
+  $effect(() => {
+    function handleKeydown(e: KeyboardEvent) {
+      if (isInputFocused()) return;
+
+      if (e.key === 'i' && app.editorTab === 'preview') {
+        e.preventDefault();
+        app.editorTab = 'write';
+        // Give a tiny bit of time for the editor to render before focusing
+        setTimeout(() => {
+          carta.input?.textarea?.focus();
+        }, 50);
+      } else if (e.key === 'Escape' && app.editorTab === 'write') {
+        e.preventDefault();
+        app.editorTab = 'preview';
+        // Blur the textarea so focus can return to the panel or layout
+        carta.input?.textarea?.blur();
+      }
+    }
+
+    window.addEventListener('keydown', handleKeydown);
+    return () => window.removeEventListener('keydown', handleKeydown);
+  });
+
   function toggleMode() {
-    selectedTab = selectedTab === 'write' ? 'preview' : 'write';
+    app.editorTab = app.editorTab === 'write' ? 'preview' : 'write';
+    if (app.editorTab === 'write') {
+      setTimeout(() => carta.input?.textarea?.focus(), 50);
+    }
   }
 </script>
 
-<div class="page-editor" class:edit-mode={selectedTab === 'write'} bind:this={editorContainer}>
+<div class="page-editor" class:edit-mode={app.editorTab === 'write'} bind:this={editorContainer}>
   <button 
     class="mode-toggle-btn" 
     onclick={toggleMode}
-    title={selectedTab === 'write' ? 'Switch to Preview' : 'Switch to Edit'}
+    title={app.editorTab === 'write' ? 'Switch to Preview' : 'Switch to Edit'}
     aria-label="Toggle mode"
   >
-    {#if selectedTab === 'write'}
+    {#if app.editorTab === 'write'}
       <Eye size={16} />
     {:else}
       <Edit3 size={16} />
@@ -166,7 +194,7 @@
   <MarkdownEditor
     {carta}
     bind:value={content}
-    selectedTab={selectedTab}
+    selectedTab={app.editorTab}
     mode="tabs"
   />
 </div>
