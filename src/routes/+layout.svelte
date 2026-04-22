@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { ModeWatcher, mode } from 'mode-watcher';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { Library } from 'lucide-svelte';
   import { app, loadVaults, openVault } from '$lib/stores.svelte';
   import VaultSwitcher from '$lib/VaultSwitcher.svelte';
   import PageList from '$lib/PageList.svelte';
@@ -43,7 +44,7 @@
         onclick={() => (showVaultSwitcher = !showVaultSwitcher)}
         title="Switch vault"
       >
-        <span class="vault-icon">🗂</span>
+        <Library size={18} class="vault-icon" />
         <span class="vault-label">{vault?.name ?? 'No vault'}</span>
         <span class="vault-chevron">{showVaultSwitcher ? '▲' : '▼'}</span>
       </button>

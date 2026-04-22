@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { FileText, Plus, Pencil, Trash2, X } from 'lucide-svelte';
   import { app, openPage, createPage, deletePage, renamePage, previewSlug } from './stores.svelte';
 
   // ── State for dialogs ─────────────────────────────────────────────────────────
@@ -103,7 +104,7 @@
       title="New page"
       onclick={() => { showNewForm = !showNewForm; createError = ''; }}
     >
-      +
+      <Plus size={16} />
     </button>
   </div>
 
@@ -162,7 +163,9 @@
               <button class="btn-primary" onclick={handleRename} disabled={renaming}>
                 {renaming ? '…' : 'Rename'}
               </button>
-              <button class="btn-ghost" onclick={() => { renameSlug = null; }}>×</button>
+              <button class="btn-ghost" onclick={() => { renameSlug = null; }}>
+                <X size={14} />
+              </button>
             </div>
           </div>
         {:else}
@@ -170,6 +173,7 @@
             class="page-btn"
             onclick={() => openPage(page.slug)}
           >
+            <FileText size={14} class="opacity-70" />
             {page.title}
           </button>
           <div class="page-actions">
@@ -177,12 +181,16 @@
               class="icon-btn small"
               title="Rename"
               onclick={(e) => { e.stopPropagation(); startRename(page.slug, page.title); }}
-            >✎</button>
+            >
+              <Pencil size={12} />
+            </button>
             <button
               class="icon-btn small danger"
               title="Delete"
               onclick={(e) => { e.stopPropagation(); confirmDeleteSlug = page.slug; }}
-            >✕</button>
+            >
+              <Trash2 size={12} />
+            </button>
           </div>
         {/if}
       </li>
@@ -294,6 +302,7 @@
   .item.active { background: var(--accent); }
   .page-btn {
     flex: 1; text-align: left; padding: 0.4375rem 0.75rem;
+    display: flex; align-items: center; gap: 0.5rem;
     border: none; background: transparent; cursor: pointer;
     border-radius: 0.375rem; font-size: 0.875rem; color: inherit;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

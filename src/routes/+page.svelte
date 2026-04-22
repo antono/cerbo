@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Eye, Pencil } from 'lucide-svelte';
   import { app, activeVault } from '$lib/stores.svelte';
   import PageEditor from '$lib/PageEditor.svelte';
   import BacklinksPanel from '$lib/BacklinksPanel.svelte';
@@ -27,9 +28,9 @@
           title={isEditing ? "Switch to Preview" : "Switch to Source"}
         >
           {#if isEditing}
-            <span class="icon">👁</span>
+            <Eye size={16} />
           {:else}
-            <span class="icon">✍</span>
+            <Pencil size={16} />
           {/if}
         </button>
 
