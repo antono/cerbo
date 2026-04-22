@@ -2,6 +2,7 @@
   import { FileText, Plus, Pencil, Trash2, X } from 'lucide-svelte';
   import { tick } from 'svelte';
   import { app, openPage, createPage, deletePage, renamePage, previewSlug, closeAllDialogs } from './stores.svelte';
+  import { isInputFocused } from './hotkeys';
 
   // ── State for dialogs ─────────────────────────────────────────────────────────
 
@@ -21,6 +22,8 @@
 
   // ── Focus handling ────────────────────────────────────────────────────────────
 
+  let itemsList = $state<HTMLUListElement | null>(null);
+
   $effect(() => {
     if (app.showNewPageForm) {
       tick().then(() => {
@@ -28,6 +31,39 @@
       });
     }
   });
+
+  function handleListKeydown(e: KeyboardEvent) {
+    const isJorK = e.key === 'j' || e.key === 'k';
+    const isArrow = e.key === 'ArrowDown' || e.key === 'ArrowUp';
+    const isTab = e.key === 'Tab';
+
+    if (!isJorK && !isArrow && !isTab) return;
+
+    // Navigation keys should only work if no input is focused
+    if (isInputFocused()) return;
+
+    const buttons = Array.from(itemsList?.querySelectorAll('.page-btn') || []) as HTMLButtonElement[];
+    if (buttons.length === 0) return;
+
+    const focusedElement = document.activeElement as HTMLButtonElement;
+    const currentIndex = buttons.indexOf(focusedElement);
+
+    let nextIndex = currentIndex;
+
+    if (e.key === 'ArrowDown' || e.key === 'j' || (e.key === 'Tab' && !e.shiftKey)) {
+      e.preventDefault();
+      nextIndex = (currentIndex + 1) % buttons.length;
+    } else if (e.key === 'ArrowUp' || e.key === 'k' || (e.key === 'Tab' && e.shiftKey)) {
+      e.preventDefault();
+      nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+    }
+
+    if (nextIndex !== currentIndex || currentIndex === -1) {
+      // If nothing is focused, start at the first item
+      const targetIndex = currentIndex === -1 ? 0 : nextIndex;
+      buttons[targetIndex]?.focus();
+    }
+  }
 
   // ── Slug preview as user types ────────────────────────────────────────────────
 
@@ -156,7 +192,7 @@
   {/if}
 
   <!-- Page items -->
-  <ul class="items">
+  <ul class="items" bind:this={itemsList} onkeydown={handleListKeydown}>
     {#each app.pages as page}
       <li class="item" class:active={page.slug === app.currentSlug}>
         {#if app.renameSlug === page.slug}

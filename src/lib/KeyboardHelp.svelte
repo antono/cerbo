@@ -15,6 +15,11 @@
     { keys: [mod, 'Q'], desc: 'Quit application' },
     { keys: ['F1'], desc: 'Show this help' },
     { keys: ['Esc'], desc: 'Close active dialog or modal' },
+    { keys: ['↓'], desc: 'Next page in sidebar' },
+    { keys: ['j'], desc: 'Next page (Vim-style)' },
+    { keys: ['↑'], desc: 'Previous page in sidebar' },
+    { keys: ['k'], desc: 'Previous page (Vim-style)' },
+    { keys: ['Tab'], desc: 'Cycle pages in sidebar' },
   ];
 </script>
 
