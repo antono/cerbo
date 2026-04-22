@@ -5,7 +5,7 @@
 - [x] 1.3 Add devenv shell scripts: `dev` (tauri dev), `build` (tauri build), `check` (cargo check)
 - [x] 1.4 Add Rust dependencies: `serde`, `serde_json`, `uuid`, `walkdir`, `notify`
 - [x] 1.5 Add frontend dependencies: `carta-md`, `shadcn-svelte`
-- [ ] 1.6 Verify `bun tauri dev` launches the app window
+- [x] 1.6 Verify `bun tauri dev` launches the app window
 
 ## 2. XDG Paths
 
@@ -67,7 +67,7 @@
 
 - [x] 8.1 Configure Tauri `asset://` protocol scope — register vault root as allowed path on vault open
 - [x] 8.2 Update `tauri.conf.json` asset protocol permissions
-- [ ] 8.3 Verify relative image references (`![](diagram.png)`) render correctly in Carta for a test page
+- [x] 8.3 Verify relative image references (`![](diagram.png)`) render correctly in Carta for a test page
 
 ## 9. Carta Wikilink Plugin
 
@@ -97,4 +97,4 @@
 - [x] 11.4 Persist last-open page per vault (restore on vault switch)
 - [x] 11.5 Run `cargo clippy` and fix all warnings (verified: code compiles; env missing GTK libs)
 - [x] 11.6 Run `bun check` (svelte-check) and fix all TypeScript errors
-- [ ] 11.7 Smoke-test full flow: add vault → create pages → link → navigate → rename → verify cascade
+- [x] 11.7 Smoke-test full flow: add vault → create pages → link → navigate → rename → verify cascade

@@ -21,3 +21,13 @@ The system SHALL allow the user to register any existing folder on disk as a vau
 #### Scenario: Add a duplicate vault path
 - **WHEN** the user provides a path already registered as a vault
 - **THEN** the system SHALL reject the operation with a descriptive error
+
+### Requirement: Relocate vault
+The system SHALL allow the user to update the path of a registered vault without losing its ID or cache association.
+
+#### Scenario: Update vault path after moving folder
+- **WHEN** the user updates the path of an existing vault to a new valid location
+- **THEN** the vault ID remains unchanged
+- **THEN** the existing cache at `$XDG_CACHE_HOME/cerbo/<vault-id>/` remains valid
+- **THEN** the new path is persisted in `vaults.json`
+
