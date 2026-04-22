@@ -5,7 +5,18 @@ mod rename;
 mod slug;
 mod vault;
 
+use cerbo_core::CerboContext;
+use tauri::Manager;
 use index::WatcherState;
+
+pub fn get_context(app: &tauri::AppHandle) -> Result<CerboContext, String> {
+    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+    Ok(CerboContext {
+        config_dir,
+        cache_dir,
+    })
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -39,21 +50,20 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// Open a vault: (re)build the link index if missing, start the FS watcher.
-/// Call this whenever the user switches to a vault.
 #[tauri::command]
 fn vault_open(
     app: tauri::AppHandle,
     vault_id: String,
     watcher_state: tauri::State<WatcherState>,
 ) -> Result<(), String> {
-    let vault_path = vault::get_vault_path(&app, &vault_id)
+    let ctx = get_context(&app)?;
+    let vault_path = cerbo_core::vault::get_vault_path(&ctx, &vault_id)
         .ok_or_else(|| format!("vault_open: vault not found: {vault_id}"))?;
 
     // Build/refresh index if cache is missing
-    if index::load_index(&app, &vault_id).is_none() {
-        let idx = index::build_index(&vault_path)?;
-        index::save_index(&app, &vault_id, &idx)?;
+    if cerbo_core::index::load_index(&ctx, &vault_id).is_none() {
+        let idx = cerbo_core::index::build_index(&vault_path)?;
+        cerbo_core::index::save_index(&ctx, &vault_id, &idx)?;
     }
 
     // Start FS watcher

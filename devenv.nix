@@ -59,8 +59,13 @@
       cwd = "src-tauri";
     };
     "app:check" = {
-      exec = "cargo clippy";
-      cwd = "src-tauri";
+      exec = "cargo check";
+    };
+    "cli:build" = {
+      exec = "cargo build -p cerbo";
+    };
+    "core:test" = {
+      exec = "cargo test -p cerbo-core";
     };
     "frontend:dev" = {
       exec = "bun run dev";

@@ -8,6 +8,8 @@ wikilink-based graph navigation as the core interaction model.
 
 - **Local-First & Private**: Your data stays on your machine in plain Markdown
   files and folders. No cloud dependency, no proprietary formats.
+- **Desktop & CLI**: Work your way. Use the GUI for visual editing or the `cerbo`
+  CLI for terminal workflows, automation, and headless indexing.
 - **Wikilink-Based Graph**: Navigate and link ideas naturally with
   `[[Wikilinks]]`.
 - **Page-as-Folder Structure**: Each page is a `<slug>/page.md` folder, allowing
@@ -23,7 +25,7 @@ wikilink-based graph navigation as the core interaction model.
 
 ## Tech Stack
 
-- **Backend**: Rust + [Tauri v2](https://tauri.app/)
+- **Backend**: Rust Workspace (Core library + CLI + Tauri Desktop)
 - **Frontend**: [Svelte 5](https://svelte.dev/) +
   [Carta](https://github.com/BearToCode/carta) (Markdown Editor) + Tailwind CSS
 - **Package Manager**: [Bun](https://bun.sh/)
@@ -46,14 +48,16 @@ Inside the shell, use `devenv tasks` to manage the project:
 
 ```bash
 devenv tasks run app:dev       # Start Tauri app with hot reload
-devenv tasks run frontend:dev  # Start Vite dev server (frontend only)
-devenv tasks run app:check     # Run Rust type checks (clippy)
+devenv tasks run cli:build     # Build the standalone CLI binary
+devenv tasks run core:test     # Run core logic tests
+devenv tasks run app:check     # Run Rust workspace type checks
 ```
 
 ### 3. Build for Production
 
 ```bash
-devenv tasks run app:build
+devenv tasks run app:build     # Build Desktop App
+devenv tasks run cli:build     # Build CLI Binary
 ```
 
 ## Data Storage

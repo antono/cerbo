@@ -12,9 +12,11 @@ workflow context.
 devenv shell
 
 # Run defined tasks (inside the shell)
-devenv tasks run app:dev      # Tauri App (hot reload)
-devenv tasks run app:build     # Tauri production build
-devenv tasks run app:check    # Rust type check (clippy)
+devenv tasks run app:dev        # Desktop App (Tauri hot reload)
+devenv tasks run app:build      # Desktop production build
+devenv tasks run app:check      # Workspace type check (cargo check)
+devenv tasks run cli:build      # CLI tool build (cerbo binary)
+devenv tasks run core:test      # Run core logic unit tests
 
 # Frontend commands (inside the shell)
 devenv tasks run frontend:dev    # Vite dev server (hot reload)
@@ -25,38 +27,31 @@ devenv tasks run frontend:check   # TypeScript check
 ### Alternative: run commands in a one-liner
 
 ```bash
-devenv shell --no-tui -c "devenv tasks run frontend:build"
-devenv shell --no-tui -c "devenv tasks run app:build"
 devenv shell --no-tui -c "devenv tasks run app:check"
+devenv shell --no-tui -c "devenv tasks run cli:build"
+devenv shell --no-tui -c "devenv tasks run core:test"
 ```
 
-### Frontend (Svelte + Vite)
+### Rust Workspace
+
+The backend is split into three crates:
+- `core`: Shared domain logic (indexing, renames, CRUD).
+- `cli`: Standalone `cerbo` binary.
+- `src-tauri`: Desktop GUI (`cerbo-desktop`).
+
+### CLI usage (cerbo)
 
 ```bash
-# Development (hot reload)
-bun run dev
+# Vault management
+cargo run -p cerbo -- vault list
+cargo run -p cerbo -- vault add "My Vault" /path/to/vault
 
-# TypeScript check
-bun run check # Assumes 'check' script is defined in package.json
+# Page management
+cargo run -p cerbo -- page list <vault-id>
+cargo run -p cerbo -- page create <vault-id> "New Page"
 
-# Production build
-bun run build
-
-# Preview production
-bun run preview
-```
-
-### Tauri App (Rust backend)
-
-```bash
-# Development (hot reload for Rust)
-tauri dev # (requires tauri-cli, not cargo)
-
-# Build production binary
-cargo tauri build
-
-# Run clippy lints
-cargo clippy
+# Headless watcher
+cargo run -p cerbo -- watch
 ```
 
 ## Quick Reference
