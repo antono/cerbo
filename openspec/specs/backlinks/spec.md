@@ -18,7 +18,7 @@ The system SHALL display a backlinks panel for the currently open page, listing 
 - **THEN** the backlinks panel displays an empty state message
 
 ### Requirement: Build link index
-The system SHALL build a link index for the active vault by parsing all `page.md` files and extracting `[[wikilink]]` occurrences. The index SHALL be stored as a cache at `$XDG_CACHE_HOME/cerbo/<vault-id>/index.json`.
+The system SHALL build a link index for the active vault by parsing all `page.md` files and extracting `[[wikilink]]` occurrences. The index SHALL be stored as a cache at `$XDG_CACHE_HOME/cerbo/<vault-id>/index.json` and SHALL serve as the authoritative source for discovering page relationships for both UI and maintenance operations (e.g., rename cascade).
 
 #### Scenario: Build index on vault open (cache missing)
 - **WHEN** a vault is opened and no cache file exists

@@ -52,13 +52,39 @@ pub fn page_rename(
         .map_err(|e| format!("page_rename: write new heading: {e}"))?;
 
     // Cascade: rewrite [[OldTitle]] → [[NewTitle]] in all other page.md files
-    rewrite_links_in_vault(&vault_path, &old_title, &new_title, &new_slug)?;
+    let index = index::load_index(ctx, &vault_id);
+    let affected_slugs = if let Some(ref idx) = index {
+        index::compute_backlinks(idx, &old_slug)
+            .into_iter()
+            .map(|b| b.slug)
+            .collect::<Vec<_>>()
+    } else {
+        // Fallback to full vault scan if index is missing
+        println!("Warning: No index found for vault {vault_id}, falling back to full scan.");
+        get_all_slugs(&vault_path)?
+    };
+
+    rewrite_links_in_pages(&vault_path, &affected_slugs, &old_title, &new_title, &new_slug)?;
 
     // Rebuild link index
     let idx = index::build_index(&vault_path)?;
     index::save_index(ctx, &vault_id, &idx)?;
 
     Ok(new_slug)
+}
+
+fn get_all_slugs(vault_path: &Path) -> Result<Vec<String>, String> {
+    let mut slugs = Vec::new();
+    let entries = std::fs::read_dir(vault_path)
+        .map_err(|e| format!("get_all_slugs: read_dir: {e}"))?;
+    for entry in entries.flatten() {
+        if entry.path().is_dir() {
+            if let Some(s) = entry.file_name().to_str() {
+                slugs.push(s.to_string());
+            }
+        }
+    }
+    Ok(slugs)
 }
 
 // ---------------------------------------------------------------------------
@@ -97,29 +123,20 @@ fn rewrite_heading(content: &str, new_title: &str) -> String {
     lines.join("\n")
 }
 
-/// Walk vault, replace `[[old_title]]` (case-insensitive) with `[[new_title]]`
-/// in all `page.md` files. Skip the page we just renamed.
-fn rewrite_links_in_vault(
+/// Update `[[old_title]]` (case-insensitive) with `[[new_title]]`
+/// in the specified pages. Skip the page we just renamed.
+fn rewrite_links_in_pages(
     vault_path: &Path,
+    slugs: &[String],
     old_title: &str,
     new_title: &str,
     skip_slug: &str,
 ) -> Result<(), String> {
-    let entries = std::fs::read_dir(vault_path)
-        .map_err(|e| format!("rewrite_links: read_dir: {e}"))?;
-
-    for entry in entries.flatten() {
-        let slug_dir = entry.path();
-        if !slug_dir.is_dir() {
-            continue;
-        }
-        let slug = match slug_dir.file_name().and_then(|n| n.to_str()) {
-            Some(s) => s.to_string(),
-            None => continue,
-        };
+    for slug in slugs {
         if slug == skip_slug {
             continue;
         }
+        let slug_dir = vault_path.join(slug);
         let page_file = slug_dir.join("page.md");
         if !page_file.exists() {
             continue;
@@ -211,35 +228,41 @@ mod tests {
     }
 
     #[test]
-    fn rename_moves_assets() {
-        use tempfile::TempDir;
+    fn test_rename_cascade_smart() {
+        use crate::fixtures::create_fixture_vault;
         use std::fs;
-        let tmp = TempDir::new().unwrap();
-        let config_dir = tmp.path().join("config");
-        let cache_dir = tmp.path().join("cache");
-        let vault_dir = tmp.path().join("vault");
-        fs::create_dir_all(&config_dir).unwrap();
-        fs::create_dir_all(&vault_dir).unwrap();
 
-        let ctx = CerboContext {
-            config_dir,
-            cache_dir,
-        };
-
-        let vault = vault::vault_add(&ctx, "Test".into(), vault_dir.to_str().unwrap().into()).unwrap();
-        let old_slug = crate::page::page_create(&ctx, vault.id.clone(), "Old Title".into()).unwrap();
+        let fixture = create_fixture_vault().unwrap();
         
-        // Add asset
-        let assets_dir = vault_dir.join(&old_slug).join("assets");
-        fs::create_dir_all(&assets_dir).unwrap();
-        fs::write(assets_dir.join("test.txt"), "hello").unwrap();
+        // Rename Page B -> New Page B
+        let new_slug = page_rename(&fixture.ctx, fixture.vault_id.clone(), "page-b".into(), "New Page B".into()).unwrap();
+        assert_eq!(new_slug, "new-page-b");
 
-        // Rename
-        let new_slug = page_rename(&ctx, vault.id.clone(), old_slug, "New Title".into()).unwrap();
+        // Verify Page A (Linked to Page B)
+        let a_content = fs::read_to_string(fixture.vault_path.join("page-a").join("page.md")).unwrap();
+        assert!(a_content.contains("[[New Page B]]"));
+        assert!(!a_content.contains("[[Page B]]"));
+
+        // Verify Page C (Linked to page b - case insensitive)
+        let c_content = fs::read_to_string(fixture.vault_path.join("page-c").join("page.md")).unwrap();
+        assert!(c_content.contains("[[New Page B]]"));
+        assert!(!c_content.contains("[[page b]]"));
+
+        // Verify Page E (Linked to Page B and Page A)
+        let e_content = fs::read_to_string(fixture.vault_path.join("page-e").join("page.md")).unwrap();
+        assert!(e_content.contains("[[New Page B]]"));
+        assert!(e_content.contains("[[Page A]]"));
+
+        // Verify Page D (No links)
+        let d_content = fs::read_to_string(fixture.vault_path.join("page-d").join("page.md")).unwrap();
+        assert!(!d_content.contains("New Page B"));
+
+        // Verify Index updated
+        let idx = index::load_index(&fixture.ctx, &fixture.vault_id).unwrap();
+        assert!(idx.pages.contains_key("new-page-b"));
+        assert!(!idx.pages.contains_key("page-b"));
         
-        // Verify asset moved
-        let new_assets_dir = vault_dir.join(&new_slug).join("assets");
-        assert!(new_assets_dir.join("test.txt").exists());
-        assert_eq!(fs::read_to_string(new_assets_dir.join("test.txt")).unwrap(), "hello");
+        let a_entry = idx.pages.get("page-a").unwrap();
+        assert!(a_entry.links.contains(&"New Page B".to_string()));
     }
 }

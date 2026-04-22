@@ -11,3 +11,6 @@ serde_json = "1"
 directories = "5"
 notify = "6"
 tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+cerbo-core = { path = "../core", features = ["test-utils"] }

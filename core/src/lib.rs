@@ -12,3 +12,6 @@ pub mod paths;
 pub mod rename;
 pub mod slug;
 pub mod vault;
+
+#[cfg(any(test, feature = "test-utils"))]
+pub mod fixtures;

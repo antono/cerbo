@@ -212,3 +212,34 @@ async fn main() -> Result<(), String> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cerbo_core::fixtures::create_fixture_vault;
+    use cerbo_core::index;
+    use std::fs;
+
+    #[tokio::test]
+    async fn test_cli_rename_cascade() {
+        let fixture = create_fixture_vault().unwrap();
+        
+        // Simulating the action of PageCommands::Rename
+        let new_slug = cerbo_core::rename::page_rename(
+            &fixture.ctx,
+            fixture.vault_id.clone(),
+            "page-b".into(),
+            "New Page B".into()
+        ).unwrap();
+
+        assert_eq!(new_slug, "new-page-b");
+
+        // Verify Page A was updated
+        let a_content = fs::read_to_string(fixture.vault_path.join("page-a").join("page.md")).unwrap();
+        assert!(a_content.contains("[[New Page B]]"));
+
+        // Verify index was updated and saved
+        let idx = index::load_index(&fixture.ctx, &fixture.vault_id).unwrap();
+        assert!(idx.pages.contains_key("new-page-b"));
+    }
+}
