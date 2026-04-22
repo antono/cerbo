@@ -1,6 +1,6 @@
 # Cerbo
 
-**Cerbo** is a local-first markdown wiki editor that treats the filesystem as a
+**Cerbo** (/ˈt͡serbo/) is Esperanto for "brain". It is a local-first markdown wiki editor that treats the filesystem as a
 first-class citizen. It stores all knowledge as plain files you fully own, with
 wikilink-based graph navigation as the core interaction model.
 

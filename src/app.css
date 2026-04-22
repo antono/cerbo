@@ -61,58 +61,91 @@ html, body {
   }
 }
 
-/* Carta editor theme overrides */
+/* Carta editor theme mapping */
 :root {
   --carta-bg: var(--bg);
   --carta-fg: var(--fg);
   --carta-border: var(--border);
-}
-
-.dark {
-  --carta-bg: var(--bg);
-  --carta-fg: var(--fg);
-  --carta-border: var(--border);
+  --carta-accent: var(--accent);
+  --carta-accent-hover: var(--accent-hover);
 }
 
 :global(.carta-editor) {
-  display: flex !important;
-  flex-direction: row !important;
-  background-color: var(--bg) !important;
-  color: var(--fg) !important;
-  border-color: var(--border) !important;
-}
-
-:global(.carta-input), :global(.carta-renderer) {
-  background-color: var(--bg) !important;
-  color: var(--fg) !important;
-  flex: 1 !important;
+  background-color: var(--carta-bg);
+  color: var(--carta-fg);
+  border-color: var(--carta-border);
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
 }
 
 :global(.carta-toolbar) {
-  display: flex !important;
-  flex-direction: column !important;
-  width: 40px !important;
-  height: 100% !important;
-  background-color: var(--sidebar-bg) !important;
-  border-right: 1px solid var(--border) !important;
-  border-bottom: none !important;
-  padding: 4px 0 !important;
+  background-color: var(--sidebar-bg);
+  border-bottom: 1px solid var(--carta-border);
+  padding: 4px;
 }
 
-:global(.carta-toolbar-left),
-:global(.carta-toolbar-right) {
-  display: flex !important;
-  flex-direction: column !important;
-  align-items: center !important;
-  gap: 2px !important;
+:global(.carta-input), :global(.carta-renderer) {
+  background-color: var(--carta-bg);
+  color: var(--carta-fg);
+  padding: 1.5rem;
 }
 
-:global(.carta-toolbar-right) {
-  margin-top: auto !important;
+/* Dark mode fixes for Carta */
+:root.dark :global(.carta-editor) {
+  --carta-bg: var(--bg);
+  --carta-fg: var(--fg);
+  --carta-border: var(--border);
+  /* Override Carta's default theme variables */
+  --text-color: var(--fg) !important;
+  --border-color: var(--border) !important;
+  --hover-color: var(--accent-hover) !important;
+  --caret-color: var(--fg) !important;
+  --selection-color: rgba(96, 165, 250, 0.2) !important;
 }
 
-:global(.carta-wrapper) {
-  flex: 1 !important;
-  height: 100% !important;
-  display: flex !important;
+:root.dark :global(.carta-editor svg) {
+  color: var(--fg) !important;
+  fill: currentColor !important;
+  stroke: currentColor !important;
+}
+
+:root.dark :global(.carta-toolbar button) {
+  color: var(--fg) !important;
+}
+
+:root.dark :global(.carta-input) {
+  color: var(--fg) !important;
+  background-color: var(--bg) !important;
+}
+
+/* Tabbed mode styling (GitHub-like) */
+:global(.carta-tabs) {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem 0;
+  border-bottom: 1px solid var(--border);
+  background-color: var(--sidebar-bg);
+}
+
+:global(.carta-tab) {
+  padding: 0.5rem 1rem;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+  transition: all 0.15s;
+  background: none;
+}
+
+:global(.carta-tab:hover) {
+  color: var(--fg);
+}
+
+:global(.carta-tab-active) {
+  background-color: var(--bg);
+  border-color: var(--border);
+  color: var(--fg);
+  margin-bottom: -1px;
 }

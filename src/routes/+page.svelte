@@ -6,47 +6,24 @@
 
   // ── State ─────────────────────────────────────────────────────────────────────
 
-  let isEditing = $state(false);
   let isSaving = $state(false);
 
   // ── Derived ───────────────────────────────────────────────────────────────────
 
   let vault = $derived(activeVault());
-  let currentPage = $derived(
-    app.pages.find((p) => p.slug === app.currentSlug) ?? null,
-  );
 </script>
 
 {#if app.currentSlug}
   <div class="editor-area">
-    <!-- Page title bar -->
-    <div class="page-title-bar">
-      <div class="title-left">
-        <button 
-          class="mode-toggle" 
-          onclick={() => isEditing = !isEditing}
-          title={isEditing ? "Switch to Preview" : "Switch to Source"}
-        >
-          {#if isEditing}
-            <Eye size={16} />
-          {:else}
-            <Pencil size={16} />
-          {/if}
-        </button>
-
-        <h1 class="page-title">{currentPage?.title ?? app.currentSlug}</h1>
-        
-        {#if isSaving}
-          <div class="save-indicator">Saving…</div>
-        {/if}
-      </div>
-    </div>
+    <!-- Save indicator (floating or subtle) -->
+    {#if isSaving}
+      <div class="save-indicator">Saving…</div>
+    {/if}
 
     <!-- Editor -->
     <div class="editor-wrap">
       <PageEditor 
         slug={app.currentSlug} 
-        bind:isEditing={isEditing}
         onSaving={(s) => isSaving = s}
       />
     </div>
@@ -72,58 +49,19 @@
     min-height: 0;
   }
 
-  .page-title-bar {
-    padding: 0.5rem 1.5rem;
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-    min-height: 3.5rem;
-    display: flex;
-    align-items: center;
-  }
-
-  .title-left {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    flex: 1;
-    min-width: 0;
-  }
-
-  .page-title {
-    margin: 0;
-    font-size: 1.2rem;
-    font-weight: 700;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .mode-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 2rem;
-    height: 2rem;
-    padding: 0;
-    background: var(--accent);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    cursor: pointer;
-    font-size: 0.9rem;
-    color: var(--fg);
-    transition: all 0.15s;
-    flex-shrink: 0;
-  }
-
-  .mode-toggle:hover {
-    background: var(--accent-hover);
-    border-color: var(--primary);
-  }
-
   .save-indicator {
+    position: absolute;
+    top: 0.75rem;
+    right: 1.5rem;
+    z-index: 50;
     font-size: 0.75rem;
     color: var(--muted-foreground);
     font-style: italic;
+    background: var(--bg);
+    padding: 2px 8px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    pointer-events: none;
   }
 
   .editor-wrap {
