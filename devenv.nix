@@ -17,6 +17,7 @@
     openssl
     glib
     gtk3
+    dconf
     gsettings-desktop-schemas
     adwaita-icon-theme
     cairo
@@ -29,7 +30,14 @@
   env = {
     PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
     WEBKIT_DISABLE_COMPOSITING_MODE = "1"; # prevents rendering issues on some setups
-    XDG_DATA_DIRS = "${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:$XDG_DATA_DIRS";
+    XDG_DATA_DIRS = builtins.concatStringsSep ":" [
+      "${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}"
+      "${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}"
+      "${pkgs.gsettings-desktop-schemas}/share"
+      "${pkgs.gtk3}/share"
+      "${pkgs.adwaita-icon-theme}/share"
+      "$XDG_DATA_DIRS"
+    ];
   };
 
   enterShell = ''

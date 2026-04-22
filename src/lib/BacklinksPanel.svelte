@@ -36,7 +36,7 @@
 <style>
   .backlinks-panel {
     padding: 0.75rem 1rem;
-    border-top: 1px solid var(--border, #e2e8f0);
+    border-top: 1px solid var(--border);
     font-size: 0.875rem;
   }
 
@@ -46,12 +46,12 @@
     font-weight: 600;
     letter-spacing: 0.05em;
     text-transform: uppercase;
-    color: var(--muted-foreground, #888);
+    color: var(--muted-foreground);
   }
 
   .empty {
     margin: 0;
-    color: var(--muted-foreground, #888);
+    color: var(--muted-foreground);
     font-style: italic;
   }
 
@@ -72,12 +72,12 @@
     cursor: pointer;
     text-align: left;
     width: 100%;
-    color: var(--foreground, #0f0f0f);
+    color: var(--fg);
     font-size: 0.875rem;
     transition: background 0.15s;
   }
 
   .backlink-item:hover {
-    background: var(--accent, #f1f5f9);
+    background: var(--accent);
   }
 </style>

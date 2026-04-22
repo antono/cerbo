@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Carta, MarkdownEditor } from 'carta-md';
   import 'carta-md/default.css';
-  import { wikilinkPlugin } from './wikilink-plugin';
+  import { wikilinkPlugin, attachPreviewClickHandler } from './wikilink-plugin';
   import {
     app,
     pageSlugs,
@@ -12,9 +12,29 @@
 
   // ── Props ─────────────────────────────────────────────────────────────────────
 
-  let { slug }: { slug: string } = $props();
+  let { 
+    slug,
+    isEditing = $bindable(false),
+    onSaving = (s: boolean) => {}
+  }: { 
+    slug: string;
+    isEditing?: boolean;
+    onSaving?: (s: boolean) => void;
+  } = $props();
 
-  // ── Carta instance (recreated when vault changes so page list is fresh) ───────
+  // ── State ────────────────────────────────────────────────────────────────────
+
+  let content = $state('');
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let saving = $state(false);
+  let previewEl = $state<HTMLElement | null>(null);
+
+  // Notify parent of saving state
+  $effect(() => {
+    onSaving(saving);
+  });
+
+  // ── Carta instance ──────────────────────────────────────────────────────────
 
   let carta = $derived(
     new Carta({
@@ -22,9 +42,15 @@
       extensions: [
         wikilinkPlugin({
           getPages: () => pageSlugs(),
-          onNavigate: (s) => openPage(s),
+          onNavigate: (s) => {
+            isEditing = false;
+            openPage(s);
+          },
           onCreate: (title) => {
-            createPage(title).then((newSlug) => openPage(newSlug)).catch((e) => {
+            createPage(title).then((newSlug) => {
+              isEditing = true; // Edit newly created page
+              openPage(newSlug);
+            }).catch((e) => {
               app.error = String(e);
             });
           },
@@ -33,21 +59,19 @@
     }),
   );
 
-  // ── Content ──────────────────────────────────────────────────────────────────
-
-  let content = $state('');
-  let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  let saving = $state(false);
+  // ── Effects ──────────────────────────────────────────────────────────────────
 
   // Load content when slug changes
   $effect(() => {
     const page = app.pages.find((p) => p.slug === slug);
     if (page) {
       content = app.currentContent ?? '';
+      // Default to preview when switching pages
+      isEditing = false;
     }
   });
 
-  // Auto-save: watch content changes and debounce writes
+  // Auto-save
   $effect(() => {
     const value = content;
     if (!value && !app.currentContent) return;
@@ -64,42 +88,79 @@
       }
     }, 800);
   });
+
+  // Render preview and attach links
+  let renderedHtml = $state('');
+  $effect(() => {
+    if (!isEditing) {
+      carta.render(content).then(html => {
+        renderedHtml = html;
+      });
+    }
+  });
+
+  $effect(() => {
+    if (previewEl && !isEditing) {
+      return attachPreviewClickHandler(previewEl, {
+        onNavigate: (s) => openPage(s),
+        onCreate: (t) => createPage(t)
+      });
+    }
+  });
 </script>
 
 <div class="page-editor">
-  {#if saving}
-    <div class="save-indicator">Saving…</div>
-  {/if}
-  <MarkdownEditor
-    {carta}
-    bind:value={content}
-    mode="split"
-    scroll="sync"
-  />
+  <div class="editor-content-wrap">
+    {#if isEditing}
+      <MarkdownEditor
+        {carta}
+        bind:value={content}
+        mode="single"
+      />
+    {:else}
+      <div 
+        bind:this={previewEl}
+        class="preview-mode carta-renderer"
+      >
+        {@html renderedHtml}
+      </div>
+    {/if}
+  </div>
 </div>
 
 <style>
   .page-editor {
-    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
     min-height: 0;
   }
 
-  .save-indicator {
-    position: absolute;
-    top: 0.5rem;
-    right: 1rem;
-    font-size: 0.75rem;
-    color: var(--muted-foreground, #888);
-    z-index: 10;
-    pointer-events: none;
+  .editor-content-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .preview-mode {
+    padding: 2rem;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+
+  /* Make sure links look interactive in preview */
+  :global(.preview-mode a.wikilink) {
+    color: var(--primary);
+    text-decoration: none;
+    border-bottom: 1px dashed var(--primary);
+  }
+
+  :global(.preview-mode a.wikilink-broken) {
+    color: #dc2626;
+    border-bottom-color: #dc2626;
   }
 
   .page-editor :global(.carta-editor) {
-    flex: 1;
-    min-height: 0;
     height: 100%;
   }
 </style>

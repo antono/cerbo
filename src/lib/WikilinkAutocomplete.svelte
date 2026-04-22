@@ -4,9 +4,6 @@
   /**
    * WikilinkAutocomplete — injected into Carta's input area.
    * Watches the textarea for `[[` patterns and shows a filtered dropdown.
-   *
-   * Props injected by Carta: carta
-   * Props from plugin options: getPages
    */
 
   let {
@@ -22,13 +19,13 @@
   let open = $state(false);
   let query = $state('');
   let selected = $state(0);
-  let triggerStart = $state(-1); // caret position where [[ was typed
+  let triggerStart = $state(-1);
 
-  // Dropdown anchor (pixel offset inside editor container)
+  // Dropdown position
   let anchorX = $state(0);
   let anchorY = $state(0);
 
-  // ── Derived page suggestions ─────────────────────────────────────────────────
+  // ── Derived ──────────────────────────────────────────────────────────────────
 
   const suggestions = $derived(() => {
     const pages = getPages();
@@ -37,9 +34,58 @@
     return pages.filter((s) => s.toLowerCase().includes(q)).slice(0, 10);
   });
 
+  // ── Caret Position Helper ───────────────────────────────────────────────────
+
+  /**
+   * A simplified version of getting caret coordinates in a textarea.
+   * It creates a "mirror" element to calculate the pixel offset.
+   */
+  function getCaretCoordinates(element: HTMLTextAreaElement, position: number) {
+    const div = document.createElement('div');
+    const style = window.getComputedStyle(element);
+
+    // Copy essential styles
+    const properties = [
+      'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'fontVariant',
+      'textTransform', 'wordSpacing', 'letterSpacing', 'lineHeight',
+      'paddingLeft', 'paddingTop', 'paddingRight', 'paddingBottom',
+      'marginLeft', 'marginTop', 'marginRight', 'marginBottom',
+      'borderLeftWidth', 'borderTopWidth', 'borderRightWidth', 'borderBottomWidth',
+      'width', 'height', 'boxSizing', 'overflowX', 'overflowY', 'wordWrap', 'whiteSpace'
+    ];
+
+    properties.forEach(prop => {
+      // @ts-ignore
+      div.style[prop] = style[prop];
+    });
+
+    div.style.position = 'absolute';
+    div.style.visibility = 'hidden';
+    div.style.whiteSpace = 'pre-wrap';
+    div.style.wordWrap = 'break-word';
+
+    // Content up to caret
+    div.textContent = element.value.substring(0, position);
+
+    // The span represents the caret
+    const span = document.createElement('span');
+    span.textContent = element.value.substring(position) || '.';
+    div.appendChild(span);
+
+    document.body.appendChild(div);
+    const { offsetLeft: spanX, offsetTop: spanY } = span;
+    const lineHeight = parseInt(style.lineHeight);
+    
+    document.body.removeChild(div);
+
+    return { 
+      x: spanX - element.scrollLeft, 
+      y: spanY - element.scrollTop + (isNaN(lineHeight) ? 20 : lineHeight)
+    };
+  }
+
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
-  /** Convert a slug to a display title (slug → Title Case). */
   function slugToTitle(slug: string): string {
     return slug
       .split('-')
@@ -47,20 +93,14 @@
       .join(' ');
   }
 
-  /** Insert the selected page title and close the dropdown. */
   function insertSuggestion(slug: string) {
     const input = carta.input;
     if (!input) return;
     const textarea = input.textarea;
     const pos = textarea.selectionStart;
     const title = slugToTitle(slug);
-    const before = textarea.value.slice(0, triggerStart);
-    const after = textarea.value.slice(pos);
     const insertion = `[[${title}]]`;
-    const newValue = before + insertion + after;
-    const newCaret = triggerStart + insertion.length;
 
-    // Mutate via InputEnhancer to preserve undo history
     textarea.focus();
     textarea.setSelectionRange(triggerStart, pos);
     document.execCommand('insertText', false, insertion);
@@ -75,17 +115,17 @@
     triggerStart = -1;
   }
 
-  // ── Keyboard handler ─────────────────────────────────────────────────────────
+  // ── Handlers ─────────────────────────────────────────────────────────────────
 
   function handleKeyDown(ev: KeyboardEvent) {
     if (!open) return;
     const list = suggestions();
     if (ev.key === 'ArrowDown') {
       ev.preventDefault();
-      selected = (selected + 1) % list.length;
+      selected = (selected + 1) % (list.length || 1);
     } else if (ev.key === 'ArrowUp') {
       ev.preventDefault();
-      selected = (selected - 1 + list.length) % list.length;
+      selected = (selected - 1 + (list.length || 1)) % (list.length || 1);
     } else if (ev.key === 'Enter' || ev.key === 'Tab') {
       if (list.length > 0) {
         ev.preventDefault();
@@ -97,8 +137,6 @@
     }
   }
 
-  // ── Textarea input watcher ────────────────────────────────────────────────────
-
   function handleInput() {
     const input = carta.input;
     if (!input) return;
@@ -106,36 +144,33 @@
     const pos = textarea.selectionStart;
     const text = textarea.value.slice(0, pos);
 
-    // Find the last [[ before cursor that hasn't been closed yet
     const match = /\[\[([^\][\n]*)$/.exec(text);
     if (match) {
       const start = match.index;
-      if (!open) {
-        // Compute anchor position from caret
-        const rect = textarea.getBoundingClientRect();
-        const containerRect = textarea.parentElement?.getBoundingClientRect() ?? rect;
-        // Approximate caret pixel position
-        anchorX = 0;
-        anchorY = 0; // Will be positioned via CSS near caret
-        triggerStart = start;
-        open = true;
-        selected = 0;
-      }
+      triggerStart = start;
+      
+      const coords = getCaretCoordinates(textarea, pos);
+      anchorX = coords.x;
+      anchorY = coords.y;
+      
+      open = true;
+      selected = 0;
       query = match[1];
     } else {
       if (open) close();
     }
   }
 
-  // ── Mount / unmount ──────────────────────────────────────────────────────────
-
   $effect(() => {
     const input = carta.input;
     if (!input) return;
     const textarea = input.textarea;
     textarea.addEventListener('input', handleInput);
-    textarea.addEventListener('keydown', handleKeyDown, true); // capture phase
-    textarea.addEventListener('blur', () => { if (open) close(); });
+    textarea.addEventListener('keydown', handleKeyDown, true);
+    textarea.addEventListener('blur', () => { 
+      // Small timeout to allow click on suggestions
+      setTimeout(() => { if (open) close(); }, 150); 
+    });
 
     return () => {
       textarea.removeEventListener('input', handleInput);
@@ -147,15 +182,15 @@
 {#if open}
   {@const list = suggestions()}
   {#if list.length > 0}
-    <!-- Positioned at the bottom-left of the textarea container -->
     <div
       class="wikilink-autocomplete"
       role="listbox"
       aria-label="Page suggestions"
+      style:left="{anchorX}px"
+      style:top="{anchorY}px"
     >
       {#each list as slug, i}
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <div
+        <button
           class="wikilink-autocomplete-item"
           class:selected={i === selected}
           role="option"
@@ -163,7 +198,7 @@
           onmousedown={(e) => { e.preventDefault(); insertSuggestion(slug); }}
         >
           {slugToTitle(slug)}
-        </div>
+        </button>
       {/each}
     </div>
   {/if}
@@ -172,13 +207,11 @@
 <style>
   .wikilink-autocomplete {
     position: absolute;
-    bottom: 0;
-    left: 0;
-    z-index: 100;
-    background: var(--carta-autocomplete-bg, hsl(var(--background)));
-    border: 1px solid var(--carta-autocomplete-border, hsl(var(--border)));
-    border-radius: 0.375rem;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 1000;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
     min-width: 200px;
     max-height: 240px;
     overflow-y: auto;
@@ -186,17 +219,22 @@
   }
 
   .wikilink-autocomplete-item {
+    display: block;
+    width: 100%;
+    text-align: left;
     padding: 0.375rem 0.75rem;
+    border: none;
+    background: none;
     cursor: pointer;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    color: var(--carta-autocomplete-text, hsl(var(--foreground)));
+    color: var(--fg);
   }
 
   .wikilink-autocomplete-item:hover,
   .wikilink-autocomplete-item.selected {
-    background: var(--carta-autocomplete-hover, hsl(var(--accent)));
-    color: var(--carta-autocomplete-hover-text, hsl(var(--accent-foreground)));
+    background: var(--accent);
+    color: var(--fg);
   }
 </style>

@@ -121,8 +121,8 @@
     display: flex;
     flex-direction: column;
     min-width: 240px;
-    background: var(--bg-overlay, #fff);
-    border: 1px solid var(--border, #e2e8f0);
+    background: var(--bg);
+    border: 1px solid var(--border);
     border-radius: 0.5rem;
     box-shadow: 0 4px 16px rgba(0,0,0,0.12);
     overflow: hidden;
@@ -144,11 +144,11 @@
     text-align: left;
     color: inherit;
   }
-  .vault-item:hover { background: var(--hover, #f1f5f9); }
-  .vault-item.active { background: var(--accent, #e0f2fe); font-weight: 600; }
-  .vault-check { margin-left: auto; color: var(--primary, #0284c7); }
+  .vault-item:hover { background: var(--accent-hover); }
+  .vault-item.active { background: var(--accent); font-weight: 600; }
+  .vault-check { margin-left: auto; color: var(--primary); }
   .vault-footer {
-    border-top: 1px solid var(--border, #e2e8f0);
+    border-top: 1px solid var(--border);
     padding: 0.5rem;
   }
   .add-form { display: flex; flex-direction: column; gap: 0.375rem; }
@@ -158,27 +158,27 @@
   }
   .btn-browse {
     padding: 0.25rem 0.5rem;
-    background: var(--accent, #f1f5f9);
-    border: 1px solid var(--border, #e2e8f0);
+    background: var(--accent);
+    border: 1px solid var(--border);
     border-radius: 0.375rem;
     cursor: pointer;
     font-size: 0.9rem;
   }
-  .btn-browse:hover { background: var(--accent-hover, #e2e8f0); }
+  .btn-browse:hover { background: var(--accent-hover); }
   .add-form-actions { display: flex; gap: 0.375rem; }
   .input {
     padding: 0.375rem 0.5rem;
     font-size: 0.8125rem;
-    border: 1px solid var(--border, #e2e8f0);
+    border: 1px solid var(--border);
     border-radius: 0.375rem;
-    background: var(--bg-input, #fff);
+    background: var(--bg);
     color: inherit;
     width: 100%;
     box-sizing: border-box;
   }
   .btn-primary {
     padding: 0.375rem 0.75rem;
-    background: var(--primary, #0284c7);
+    background: var(--primary);
     color: #fff;
     border: none;
     border-radius: 0.375rem;
@@ -190,7 +190,7 @@
   .btn-ghost {
     padding: 0.375rem 0.75rem;
     background: transparent;
-    border: 1px solid var(--border, #e2e8f0);
+    border: 1px solid var(--border);
     border-radius: 0.375rem;
     cursor: pointer;
     font-size: 0.8125rem;
@@ -199,5 +199,5 @@
   }
   .add-btn { margin-top: 0; }
   .error { font-size: 0.75rem; color: #dc2626; margin: 0; }
-  .empty-hint { padding: 0.5rem 0.75rem; font-size: 0.8125rem; color: #94a3b8; margin: 0; }
+  .empty-hint { padding: 0.5rem 0.75rem; font-size: 0.8125rem; color: var(--muted-foreground); margin: 0; }
 </style>
