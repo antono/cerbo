@@ -80,3 +80,16 @@ pub fn attachment_delete(
 ) -> Result<(), String> {
     page::attachment_delete(&get_context(&app)?, vaultId, slug, filename)
 }
+
+#[tauri::command]
+#[allow(non_snake_case)]
+pub fn attachment_open(
+    app: AppHandle,
+    vaultId: String,
+    slug: String,
+    filename: String,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = page::attachment_path(&get_context(&app)?, vaultId, slug, filename)?;
+    app.opener().open_path(path.to_string_lossy(), None).map_err(|e| e.to_string())
+}

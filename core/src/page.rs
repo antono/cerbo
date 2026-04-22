@@ -147,12 +147,21 @@ pub fn attachment_delete(
     slug: String,
     filename: String,
 ) -> Result<(), String> {
-    let root = vault_root(ctx, &vault_id)?;
-    let file_path = root.join(&slug).join("assets").join(filename);
+    let file_path = attachment_path(ctx, vault_id, slug, filename)?;
     if !file_path.exists() {
         return Err("attachment_delete: file not found".into());
     }
     std::fs::remove_file(file_path).map_err(|e| format!("attachment_delete: {e}"))
+}
+
+pub fn attachment_path(
+    ctx: &CerboContext,
+    vault_id: String,
+    slug: String,
+    filename: String,
+) -> Result<PathBuf, String> {
+    let root = vault_root(ctx, &vault_id)?;
+    Ok(root.join(&slug).join("assets").join(filename))
 }
 
 pub fn page_list(ctx: &CerboContext, vault_id: String) -> Result<Vec<PageMeta>, String> {

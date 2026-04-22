@@ -1,7 +1,7 @@
 <script lang="ts">
   import { app, loadAttachments } from './stores.svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { FileText, Trash2, Paperclip } from 'lucide-svelte';
+  import { FileText, Trash2, Paperclip, ExternalLink } from 'lucide-svelte';
 
   let { slug }: { slug: string } = $props();
   let loading = $state(false);
@@ -23,6 +23,19 @@
         filename
       });
       await refreshAttachments();
+    } catch (e) {
+      app.error = String(e);
+    }
+  }
+
+  async function openAttachment(filename: string) {
+    if (!app.activeVaultId || !slug) return;
+    try {
+      await invoke('attachment_open', {
+        vaultId: app.activeVaultId,
+        slug,
+        filename
+      });
     } catch (e) {
       app.error = String(e);
     }
@@ -65,13 +78,22 @@
               <Paperclip size={14} class="icon" />
               <span class="filename">{file}</span>
             </button>
-            <button 
-              class="delete-btn" 
-              onclick={() => deleteAttachment(file)}
-              title="Delete attachment"
-            >
-              <Trash2 size={14} />
-            </button>
+            <div class="actions">
+              <button 
+                class="action-btn open-btn" 
+                onclick={() => openAttachment(file)}
+                title="Open with system default app"
+              >
+                <ExternalLink size={14} />
+              </button>
+              <button 
+                class="action-btn delete-btn" 
+                onclick={() => deleteAttachment(file)}
+                title="Delete attachment"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
           </li>
         {/each}
       </ul>
@@ -167,7 +189,18 @@
     white-space: nowrap;
   }
 
-  .delete-btn {
+  .actions {
+    display: flex;
+    gap: 0.125rem;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  .attachment-item:hover .actions {
+    opacity: 1;
+  }
+
+  .action-btn {
     background: none;
     border: none;
     color: var(--muted-foreground);
@@ -178,11 +211,11 @@
     align-items: center;
     justify-content: center;
     transition: all 0.15s;
-    opacity: 0;
   }
 
-  .attachment-item:hover .delete-btn {
-    opacity: 1;
+  .open-btn:hover {
+    background: var(--accent-hover);
+    color: var(--primary);
   }
 
   .delete-btn:hover {

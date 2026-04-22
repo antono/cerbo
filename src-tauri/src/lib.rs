@@ -49,6 +49,7 @@ pub fn run() {
             page::attachment_add,
             page::attachment_upload,
             page::attachment_delete,
+            page::attachment_open,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
