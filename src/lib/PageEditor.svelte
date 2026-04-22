@@ -9,6 +9,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { mode } from 'mode-watcher';
   import { Eye, Edit3 } from 'lucide-svelte';
+  import { tick, untrack } from 'svelte';
   import { wikilinkPlugin, attachPreviewClickHandler } from './wikilink-plugin';
   import {
     app,
@@ -30,7 +31,7 @@
     onSaving?: (s: boolean) => void;
   } = $props();
 
-  import { isInputFocused } from './hotkeys';
+  import { isInputFocused, isModKey } from './hotkeys';
 
   // ── State ────────────────────────────────────────────────────────────────────
 
@@ -46,70 +47,78 @@
 
   // ── Carta instance ──────────────────────────────────────────────────────────
 
-  let carta = $derived(
-    new Carta({
-      sanitizer: false,
-      theme: mode.current === 'dark' ? 'github-dark' : 'github-light',
-      extensions: [
-        wikilinkPlugin({
-          getPages: () => pageSlugs(),
-          onNavigate: (s) => {
-            openPage(s);
-          },
-          onCreate: (title) => {
-            createPage(title).then((newSlug) => {
-              openPage(newSlug);
-            }).catch((e) => {
-              app.error = String(e);
-            });
-          },
-          getVaultPath: () => activeVault()?.path,
-          getSlug: () => slug,
-          onOpenAsset: (filename) => {
-            invoke('attachment_open', {
+  // Create a stable Carta instance that doesn't re-create on every slug change.
+  // The plugins use getters so they stay up to date with the latest props.
+  const carta = new Carta({
+    sanitizer: false,
+    extensions: [
+      wikilinkPlugin({
+        getPages: () => pageSlugs(),
+        onNavigate: (s) => openPage(s),
+        onCreate: (title) => {
+          createPage(title).then((newSlug) => {
+            openPage(newSlug);
+          }).catch((e) => {
+            app.error = String(e);
+          });
+        },
+        getVaultPath: () => activeVault()?.path,
+        getSlug: () => slug,
+        onOpenAsset: (filename) => {
+          invoke('attachment_open', {
+            vaultId: app.activeVaultId,
+            slug: slug,
+            filename: filename
+          });
+        }
+      }),
+      code(),
+      emoji(),
+      anchor(),
+      attachment({
+        upload: async (file) => {
+          try {
+            const buffer = await file.arrayBuffer();
+            const bytes = new Uint8Array(buffer);
+            
+            const filename = await invoke<string>('attachment_upload', {
               vaultId: app.activeVaultId,
               slug: slug,
-              filename: filename
+              filename: file.name,
+              data: Array.from(bytes)
             });
+            
+            await loadAttachments(slug);
+            const encoded = encodeURIComponent(filename).replace(/%20/g, '%20');
+            return `assets/${encoded}`;
+          } catch (e) {
+            console.error('Upload failed:', e);
+            return null;
           }
-        }),
-        code(),
-        emoji(),
-        anchor(),
-        attachment({
-          upload: async (file) => {
-            try {
-              const buffer = await file.arrayBuffer();
-              const bytes = new Uint8Array(buffer);
-              
-              const filename = await invoke<string>('attachment_upload', {
-                vaultId: app.activeVaultId,
-                slug: slug,
-                filename: file.name,
-                data: Array.from(bytes)
-              });
-              
-              await loadAttachments(slug);
-              const encoded = encodeURIComponent(filename).replace(/%20/g, '%20');
-              return `assets/${encoded}`;
-            } catch (e) {
-              console.error('Upload failed:', e);
-              return null;
-            }
-          }
-        })
-      ],
-    }),
-  );
+        }
+      })
+    ],
+  });
+
+  // Keep theme in sync with mode-watcher
+  $effect(() => {
+    const theme = mode.current === 'dark' ? 'github-dark' : 'github-light';
+    // @ts-ignore - Update internal theme if possible
+    if (carta.options) carta.options.theme = theme;
+  });
 
   // ── Effects ──────────────────────────────────────────────────────────────────
 
   // Load content when slug changes
   $effect(() => {
-    const page = app.pages.find((p) => p.slug === slug);
-    if (page) {
-      content = app.currentContent ?? '';
-    }
+    // We only want to run this when 'slug' changes, not when app.currentContent updates from auto-save
+    const targetSlug = slug; 
+    untrack(() => {
+      const page = app.pages.find((p) => p.slug === targetSlug);
+      if (page) {
+        content = app.currentContent ?? '';
+      }
+    });
   });
 
   // Auto-save
@@ -121,13 +130,17 @@
       saving = true;
       try {
         await savePage(slug, value);
-        app.currentContent = value;
+        // Only update currentContent if the slug hasn't changed in the meantime
+        if (slug === targetSlugForSave) {
+          app.currentContent = value;
+        }
       } catch (e) {
         app.error = String(e);
       } finally {
         saving = false;
       }
     }, 800);
+    const targetSlugForSave = slug;
   });
 
   // Attach link click handlers via event delegation on the container
@@ -145,11 +158,35 @@
     }
   });
 
+  /**
+   * Focuses the editor's textarea with a retry mechanism to ensure the DOM is ready.
+   */
+  async function focusEditor() {
+    await tick();
+    let attempts = 0;
+    const tryFocus = () => {
+      const textarea = carta.input?.textarea;
+      if (textarea) {
+        textarea.focus();
+        // Force selection to ensure cursor visibility
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        textarea.setSelectionRange(start, end);
+      } else if (attempts < 10) {
+        attempts++;
+        setTimeout(tryFocus, 20);
+      }
+    };
+    tryFocus();
+  }
+
   // Handle 'i' and 'Esc' keys for mode switching
   $effect(() => {
     function handleKeydown(e: KeyboardEvent) {
       // Ignore if modal is open
       if (app.showSearch || app.showExitPrompt) return;
+
+      const modI = isModKey(e, 'i');
 
       if (isInputFocused()) {
         // If in editor, only handle Escape to switch to preview
@@ -162,13 +199,11 @@
         return;
       }
 
-      if (e.key === 'i' && app.editorTab === 'preview') {
+      // Enter edit mode: 'i' or 'Ctrl+I'
+      if ((e.key === 'i' || modI) && app.editorTab === 'preview') {
         e.preventDefault();
         app.editorTab = 'write';
-        // Give a tiny bit of time for the editor to render before focusing
-        setTimeout(() => {
-          carta.input?.textarea?.focus();
-        }, 50);
+        focusEditor();
       }
     }
 
@@ -180,12 +215,12 @@
   function toggleMode() {
     app.editorTab = app.editorTab === 'write' ? 'preview' : 'write';
     if (app.editorTab === 'write') {
-      setTimeout(() => carta.input?.textarea?.focus(), 50);
+      focusEditor();
     }
   }
 </script>
 
-<div class="page-editor" class:edit-mode={app.editorTab === 'write'} bind:this={editorContainer}>
+<div class="page-editor" bind:this={editorContainer}>
   <button 
     class="mode-toggle-btn" 
     onclick={toggleMode}
@@ -214,7 +249,6 @@
     height: 100%;
     min-height: 0;
     background: var(--bg);
-    transition: background-color 0.2s;
     position: relative;
   }
 
@@ -239,14 +273,6 @@
   .mode-toggle-btn:hover {
     background: var(--accent-hover);
     color: var(--fg);
-  }
-
-  .page-editor.edit-mode {
-    --bg: #fff1f1;
-  }
-
-  :global(.dark) .page-editor.edit-mode {
-    --bg: #1a0f0f;
   }
 
   .page-editor :global(.carta-editor) {

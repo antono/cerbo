@@ -1,5 +1,6 @@
 <script lang="ts">
   import { FileText, Plus, Pencil, Trash2, X } from 'lucide-svelte';
+  import { tick } from 'svelte';
   import { app, openPage, createPage, deletePage, renamePage, previewSlug } from './stores.svelte';
 
   // ── State for dialogs ─────────────────────────────────────────────────────────
@@ -9,6 +10,7 @@
   let newSlugPreview = $state('');
   let creating = $state(false);
   let createError = $state('');
+  let newTitleInput = $state<HTMLInputElement | null>(null);
 
   let confirmDeleteSlug = $state<string | null>(null);
   let deleting = $state(false);
@@ -38,6 +40,15 @@
   }
 
   // ── Create ────────────────────────────────────────────────────────────────────
+
+  async function toggleNewForm() {
+    showNewForm = !showNewForm;
+    createError = '';
+    if (showNewForm) {
+      await tick();
+      newTitleInput?.focus();
+    }
+  }
 
   async function handleCreate() {
     if (!newTitle.trim()) return;
@@ -102,7 +113,7 @@
     <button
       class="icon-btn"
       title="New page"
-      onclick={() => { showNewForm = !showNewForm; createError = ''; }}
+      onclick={toggleNewForm}
     >
       <Plus size={16} />
     </button>
@@ -112,12 +123,12 @@
   {#if showNewForm}
     <div class="form-inset">
       <input
+        bind:this={newTitleInput}
         class="input"
         placeholder="Page title"
         bind:value={newTitle}
         oninput={onNewTitleInput}
         onkeydown={(e) => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') { showNewForm = false; } }}
-        autofocus
       />
       {#if newSlugPreview}
         <span class="slug-hint">/{newSlugPreview}</span>

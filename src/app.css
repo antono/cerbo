@@ -130,6 +130,7 @@ html, body {
 
 .carta-input textarea {
   color: var(--fg) !important;
+  -webkit-text-fill-color: var(--fg) !important;
   caret-color: var(--primary) !important;
   overflow-y: hidden !important;
   resize: none !important;
@@ -142,14 +143,15 @@ html, body {
 
 /* Fix for Carta's default theme classes in Dark Mode */
 .carta-theme__default {
-  --border-color: var(--border);
-  --selection-color: rgba(59, 130, 246, 0.2);
-  --focus-outline: var(--primary);
-  --hover-color: var(--accent-hover);
-  --caret-color: var(--fg);
-  --text-color: var(--fg);
+  --border-color: var(--border) !important;
+  --selection-color: rgba(59, 130, 246, 0.2) !important;
+  --focus-outline: var(--primary) !important;
+  --hover-color: var(--accent-hover) !important;
+  --caret-color: var(--fg) !important;
+  --text-color: var(--fg) !important;
 }
 
+:global(.dark) .carta-theme__default,
 .dark .carta-theme__default {
   --border-color: var(--border) !important;
   --selection-color: rgba(59, 130, 246, 0.3) !important;
@@ -247,7 +249,7 @@ html, body {
   border-radius: var(--radius);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 0.9em;
-  color: var(--primary);
+  color: var(--primary); /* Inline code color */
 }
 
 .carta-renderer pre {
@@ -260,10 +262,16 @@ html, body {
 }
 
 .carta-renderer pre code {
-  background-color: transparent;
-  padding: 0;
-  color: inherit;
+  background-color: transparent !important;
+  padding: 0 !important;
+  color: var(--fg) !important; /* Force code block text color */
   font-size: 0.875rem;
+  white-space: pre !important;
+}
+
+/* Ensure syntax highlighting (if any) doesn't lose contrast */
+.carta-renderer code span {
+  color: inherit;
 }
 
 .carta-renderer hr {
