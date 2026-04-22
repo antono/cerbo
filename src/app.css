@@ -90,30 +90,41 @@ html, body {
   padding: 1.5rem;
 }
 
-/* Dark mode fixes for Carta */
-:root.dark :global(.carta-editor) {
-  --carta-bg: var(--bg);
-  --carta-fg: var(--fg);
-  --carta-border: var(--border);
-  /* Override Carta's default theme variables */
-  --text-color: var(--fg) !important;
-  --border-color: var(--border) !important;
-  --hover-color: var(--accent-hover) !important;
-  --caret-color: var(--fg) !important;
-  --selection-color: rgba(96, 165, 250, 0.2) !important;
+/* Fix for Carta's default theme classes */
+:global(.carta-theme__default) {
+  --border-color: var(--border);
+  --selection-color: rgba(59, 130, 246, 0.2);
+  --focus-outline: var(--primary);
+  --hover-color: var(--accent-hover);
+  --caret-color: var(--fg);
+  --text-color: var(--fg);
+}
+
+:root.dark :global(.carta-theme__default) {
+  --border-color: var(--border);
+  --selection-color: rgba(96, 165, 250, 0.2);
+  --focus-outline: var(--primary);
+  --hover-color: var(--accent-hover);
+  --caret-color: var(--fg);
+  --text-color: var(--fg);
+}
+
+/* Dark mode fixes for Carta Icons */
+:global(.carta-editor svg) {
+  color: inherit !important;
+  fill: currentColor !important;
 }
 
 :root.dark :global(.carta-editor svg) {
   color: var(--fg) !important;
   fill: currentColor !important;
-  stroke: currentColor !important;
 }
 
-:root.dark :global(.carta-toolbar button) {
+:global(.carta-toolbar button) {
   color: var(--fg) !important;
 }
 
-:root.dark :global(.carta-input) {
+:global(.carta-input) {
   color: var(--fg) !important;
   background-color: var(--bg) !important;
 }
@@ -148,4 +159,78 @@ html, body {
   border-color: var(--border);
   color: var(--fg);
   margin-bottom: -1px;
+}
+
+/* Markdown Preview Styling */
+:global(.carta-renderer) {
+  line-height: 1.6;
+  font-size: 1rem;
+}
+
+:global(.carta-renderer h1) {
+  font-size: 2rem;
+  font-weight: 800;
+  margin-top: 0;
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+:global(.carta-renderer h2) {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+}
+
+:global(.carta-renderer p) {
+  margin-bottom: 1rem;
+}
+
+:global(.carta-renderer a) {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+:global(.carta-renderer a:hover) {
+  text-decoration: underline;
+}
+
+:global(.carta-renderer ul, .carta-renderer ol) {
+  padding-left: 2rem;
+  margin-bottom: 1rem;
+}
+
+:global(.carta-renderer li) {
+  margin-bottom: 0.25rem;
+}
+
+:global(.carta-renderer blockquote) {
+  margin: 1rem 0;
+  padding-left: 1rem;
+  border-left: 4px solid var(--border);
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+:global(.carta-renderer code) {
+  background-color: var(--accent);
+  padding: 0.2rem 0.4rem;
+  border-radius: var(--radius);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.875em;
+}
+
+:global(.carta-renderer pre) {
+  background-color: var(--accent);
+  padding: 1rem;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  margin-bottom: 1rem;
+}
+
+:global(.carta-renderer pre code) {
+  background-color: transparent;
+  padding: 0;
+  font-size: 0.875rem;
 }
