@@ -71,9 +71,43 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
           processor.use(() => (tree: MdastRoot) => {
             findAndReplace(tree, [
               [
-                /\[\[([^\]]+)\]\]/g,
-                ((_match: string, title: string) => {
+                /(!?)\[\[([^\]]+)\]\]/g,
+                ((_match: string, isImage: string, title: string) => {
                   const slug = titleToSlug(title);
+                  
+                  if (isImage) {
+                    // Handle ![[...]] as an image/asset preview
+                    const isActualImage = /\.(png|jpe?g|gif|svg|webp)$/i.test(title);
+                    if (isActualImage) {
+                      return {
+                        type: 'image',
+                        url: `assets/${title}`,
+                        alt: title,
+                        data: {
+                          hProperties: {
+                            'data-wikilink-asset': 'true'
+                          }
+                        }
+                      };
+                    } else {
+                      // Fallback to a link if it's not an image
+                      return {
+                        type: 'wikilink',
+                        value: title,
+                        data: {
+                          hName: 'a',
+                          hProperties: {
+                            'data-asset': 'true',
+                            'data-asset-filename': title,
+                            href: '#',
+                            class: 'asset-link',
+                          },
+                          hChildren: [{ type: 'text', value: `📎 ${title}` }],
+                        },
+                      };
+                    }
+                  }
+
                   return {
                     type: 'wikilink',
                     value: title,
@@ -102,8 +136,9 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
         transform({ processor }) {
           processor.use(() => (tree: HastRoot) => {
             const pages = options.getPages();
+            // Fetch once per render
             const vaultPath = options.getVaultPath();
-            const slug = options.getSlug();
+            const currentSlug = options.getSlug();
 
             visit(tree, 'element', (node: Element) => {
               // Wikilinks
@@ -111,8 +146,8 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
                 node.tagName === 'a' &&
                 node.properties?.['data-wikilink'] === 'true'
               ) {
-                const slug = node.properties['data-wikilink-slug'] as string;
-                const resolved = pages.includes(slug);
+                const linkSlug = node.properties['data-wikilink-slug'] as string;
+                const resolved = pages.includes(linkSlug);
                 node.properties['data-wikilink-resolved'] = String(resolved);
                 node.properties.class = `wikilink ${resolved ? 'wikilink-resolved' : 'wikilink-broken'}`;
                 node.properties.href = '#';
@@ -124,7 +159,10 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
                 if (href && (href.startsWith('assets/') || href.startsWith('./assets/'))) {
                   const cleanPath = href.startsWith('./') ? href.slice(2) : href;
                   const encodedFilename = cleanPath.replace('assets/', '');
-                  const filename = decodeURIComponent(encodedFilename);
+                  let filename = encodedFilename;
+                  try {
+                    filename = decodeURIComponent(encodedFilename);
+                  } catch (_) {}
                   
                   node.properties['data-asset'] = 'true';
                   node.properties['data-asset-filename'] = filename;
@@ -135,23 +173,18 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
               // Images
               if (node.tagName === 'img') {
                 const src = node.properties?.src as string;
-                console.log('Rehype found img tag:', { src, allProps: node.properties });
                 if (src && (src.startsWith('assets/') || src.startsWith('./assets/'))) {
-                  const cleanPath = src.startsWith('./') ? src.slice(2) : src;
-                  const encodedFilename = cleanPath.replace('assets/', '');
-                  const filename = decodeURIComponent(encodedFilename);
-                  
-                  const vaultPath = options.getVaultPath();
-                  const slug = options.getSlug();
-
-                  if (vaultPath && slug) {
+                  if (vaultPath && currentSlug) {
+                    const cleanPath = src.startsWith('./') ? src.slice(2) : src;
+                    const encodedFilename = cleanPath.replace('assets/', '');
+                    let filename = encodedFilename;
+                    try {
+                      filename = decodeURIComponent(encodedFilename);
+                    } catch (_) {}
+                    
                     const base = vaultPath.endsWith('/') ? vaultPath.slice(0, -1) : vaultPath;
-                    const fullPath = `${base}/${slug}/assets/${filename}`;
-                    const assetUrl = convertFileSrc(fullPath);
-                    console.log('Rehype: Transforming image src:', { fullPath, assetUrl });
-                    node.properties.src = assetUrl;
-                  } else {
-                    console.warn('Rehype: Missing context for image transformation:', { vaultPath, slug });
+                    const fullPath = `${base}/${currentSlug}/assets/${filename}`;
+                    node.properties.src = convertFileSrc(fullPath);
                   }
                 }
               }

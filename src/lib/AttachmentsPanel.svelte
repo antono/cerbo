@@ -42,11 +42,11 @@
   }
 
   function insertLink(filename: string) {
-    // This would ideally interact with the editor to insert markdown
-    // For now, we just copy it to clipboard or alert
-    const md = `[${filename}](assets/${filename})`;
+    const isImage = /\.(png|jpe?g|gif|svg|webp)$/i.test(filename);
+    const encoded = encodeURIComponent(filename).replace(/%20/g, '%20');
+    // Using <...> wrapper is also an option for spaces, but %20 is more compatible
+    const md = `${isImage ? '!' : ''}[${filename}](assets/${encoded})`;
     navigator.clipboard.writeText(md);
-    // TODO: Event to insert into editor
   }
 
   $effect(() => {

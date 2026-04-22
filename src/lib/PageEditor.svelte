@@ -89,7 +89,8 @@
               });
               
               await loadAttachments(slug);
-              return `assets/${filename}`;
+              const encoded = encodeURIComponent(filename).replace(/%20/g, '%20');
+              return `assets/${encoded}`;
             } catch (e) {
               console.error('Upload failed:', e);
               return null;
