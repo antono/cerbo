@@ -151,6 +151,7 @@
     z-index: 100;
     max-height: 60vh;
     overflow-y: auto;
+    overflow-x: hidden;
   }
 
   .page-list-wrap {

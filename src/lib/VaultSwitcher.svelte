@@ -120,15 +120,15 @@
   .vault-switcher {
     display: flex;
     flex-direction: column;
-    min-width: 240px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 0.5rem;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    width: 100%;
+    background: transparent;
     overflow: hidden;
   }
   .vault-list {
     padding: 0.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
   }
   .vault-item {
     display: flex;
@@ -143,10 +143,18 @@
     font-size: 0.875rem;
     text-align: left;
     color: inherit;
+    min-width: 0; /* Allow flex children to shrink */
   }
   .vault-item:hover { background: var(--accent-hover); }
   .vault-item.active { background: var(--accent); font-weight: 600; }
-  .vault-check { margin-left: auto; color: var(--primary); }
+  .vault-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .vault-check { margin-left: auto; flex-shrink: 0; color: var(--primary); }
   .vault-footer {
     border-top: 1px solid var(--border);
     padding: 0.5rem;
@@ -173,7 +181,8 @@
     border-radius: 0.375rem;
     background: var(--bg);
     color: inherit;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     box-sizing: border-box;
   }
   .btn-primary {
