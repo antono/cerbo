@@ -6,11 +6,7 @@
 
   let { onClose }: { onClose: () => void } = $props();
 
-  let showAddForm = $state(false);
-  let newName = $state('');
-  let newPath = $state('');
   let adding = $state(false);
-  let addError = $state('');
 
   async function handleSelect(id: string) {
     if (id === app.activeVaultId) { onClose(); return; }
@@ -18,24 +14,7 @@
     onClose();
   }
 
-  async function handleAdd() {
-    if (!newName.trim() || !newPath.trim()) return;
-    adding = true;
-    addError = '';
-    try {
-      await addVault(newName.trim(), newPath.trim());
-      newName = '';
-      newPath = '';
-      showAddForm = false;
-      onClose();
-    } catch (e) {
-      addError = String(e);
-    } finally {
-      adding = false;
-    }
-  }
-
-  async function selectFolder() {
+  async function quickAddVault() {
     try {
       const selected = await open({
         directory: true,
@@ -43,16 +22,18 @@
         defaultPath: await homeDir(),
       });
       if (selected && typeof selected === 'string') {
-        newPath = selected;
-        // If name is empty, try to use the folder name
-        if (!newName.trim()) {
-          const parts = selected.split(/[\\/]/);
-          const last = parts.pop() || parts.pop(); // handle trailing slash
-          if (last) newName = last;
-        }
+        adding = true;
+        const parts = selected.split(/[\\/]/);
+        const last = parts.pop() || parts.pop(); // handle trailing slash
+        const name = last || 'New Vault';
+        
+        await addVault(name, selected);
+        onClose();
       }
     } catch (e) {
-      console.error('Failed to open dialog', e);
+      console.error('Failed to add vault', e);
+    } finally {
+      adding = false;
     }
   }
 </script>
@@ -78,43 +59,10 @@
   </div>
 
   <div class="vault-footer">
-    {#if showAddForm}
-      <div class="add-form">
-        <input
-          class="input"
-          placeholder="Vault name"
-          bind:value={newName}
-          onkeydown={(e) => e.key === 'Enter' && handleAdd()}
-        />
-        <div class="path-input-row">
-          <input
-            class="input"
-            placeholder="/path/to/folder"
-            bind:value={newPath}
-            onkeydown={(e) => e.key === 'Enter' && handleAdd()}
-          />
-          <button class="btn-browse" onclick={selectFolder} title="Browse">
-            <FolderOpen size={16} />
-          </button>
-        </div>
-        {#if addError}
-          <p class="error">{addError}</p>
-        {/if}
-        <div class="add-form-actions">
-          <button class="btn-primary" onclick={handleAdd} disabled={adding}>
-            {adding ? 'Adding…' : 'Add'}
-          </button>
-          <button class="btn-ghost" onclick={() => { showAddForm = false; addError = ''; }}>
-            Cancel
-          </button>
-        </div>
-      </div>
-    {:else}
-      <button class="add-vault-bump" onclick={() => { showAddForm = true; }}>
-        <Plus size={16} /> 
-        <span>Add vault</span>
-      </button>
-    {/if}
+    <button class="add-vault-bump" onclick={quickAddVault} disabled={adding}>
+      <Plus size={16} /> 
+      <span>{adding ? 'Adding…' : 'Add vault'}</span>
+    </button>
   </div>
 </div>
 

@@ -55,7 +55,21 @@ export const app = $state({
   showSearch: false,
   showExitPrompt: false,
   showNewPageForm: false,
+  showVaultSwitcher: false,
+  renameSlug: null as string | null,
 });
+
+/**
+ * Closes all transient UI elements (modals, forms, switchers).
+ * Use this before opening a new one to prevent interference.
+ */
+export function closeAllDialogs() {
+  app.showSearch = false;
+  app.showExitPrompt = false;
+  app.showNewPageForm = false;
+  app.showVaultSwitcher = false;
+  app.renameSlug = null;
+}
 
 // ── Computed helpers ──────────────────────────────────────────────────────────
 

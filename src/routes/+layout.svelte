@@ -3,7 +3,7 @@
   import { ModeWatcher, mode } from 'mode-watcher';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { Library } from 'lucide-svelte';
-  import { app, loadVaults, openVault, quitApp } from '$lib/stores.svelte';
+  import { app, loadVaults, openVault, quitApp, closeAllDialogs } from '$lib/stores.svelte';
   import VaultSwitcher from '$lib/VaultSwitcher.svelte';
   import PageList from '$lib/PageList.svelte';
   import ThemeToggle from '$lib/ThemeToggle.svelte';
@@ -13,7 +13,6 @@
   import '../app.css';
 
   let { children } = $props();
-  let showVaultSwitcher = $state(false);
 
   // Focusable panel refs
   let sidebarEl = $state<HTMLElement | null>(null);
@@ -29,27 +28,40 @@
   // Global keydown listener
   $effect(() => {
     function handleKeydown(e: KeyboardEvent) {
-      // Ignore if modal is open
-      if (app.showSearch || app.showExitPrompt) return;
-
-      // 1. Global Search (Ctrl+P)
-      if (isModKey(e, 'p')) {
-        e.preventDefault();
-        app.showSearch = !app.showSearch;
-        return;
+      // 1. Escape: Close active dialogs/forms
+      if (e.key === 'Escape') {
+        if (app.showSearch || app.showNewPageForm || app.showVaultSwitcher || app.renameSlug) {
+          closeAllDialogs();
+          return;
+        }
       }
 
-      // 2. Quit App (Ctrl+Q)
-      if (isModKey(e, 'q')) {
-        e.preventDefault();
-        app.showExitPrompt = true;
-        return;
-      }
-
-      // 3. New Page (Ctrl+N)
+      // 2. New Page (Ctrl+N) - Handle first so it can toggle itself
       if (isModKey(e, 'n')) {
         e.preventDefault();
-        app.showNewPageForm = !app.showNewPageForm;
+        const nextState = !app.showNewPageForm;
+        closeAllDialogs();
+        app.showNewPageForm = nextState;
+        return;
+      }
+
+      // Ignore other global shortcuts if any modal is open
+      if (app.showSearch || app.showExitPrompt || app.showNewPageForm) return;
+
+      // 3. Global Search (Ctrl+P)
+      if (isModKey(e, 'p')) {
+        e.preventDefault();
+        const nextState = !app.showSearch;
+        closeAllDialogs();
+        app.showSearch = nextState;
+        return;
+      }
+
+      // 4. Quit App (Ctrl+Q)
+      if (isModKey(e, 'q')) {
+        e.preventDefault();
+        closeAllDialogs();
+        app.showExitPrompt = true;
         return;
       }
     }
@@ -91,6 +103,12 @@
     window.removeEventListener('mousemove', handleSidebarResize);
     window.removeEventListener('mouseup', stopResizing);
   }
+
+  function toggleVaultSwitcher() {
+    const nextState = !app.showVaultSwitcher;
+    closeAllDialogs();
+    app.showVaultSwitcher = nextState;
+  }
 </script>
 
 <ModeWatcher />
@@ -107,17 +125,18 @@
     <div class="vault-header">
       <button
         class="vault-name-btn"
-        onclick={() => (showVaultSwitcher = !showVaultSwitcher)}
+        onclick={toggleVaultSwitcher}
         title="Switch vault"
+        disabled={app.showNewPageForm}
       >
         <Library size={18} class="vault-icon" />
         <span class="vault-label">{vault?.name ?? 'No vault'}</span>
-        <span class="vault-chevron">{showVaultSwitcher ? '▲' : '▼'}</span>
+        <span class="vault-chevron">{app.showVaultSwitcher ? '▲' : '▼'}</span>
       </button>
 
-      {#if showVaultSwitcher}
+      {#if app.showVaultSwitcher}
         <div class="vault-switcher-popup">
-          <VaultSwitcher onClose={() => (showVaultSwitcher = false)} />
+          <VaultSwitcher onClose={closeAllDialogs} />
         </div>
       {/if}
     </div>

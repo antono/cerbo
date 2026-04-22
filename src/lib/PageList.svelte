@@ -1,7 +1,7 @@
 <script lang="ts">
   import { FileText, Plus, Pencil, Trash2, X } from 'lucide-svelte';
   import { tick } from 'svelte';
-  import { app, openPage, createPage, deletePage, renamePage, previewSlug } from './stores.svelte';
+  import { app, openPage, createPage, deletePage, renamePage, previewSlug, closeAllDialogs } from './stores.svelte';
 
   // ── State for dialogs ─────────────────────────────────────────────────────────
 
@@ -14,7 +14,6 @@
   let confirmDeleteSlug = $state<string | null>(null);
   let deleting = $state(false);
 
-  let renameSlug = $state<string | null>(null);
   let renameTitle = $state('');
   let renameSlugPreview = $state('');
   let renaming = $state(false);
@@ -51,7 +50,9 @@
   // ── Create ────────────────────────────────────────────────────────────────────
 
   async function toggleNewForm() {
-    app.showNewPageForm = !app.showNewPageForm;
+    const nextState = !app.showNewPageForm;
+    closeAllDialogs();
+    app.showNewPageForm = nextState;
     createError = '';
   }
 
@@ -89,19 +90,20 @@
   // ── Rename ────────────────────────────────────────────────────────────────────
 
   function startRename(slug: string, currentTitle: string) {
-    renameSlug = slug;
+    closeAllDialogs();
+    app.renameSlug = slug;
     renameTitle = currentTitle;
     renameSlugPreview = slug;
     renameError = '';
   }
 
   async function handleRename() {
-    if (!renameSlug || !renameTitle.trim()) return;
+    if (!app.renameSlug || !renameTitle.trim()) return;
     renaming = true;
     renameError = '';
     try {
-      await renamePage(renameSlug, renameTitle.trim());
-      renameSlug = null;
+      await renamePage(app.renameSlug, renameTitle.trim());
+      app.renameSlug = null;
       renameTitle = '';
     } catch (e) {
       renameError = String(e);
@@ -119,6 +121,7 @@
       class="icon-btn"
       title="New page (Ctrl+N)"
       onclick={toggleNewForm}
+      disabled={app.showSearch || app.showExitPrompt}
     >
       <Plus size={16} />
     </button>
@@ -133,7 +136,7 @@
         placeholder="Page title"
         bind:value={newTitle}
         oninput={onNewTitleInput}
-        onkeydown={(e) => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') { app.showNewPageForm = false; } }}
+        onkeydown={(e) => { if (e.key === 'Enter') handleCreate(); }}
       />
       {#if newSlugPreview}
         <span class="slug-hint">/{newSlugPreview}</span>
@@ -156,7 +159,7 @@
   <ul class="items">
     {#each app.pages as page}
       <li class="item" class:active={page.slug === app.currentSlug}>
-        {#if renameSlug === page.slug}
+        {#if app.renameSlug === page.slug}
           <!-- Inline rename form -->
           <div class="rename-form">
             <input
@@ -165,7 +168,6 @@
               oninput={onRenameTitleInput}
               onkeydown={(e) => {
                 if (e.key === 'Enter') handleRename();
-                if (e.key === 'Escape') { renameSlug = null; }
               }}
               autofocus
             />
@@ -179,7 +181,7 @@
               <button class="btn-primary" onclick={handleRename} disabled={renaming}>
                 {renaming ? '…' : 'Rename'}
               </button>
-              <button class="btn-ghost" onclick={() => { renameSlug = null; }}>
+              <button class="btn-ghost" onclick={() => { app.renameSlug = null; }}>
                 <X size={14} />
               </button>
             </div>
