@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ModeWatcher } from 'mode-watcher';
+  import { ModeWatcher, mode } from 'mode-watcher';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { app, loadVaults, openVault } from '$lib/stores.svelte';
   import VaultSwitcher from '$lib/VaultSwitcher.svelte';
   import PageList from '$lib/PageList.svelte';
@@ -14,6 +15,16 @@
     await loadVaults();
     if (app.activeVaultId) {
       await openVault(app.activeVaultId);
+    }
+  });
+
+  $effect(() => {
+    // Synchronize Tauri window theme with app theme
+    if (mode.current) {
+      const win = getCurrentWindow();
+      win.setTheme(mode.current === 'dark' ? 'dark' : 'light').catch(() => {
+        // Ignore errors if not running in Tauri or permission denied
+      });
     }
   });
 
