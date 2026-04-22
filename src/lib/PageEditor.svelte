@@ -78,7 +78,7 @@
               
               // We need to implement attachment_upload in Tauri to handle bytes
               const filename = await invoke<string>('attachment_upload', {
-                vaultId: app.activeVaultId,
+                vault_id: app.activeVaultId,
                 slug: slug,
                 filename: file.name,
                 data: Array.from(bytes)

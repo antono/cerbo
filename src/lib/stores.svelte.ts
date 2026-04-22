@@ -80,14 +80,14 @@ export async function loadVaults(): Promise<void> {
   }
 }
 
-export async function openVault(vaultId: string): Promise<void> {
+export async function openVault(vault_id: string): Promise<void> {
   app.loading = true;
   app.loadingMessage = 'Opening vault…';
   app.error = null;
   try {
-    await invoke('vault_open', { vaultId });
-    app.activeVaultId = vaultId;
-    await invoke('vault_set_active', { id: vaultId });
+    await invoke('vault_open', { vault_id: vault_id });
+    app.activeVaultId = vault_id;
+    await invoke('vault_set_active', { id: vault_id });
     await loadPages();
 
     const vault = activeVault();
@@ -134,7 +134,7 @@ export async function addVault(name: string, path: string): Promise<void> {
 export async function loadPages(): Promise<void> {
   if (!app.activeVaultId) return;
   try {
-    const pages = await invoke<PageMeta[]>('page_list', { vaultId: app.activeVaultId });
+    const pages = await invoke<PageMeta[]>('page_list', { vault_id: app.activeVaultId });
     app.pages = pages;
   } catch (e) {
     setError(String(e));
@@ -144,10 +144,10 @@ export async function loadPages(): Promise<void> {
 export async function openPage(slug: string): Promise<void> {
   if (!app.activeVaultId) return;
   try {
-    const content = await invoke<string>('page_read', { vaultId: app.activeVaultId, slug });
+    const content = await invoke<string>('page_read', { vault_id: app.activeVaultId, slug });
     app.currentSlug = slug;
     app.currentContent = content;
-    await invoke('vault_update_last_page', { vaultId: app.activeVaultId, slug });
+    await invoke('vault_update_last_page', { vault_id: app.activeVaultId, slug });
     // Update local state too so we don't have to reload all vaults
     const v = activeVault();
     if (v) v.lastOpenPage = slug;
@@ -161,7 +161,7 @@ export async function openPage(slug: string): Promise<void> {
 export async function savePage(slug: string, content: string): Promise<void> {
   if (!app.activeVaultId) return;
   try {
-    await invoke('page_write', { vaultId: app.activeVaultId, slug, content });
+    await invoke('page_write', { vault_id: app.activeVaultId, slug, content });
   } catch (e) {
     setError(String(e));
   }
@@ -169,7 +169,7 @@ export async function savePage(slug: string, content: string): Promise<void> {
 
 export async function createPage(title: string): Promise<string> {
   if (!app.activeVaultId) throw new Error('No active vault');
-  const slug = await invoke<string>('page_create', { vaultId: app.activeVaultId, title });
+  const slug = await invoke<string>('page_create', { vault_id: app.activeVaultId, title });
   await loadPages();
   await openPage(slug);
   return slug;
@@ -178,7 +178,7 @@ export async function createPage(title: string): Promise<string> {
 export async function deletePage(slug: string): Promise<void> {
   if (!app.activeVaultId) return;
   try {
-    await invoke('page_delete', { vaultId: app.activeVaultId, slug });
+    await invoke('page_delete', { vault_id: app.activeVaultId, slug });
     await loadPages();
     if (app.currentSlug === slug) {
       if (app.pages.length > 0) {
@@ -198,9 +198,9 @@ export async function deletePage(slug: string): Promise<void> {
 export async function renamePage(oldSlug: string, newTitle: string): Promise<string> {
   if (!app.activeVaultId) throw new Error('No active vault');
   const newSlug = await invoke<string>('page_rename', {
-    vaultId: app.activeVaultId,
-    oldSlug,
-    newTitle,
+    vault_id: app.activeVaultId,
+    old_slug: oldSlug,
+    new_title: newTitle,
   });
   await loadPages();
   if (app.currentSlug === oldSlug) {
@@ -217,7 +217,7 @@ export async function loadBacklinks(slug: string): Promise<void> {
   if (!app.activeVaultId) return;
   try {
     const entries = await invoke<BacklinkEntry[]>('backlinks_get', {
-      vaultId: app.activeVaultId,
+      vault_id: app.activeVaultId,
       slug,
     });
     app.backlinks = entries;
