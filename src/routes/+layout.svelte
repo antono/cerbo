@@ -45,6 +45,13 @@
         app.showExitPrompt = true;
         return;
       }
+
+      // 3. New Page (Ctrl+A)
+      if (isModKey(e, 'a')) {
+        e.preventDefault();
+        app.showNewPageForm = !app.showNewPageForm;
+        return;
+      }
     }
 
     window.addEventListener('keydown', handleKeydown);

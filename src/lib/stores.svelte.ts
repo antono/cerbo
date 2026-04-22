@@ -54,6 +54,7 @@ export const app = $state({
   editorTab: 'preview' as 'write' | 'preview',
   showSearch: false,
   showExitPrompt: false,
+  showNewPageForm: false,
 });
 
 // ── Computed helpers ──────────────────────────────────────────────────────────

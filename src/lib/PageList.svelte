@@ -5,7 +5,6 @@
 
   // ── State for dialogs ─────────────────────────────────────────────────────────
 
-  let showNewForm = $state(false);
   let newTitle = $state('');
   let newSlugPreview = $state('');
   let creating = $state(false);
@@ -20,6 +19,16 @@
   let renameSlugPreview = $state('');
   let renaming = $state(false);
   let renameError = $state('');
+
+  // ── Focus handling ────────────────────────────────────────────────────────────
+
+  $effect(() => {
+    if (app.showNewPageForm) {
+      tick().then(() => {
+        newTitleInput?.focus();
+      });
+    }
+  });
 
   // ── Slug preview as user types ────────────────────────────────────────────────
 
@@ -42,12 +51,8 @@
   // ── Create ────────────────────────────────────────────────────────────────────
 
   async function toggleNewForm() {
-    showNewForm = !showNewForm;
+    app.showNewPageForm = !app.showNewPageForm;
     createError = '';
-    if (showNewForm) {
-      await tick();
-      newTitleInput?.focus();
-    }
   }
 
   async function handleCreate() {
@@ -58,7 +63,7 @@
       await createPage(newTitle.trim());
       newTitle = '';
       newSlugPreview = '';
-      showNewForm = false;
+      app.showNewPageForm = false;
     } catch (e) {
       createError = String(e);
     } finally {
@@ -120,7 +125,7 @@
   </div>
 
   <!-- New page form -->
-  {#if showNewForm}
+  {#if app.showNewPageForm}
     <div class="form-inset">
       <input
         bind:this={newTitleInput}
@@ -128,7 +133,7 @@
         placeholder="Page title"
         bind:value={newTitle}
         oninput={onNewTitleInput}
-        onkeydown={(e) => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') { showNewForm = false; } }}
+        onkeydown={(e) => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') { app.showNewPageForm = false; } }}
       />
       {#if newSlugPreview}
         <span class="slug-hint">/{newSlugPreview}</span>
@@ -140,7 +145,7 @@
         <button class="btn-primary" onclick={handleCreate} disabled={creating || !newTitle.trim()}>
           {creating ? '…' : 'Create'}
         </button>
-        <button class="btn-ghost" onclick={() => { showNewForm = false; newTitle = ''; }}>
+        <button class="btn-ghost" onclick={() => { app.showNewPageForm = false; newTitle = ''; }}>
           Cancel
         </button>
       </div>
