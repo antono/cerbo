@@ -46,8 +46,8 @@
         return;
       }
 
-      // 3. New Page (Ctrl+A)
-      if (isModKey(e, 'a')) {
+      // 3. New Page (Ctrl+N)
+      if (isModKey(e, 'n')) {
         e.preventDefault();
         app.showNewPageForm = !app.showNewPageForm;
         return;

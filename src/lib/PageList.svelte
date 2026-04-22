@@ -117,7 +117,7 @@
     <span class="list-title">Pages</span>
     <button
       class="icon-btn"
-      title="New page"
+      title="New page (Ctrl+N)"
       onclick={toggleNewForm}
     >
       <Plus size={16} />

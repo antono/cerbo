@@ -51,6 +51,13 @@
   // The plugins use getters so they stay up to date with the latest props.
   const carta = new Carta({
     sanitizer: false,
+    theme: {
+      light: 'vitesse-light',
+      dark: 'material-theme-high-contrast',
+    },
+    shikiOptions: {
+      themes: ['vitesse-light', 'material-theme-high-contrast'],
+    },
     extensions: [
       wikilinkPlugin({
         getPages: () => pageSlugs(),
@@ -72,7 +79,12 @@
           });
         }
       }),
-      code(),
+      code({
+        theme: {
+          light: 'vitesse-light',
+          dark: 'material-theme-high-contrast'
+        }
+      }),
       emoji(),
       anchor(),
       attachment({
@@ -98,13 +110,6 @@
         }
       })
     ],
-  });
-
-  // Keep theme in sync with mode-watcher
-  $effect(() => {
-    const theme = mode.current === 'dark' ? 'github-dark' : 'github-light';
-    // @ts-ignore - Update internal theme if possible
-    if (carta.options) carta.options.theme = theme;
   });
 
   // ── Effects ──────────────────────────────────────────────────────────────────
@@ -224,7 +229,7 @@
   <button 
     class="mode-toggle-btn" 
     onclick={toggleMode}
-    title={app.editorTab === 'write' ? 'Switch to Preview' : 'Switch to Edit'}
+    title={app.editorTab === 'write' ? 'Switch to Preview (Esc)' : 'Switch to Edit (i)'}
     aria-label="Toggle mode"
   >
     {#if app.editorTab === 'write'}
@@ -239,6 +244,7 @@
     bind:value={content}
     selectedTab={app.editorTab}
     mode="tabs"
+    theme={mode.current === 'dark' ? 'dark' : 'light'}
   />
 </div>
 

@@ -7,6 +7,7 @@
 :root {
   --bg: #ffffff;
   --fg: #1a1a1a;
+  --editor-bg: #ffffff;
   --border: #e2e8f0;
   --sidebar-bg: #f8fafc;
   --accent: #f1f5f9;
@@ -46,6 +47,7 @@ html, body {
 :root.dark {
   --bg: #0f1117;
   --fg: #e8eaed;
+  --editor-bg: #000000; /* Pitch black for maximum contrast */
   --border: #2d3748;
   --sidebar-bg: #161b22;
   --accent: #1e2535;
@@ -60,6 +62,7 @@ html, body {
   :root:not(.light) {
     --bg: #0f1117;
     --fg: #e8eaed;
+    --editor-bg: #000000;
     --border: #2d3748;
     --sidebar-bg: #161b22;
     --accent: #1e2535;
@@ -73,7 +76,7 @@ html, body {
 /* ── Carta editor styling ─────────────────────────────────────────────────── */
 
 .carta-editor {
-  background-color: var(--bg);
+  background-color: var(--editor-bg);
   color: var(--fg);
   border: none !important;
   border-radius: 0 !important;
@@ -122,7 +125,7 @@ html, body {
 }
 
 .carta-input, .carta-renderer {
-  background-color: var(--bg);
+  background-color: var(--editor-bg);
   color: var(--fg);
   padding: 2.5rem 3rem;
   min-height: 100%;
@@ -130,8 +133,8 @@ html, body {
 
 .carta-input textarea {
   color: var(--fg) !important;
-  -webkit-text-fill-color: var(--fg) !important;
   caret-color: var(--primary) !important;
+  -webkit-text-fill-color: transparent !important; /* Hide textarea text to show highlighting */
   overflow-y: hidden !important;
   resize: none !important;
 }
@@ -142,7 +145,7 @@ html, body {
 }
 
 /* Fix for Carta's default theme classes in Dark Mode */
-.carta-theme__default {
+.carta-theme__default, .carta-theme__light {
   --border-color: var(--border) !important;
   --selection-color: rgba(59, 130, 246, 0.2) !important;
   --focus-outline: var(--primary) !important;
@@ -152,13 +155,24 @@ html, body {
 }
 
 :global(.dark) .carta-theme__default,
-.dark .carta-theme__default {
+.dark .carta-theme__default,
+.carta-theme__dark {
   --border-color: var(--border) !important;
   --selection-color: rgba(59, 130, 246, 0.3) !important;
   --focus-outline: var(--primary) !important;
   --hover-color: var(--accent-hover) !important;
   --caret-color: var(--fg) !important;
   --text-color: var(--fg) !important;
+}
+
+/* Force Shiki dual-theme tokens to switch based on app dark mode class */
+:global(.dark) .shiki span,
+.dark .shiki span {
+  color: var(--shiki-dark, inherit) !important;
+}
+
+.shiki {
+  background-color: transparent !important;
 }
 
 /* Markdown Preview Styling */
