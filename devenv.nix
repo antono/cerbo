@@ -47,6 +47,8 @@
     cargo tauri --version 2>/dev/null || echo "  cargo-tauri: available"
   '';
 
+  scripts.generate-icons.exec = "cargo tauri icon src-tauri/icons/logo.svg";
+
   tasks = {
     "app:dev" = {
       exec = "cargo tauri dev";
