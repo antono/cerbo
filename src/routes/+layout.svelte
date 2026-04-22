@@ -1,15 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { ModeWatcher, mode } from 'mode-watcher';
+  import { ModeWatcher, mode, setMode } from 'mode-watcher';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { Vault } from 'lucide-svelte';
-  import { app, loadVaults, openVault, quitApp, closeAllDialogs } from '$lib/stores.svelte';
+  import { app, loadVaults, openVault, quickAddVault, quitApp, closeAllDialogs } from '$lib/stores.svelte';
   import VaultSwitcher from '$lib/VaultSwitcher.svelte';
   import PageList from '$lib/PageList.svelte';
   import ThemeToggle from '$lib/ThemeToggle.svelte';
   import GlobalSearch from '$lib/GlobalSearch.svelte';
+  import KeyboardHelp from '$lib/KeyboardHelp.svelte';
   import ExitConfirmation from '$lib/ExitConfirmation.svelte';
-  import { isModKey, isModArrow, isInputFocused } from '$lib/hotkeys';
+  import { isModKey, isInputFocused } from '$lib/hotkeys';
   import '../app.css';
 
   let { children } = $props();
@@ -30,7 +31,7 @@
     function handleKeydown(e: KeyboardEvent) {
       // 1. Escape: Close active dialogs/forms
       if (e.key === 'Escape') {
-        if (app.showSearch || app.showNewPageForm || app.showVaultSwitcher || app.renameSlug) {
+        if (app.showSearch || app.showNewPageForm || app.showVaultSwitcher || app.showHelp || app.renameSlug) {
           closeAllDialogs();
           return;
         }
@@ -45,10 +46,26 @@
         return;
       }
 
-      // Ignore other global shortcuts if any modal is open
-      if (app.showSearch || app.showExitPrompt || app.showNewPageForm) return;
+      // 3. Theme Toggle (Ctrl+T)
+      if (isModKey(e, 't')) {
+        e.preventDefault();
+        setMode(mode.current === 'light' ? 'dark' : 'light');
+        return;
+      }
 
-      // 3. Global Search (Ctrl+P)
+      // 4. Help (F1)
+      if (e.key === 'F1') {
+        e.preventDefault();
+        const nextState = !app.showHelp;
+        closeAllDialogs();
+        app.showHelp = nextState;
+        return;
+      }
+
+      // Ignore other global shortcuts if any modal is open
+      if (app.showSearch || app.showExitPrompt || app.showNewPageForm || app.showHelp) return;
+
+      // 5. Global Search (Ctrl+P)
       if (isModKey(e, 'p')) {
         e.preventDefault();
         const nextState = !app.showSearch;
@@ -57,7 +74,14 @@
         return;
       }
 
-      // 4. Quit App (Ctrl+Q)
+      // 6. Add Vault (Ctrl+O)
+      if (isModKey(e, 'o')) {
+        e.preventDefault();
+        quickAddVault();
+        return;
+      }
+
+      // 7. Quit App (Ctrl+Q)
       if (isModKey(e, 'q')) {
         e.preventDefault();
         closeAllDialogs();
@@ -188,6 +212,10 @@
 
 {#if app.showSearch}
   <GlobalSearch onClose={() => app.showSearch = false} />
+{/if}
+
+{#if app.showHelp}
+  <KeyboardHelp onClose={() => app.showHelp = false} />
 {/if}
 
 {#if app.showExitPrompt}

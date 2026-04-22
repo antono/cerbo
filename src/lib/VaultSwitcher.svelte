@@ -1,40 +1,13 @@
 <script lang="ts">
-  import { open } from '@tauri-apps/plugin-dialog';
-  import { homeDir } from '@tauri-apps/api/path';
-  import { Vault, Plus, FolderOpen } from 'lucide-svelte';
-  import { app, addVault, openVault, loadVaults } from './stores.svelte';
+  import { Vault, Plus } from 'lucide-svelte';
+  import { app, openVault, quickAddVault } from './stores.svelte';
 
   let { onClose }: { onClose: () => void } = $props();
-
-  let adding = $state(false);
 
   async function handleSelect(id: string) {
     if (id === app.activeVaultId) { onClose(); return; }
     await openVault(id);
     onClose();
-  }
-
-  async function quickAddVault() {
-    try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        defaultPath: await homeDir(),
-      });
-      if (selected && typeof selected === 'string') {
-        adding = true;
-        const parts = selected.split(/[\\/]/);
-        const last = parts.pop() || parts.pop(); // handle trailing slash
-        const name = last || 'New Vault';
-        
-        await addVault(name, selected);
-        onClose();
-      }
-    } catch (e) {
-      console.error('Failed to add vault', e);
-    } finally {
-      adding = false;
-    }
   }
 </script>
 
@@ -59,9 +32,9 @@
   </div>
 
   <div class="vault-footer">
-    <button class="add-vault-bump" onclick={quickAddVault} disabled={adding}>
+    <button class="add-vault-bump" onclick={quickAddVault} disabled={app.loading}>
       <Plus size={16} /> 
-      <span>{adding ? 'Adding…' : 'Add vault'}</span>
+      <span>{app.loading ? 'Adding…' : 'Add vault'}</span>
     </button>
   </div>
 </div>

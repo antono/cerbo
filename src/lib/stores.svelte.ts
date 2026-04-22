@@ -6,6 +6,8 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
+import { homeDir } from '@tauri-apps/api/path';
 
 // ── Types (mirror Rust structs) ───────────────────────────────────────────────
 
@@ -56,6 +58,7 @@ export const app = $state({
   showExitPrompt: false,
   showNewPageForm: false,
   showVaultSwitcher: false,
+  showHelp: false,
   renameSlug: null as string | null,
 });
 
@@ -68,6 +71,7 @@ export function closeAllDialogs() {
   app.showExitPrompt = false;
   app.showNewPageForm = false;
   app.showVaultSwitcher = false;
+  app.showHelp = false;
   app.renameSlug = null;
 }
 
@@ -160,6 +164,31 @@ export async function addVault(name: string, path: string): Promise<void> {
   } catch (e) {
     setError(String(e));
     throw e;
+  }
+}
+
+export async function quickAddVault(): Promise<void> {
+  try {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      defaultPath: await homeDir(),
+    });
+    if (selected && typeof selected === 'string') {
+      app.loading = true;
+      app.loadingMessage = 'Adding vault...';
+      const parts = selected.split(/[\\/]/);
+      const last = parts.pop() || parts.pop(); // handle trailing slash
+      const name = last || 'New Vault';
+      
+      await addVault(name, selected);
+      closeAllDialogs();
+    }
+  } catch (e) {
+    console.error('Failed to add vault', e);
+    setError(String(e));
+  } finally {
+    app.loading = false;
   }
 }
 

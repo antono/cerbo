@@ -28,18 +28,30 @@ The system MUST use the `Esc` key as a universal "close" or "cancel" action for 
 - **AND** the user presses `Esc`
 - **THEN** the active element SHALL be closed and focus returned to the previous context
 
-### Requirement: Panel Focus Navigation
-The system MUST allow users to switch focus between major UI panels using keyboard shortcuts. Major panels include the Page List, the Main Editor, and any active Sidebar panels.
-
-#### Scenario: Switch focus between panels
-- **WHEN** the user presses `Ctrl+RightArrow` (Linux/Windows) or `Cmd+RightArrow` (Mac)
-- **THEN** the focus SHALL move to the next panel to the right
-- **WHEN** the user presses `Ctrl+LeftArrow" (Linux/Windows) or `Cmd+LeftArrow" (Mac)
-- **THEN** the focus SHALL move to the previous panel to the left
-
 ### Requirement: Cross-Platform Key Mapping
 The hotkey system MUST automatically map `Ctrl` (Linux/Windows) to `Cmd` (Mac) for all application-level shortcuts to ensure a native experience on all supported platforms.
 
 #### Scenario: Mapping shortcuts on Mac
 - **WHEN** the application is running on macOS
 - **THEN** all defined `Ctrl` shortcuts MUST be triggered by the `Cmd` key instead
+
+### Requirement: Theme Toggle Shortcut
+The system MUST provide a global keyboard shortcut to toggle between Light and Dark themes.
+
+#### Scenario: Toggle theme via Ctrl+T
+- **WHEN** the user presses `Ctrl+T` (Linux/Windows) or `Cmd+T` (Mac)
+- **THEN** the application theme SHALL toggle (Light to Dark, or Dark to Light)
+
+### Requirement: Shortcuts Help Shortcut
+The system MUST provide a global keyboard shortcut to open the Shortcuts Help modal.
+
+#### Scenario: Open help via F1
+- **WHEN** the user presses `F1`
+- **THEN** the Shortcuts Help modal SHALL be displayed
+
+### Requirement: Add Vault Shortcut
+The system MUST provide a global keyboard shortcut to trigger the "Add Vault" workflow.
+
+#### Scenario: Trigger Add Vault via Ctrl+O
+- **WHEN** the user presses `Ctrl+O` (Linux/Windows) or `Cmd+O` (Mac)
+- **THEN** the native system directory picker SHALL be displayed for vault selection

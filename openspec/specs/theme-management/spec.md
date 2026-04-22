@@ -30,3 +30,14 @@ The markdown editor component SHALL dynamically adapt its styling—including ba
 - **WHEN** the application is in dark mode
 - **THEN** the editor SHALL use a dark background with light, high-contrast text
 - **THEN** all editor icons SHALL remain clearly visible and distinguishable
+
+### Requirement: Theme toggle action
+The system SHALL provide a mechanism to quickly toggle between light and dark themes. This toggle MUST be accessible via both the UI and a global keyboard shortcut.
+
+#### Scenario: Toggle theme state
+- **WHEN** the theme toggle action is triggered
+- **AND** the current theme is 'light'
+- **THEN** the theme SHALL switch to 'dark'
+- **WHEN** the theme toggle action is triggered
+- **AND** the current theme is 'dark'
+- **THEN** the theme SHALL switch to 'light'
