@@ -40,6 +40,7 @@ export const app = $state({
   currentSlug: null as string | null,
   currentContent: '',
   backlinks: [] as BacklinkEntry[],
+  attachments: [] as string[],
   loading: false,
   loadingMessage: '',
   error: null as string | null,
@@ -153,6 +154,7 @@ export async function openPage(slug: string): Promise<void> {
     if (v) v.lastOpenPage = slug;
     
     await loadBacklinks(slug);
+    await loadAttachments(slug);
   } catch (e) {
     setError(String(e));
   }
@@ -223,6 +225,20 @@ export async function loadBacklinks(slug: string): Promise<void> {
     app.backlinks = entries;
   } catch (_) {
     app.backlinks = [];
+  }
+}
+
+export async function loadAttachments(slug: string): Promise<void> {
+  if (!app.activeVaultId || !slug) return;
+  try {
+    const attachments = await invoke<string[]>('attachment_list', {
+      vaultId: app.activeVaultId,
+      slug,
+    });
+    app.attachments = attachments;
+  } catch (e) {
+    console.error('Failed to load attachments:', e);
+    app.attachments = [];
   }
 }
 

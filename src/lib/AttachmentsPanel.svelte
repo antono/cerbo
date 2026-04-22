@@ -1,25 +1,15 @@
 <script lang="ts">
-  import { app } from './stores.svelte';
+  import { app, loadAttachments } from './stores.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { FileText, Trash2, Paperclip } from 'lucide-svelte';
 
   let { slug }: { slug: string } = $props();
-  let attachments = $state<string[]>([]);
   let loading = $state(false);
 
-  async function loadAttachments() {
-    if (!app.activeVaultId || !slug) return;
+  async function refreshAttachments() {
     loading = true;
-    try {
-      attachments = await invoke<string[]>('attachment_list', {
-        vaultId: app.activeVaultId,
-        slug
-      });
-    } catch (e) {
-      console.error('Failed to load attachments:', e);
-    } finally {
-      loading = false;
-    }
+    await loadAttachments(slug);
+    loading = false;
   }
 
   async function deleteAttachment(filename: string) {
@@ -32,7 +22,7 @@
         slug,
         filename
       });
-      await loadAttachments();
+      await refreshAttachments();
     } catch (e) {
       app.error = String(e);
     }
@@ -48,7 +38,7 @@
 
   $effect(() => {
     if (slug) {
-      loadAttachments();
+      refreshAttachments();
     }
   });
 </script>
@@ -61,11 +51,11 @@
   <div class="panel-content">
     {#if loading}
       <p class="status">Loading...</p>
-    {:else if attachments.length === 0}
+    {:else if app.attachments.length === 0}
       <p class="empty">No attachments for this page.</p>
     {:else}
       <ul class="attachment-list">
-        {#each attachments as file}
+        {#each app.attachments as file}
           <li class="attachment-item">
             <button 
               class="file-info" 

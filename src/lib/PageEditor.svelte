@@ -13,6 +13,7 @@
     openPage,
     createPage,
     savePage,
+    loadAttachments,
   } from './stores.svelte';
 
   // ── Props ─────────────────────────────────────────────────────────────────────
@@ -83,6 +84,9 @@
                 filename: file.name,
                 data: Array.from(bytes)
               });
+              
+              // Refresh attachments panel
+              await loadAttachments(slug);
               
               // Return the markdown link
               return `assets/${filename}`;
