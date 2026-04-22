@@ -3,6 +3,16 @@
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full
 workflow context.
 
+## Package Management
+
+**ALWAYS use bun** for all package management tasks (installing, adding, removing dependencies).
+
+```bash
+bun install
+bun add <package>
+bun add -d <package> # for dev dependencies
+```
+
 ## Building the App
 
 **ALWAYS use devenv tasks** for all build commands:

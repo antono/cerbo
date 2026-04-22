@@ -1,6 +1,11 @@
 <script lang="ts">
   import { Carta, MarkdownEditor } from 'carta-md';
   import 'carta-md/default.css';
+  import { code } from '@cartamd/plugin-code';
+  import { emoji } from '@cartamd/plugin-emoji';
+  import { anchor } from '@cartamd/plugin-anchor';
+  import { attachment } from '@cartamd/plugin-attachment';
+  import { invoke } from '@tauri-apps/api/core';
   import { wikilinkPlugin, attachPreviewClickHandler } from './wikilink-plugin';
   import {
     app,
@@ -51,6 +56,42 @@
             });
           },
         }),
+        code(),
+        emoji(),
+        anchor(),
+        attachment({
+          upload: async (file) => {
+            try {
+              // Since we're in a local Tauri environment, "uploading" 
+              // means copying the file to the vault's assets directory.
+              // Note: web 'File' API doesn't give us the full path, 
+              // but Tauri's attachment plugin can handle file drops if configured.
+              // For now, we use the file name and content if possible, 
+              // or handle it via a Tauri command if we have the path.
+              
+              // If we have a real path (e.g. from a drop or picker managed by Tauri),
+              // we call attachment_add. But web 'File' objects are buffers.
+              // We'll use a specialized command that accepts bytes.
+              
+              const buffer = await file.arrayBuffer();
+              const bytes = new Uint8Array(buffer);
+              
+              // We need to implement attachment_upload in Tauri to handle bytes
+              const filename = await invoke<string>('attachment_upload', {
+                vaultId: app.activeVaultId,
+                slug: slug,
+                filename: file.name,
+                data: Array.from(bytes)
+              });
+              
+              // Return the markdown link
+              return `assets/${filename}`;
+            } catch (e) {
+              console.error('Upload failed:', e);
+              return null;
+            }
+          }
+        })
       ],
     }),
   );

@@ -58,6 +58,21 @@ enum PageCommands {
     Delete { vault_id: String, slug: String },
     /// Rename a page (triggers cascade)
     Rename { vault_id: String, slug: String, title: String },
+    /// Attachment management
+    Attachment {
+        #[command(subcommand)]
+        action: AttachmentCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum AttachmentCommands {
+    /// List attachments for a page
+    List { vault_id: String, slug: String },
+    /// Add an attachment to a page
+    Add { vault_id: String, slug: String, path: PathBuf },
+    /// Delete an attachment from a page
+    Delete { vault_id: String, slug: String, filename: String },
 }
 
 #[derive(Subcommand)]
@@ -127,6 +142,20 @@ async fn main() -> Result<(), String> {
                 let new_slug = cerbo_core::rename::page_rename(&ctx, vault_id, slug, title)?;
                 println!("Renamed page to slug: {}", new_slug);
             }
+            PageCommands::Attachment { action } => match action {
+                AttachmentCommands::List { vault_id, slug } => {
+                    let files = cerbo_core::page::attachment_list(&ctx, vault_id, slug)?;
+                    println!("{:#?}", files);
+                }
+                AttachmentCommands::Add { vault_id, slug, path } => {
+                    let filename = cerbo_core::page::attachment_add(&ctx, vault_id, slug, path)?;
+                    println!("Added attachment: {}", filename);
+                }
+                AttachmentCommands::Delete { vault_id, slug, filename } => {
+                    cerbo_core::page::attachment_delete(&ctx, vault_id, slug, filename)?;
+                    println!("Deleted attachment");
+                }
+            },
         },
         Commands::Index { action } => match action {
             IndexCommands::Build { vault_id } => {

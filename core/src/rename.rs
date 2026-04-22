@@ -209,4 +209,37 @@ mod tests {
         assert!(out.starts_with("# New Title"));
         assert!(out.contains("Some text."));
     }
+
+    #[test]
+    fn rename_moves_assets() {
+        use tempfile::TempDir;
+        use std::fs;
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("config");
+        let cache_dir = tmp.path().join("cache");
+        let vault_dir = tmp.path().join("vault");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::create_dir_all(&vault_dir).unwrap();
+
+        let ctx = CerboContext {
+            config_dir,
+            cache_dir,
+        };
+
+        let vault = vault::vault_add(&ctx, "Test".into(), vault_dir.to_str().unwrap().into()).unwrap();
+        let old_slug = crate::page::page_create(&ctx, vault.id.clone(), "Old Title".into()).unwrap();
+        
+        // Add asset
+        let assets_dir = vault_dir.join(&old_slug).join("assets");
+        fs::create_dir_all(&assets_dir).unwrap();
+        fs::write(assets_dir.join("test.txt"), "hello").unwrap();
+
+        // Rename
+        let new_slug = page_rename(&ctx, vault.id.clone(), old_slug, "New Title".into()).unwrap();
+        
+        // Verify asset moved
+        let new_assets_dir = vault_dir.join(&new_slug).join("assets");
+        assert!(new_assets_dir.join("test.txt").exists());
+        assert_eq!(fs::read_to_string(new_assets_dir.join("test.txt")).unwrap(), "hello");
+    }
 }

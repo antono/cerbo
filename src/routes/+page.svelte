@@ -3,6 +3,7 @@
   import { app, activeVault } from '$lib/stores.svelte';
   import PageEditor from '$lib/PageEditor.svelte';
   import BacklinksPanel from '$lib/BacklinksPanel.svelte';
+  import AttachmentsPanel from '$lib/AttachmentsPanel.svelte';
 
   // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -23,7 +24,7 @@
 
   function handleBacklinksResize(e: MouseEvent) {
     if (!isResizingBacklinks) return;
-    app.backlinksWidth = Math.max(200, Math.min(600, window.innerWidth - e.clientX));
+    app.backlinksWidth = Math.max(250, Math.min(600, window.innerWidth - e.clientX));
   }
 
   function stopResizing() {
@@ -51,7 +52,7 @@
         <button 
           class="show-backlinks-btn" 
           onclick={() => app.backlinksVisible = true}
-          title="Show backlinks"
+          title="Show panels"
         >
           <Eye size={16} />
         </button>
@@ -67,10 +68,15 @@
         aria-orientation="vertical"
       ></div>
 
-      <!-- Backlinks -->
-      <div class="backlinks-wrap" style="width: {app.backlinksWidth}px;">
-        <BacklinksPanel slug={app.currentSlug} />
-      </div>
+      <!-- Side Panels -->
+      <aside class="right-panels" style="width: {app.backlinksWidth}px;">
+        <div class="panel-section">
+          <BacklinksPanel slug={app.currentSlug} />
+        </div>
+        <div class="panel-section">
+          <AttachmentsPanel slug={app.currentSlug} />
+        </div>
+      </aside>
     {/if}
   </div>
 {:else if vault}
@@ -164,11 +170,24 @@
     right: -4px;
   }
 
-  .backlinks-wrap {
+  .right-panels {
     height: 100%;
-    background: var(--bg);
+    background: var(--sidebar-bg);
     flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
+    border-left: none;
+  }
+
+  .panel-section {
+    flex: 1;
+    min-height: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .panel-section:last-child {
+    border-bottom: none;
   }
 
   .is-resizing {

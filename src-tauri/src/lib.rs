@@ -45,6 +45,10 @@ pub fn run() {
             page::page_write,
             page::page_delete,
             page::page_list,
+            page::attachment_list,
+            page::attachment_add,
+            page::attachment_upload,
+            page::attachment_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

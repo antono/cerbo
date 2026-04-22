@@ -76,6 +76,85 @@ pub fn page_delete(ctx: &CerboContext, vault_id: String, slug: String) -> Result
     std::fs::remove_dir_all(&dir).map_err(|e| format!("page_delete: {e}"))
 }
 
+// ── Attachments ───────────────────────────────────────────────────────────────
+
+pub fn attachment_list(
+    ctx: &CerboContext,
+    vault_id: String,
+    slug: String,
+) -> Result<Vec<String>, String> {
+    let root = vault_root(ctx, &vault_id)?;
+    let assets_dir = root.join(&slug).join("assets");
+    if !assets_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(assets_dir).map_err(|e| format!("attachment_list: {e}"))? {
+        let entry = entry.map_err(|e| format!("attachment_list entry: {e}"))?;
+        if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            files.push(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+pub fn attachment_add(
+    ctx: &CerboContext,
+    vault_id: String,
+    slug: String,
+    src_path: PathBuf,
+) -> Result<String, String> {
+    let root = vault_root(ctx, &vault_id)?;
+    let assets_dir = root.join(&slug).join("assets");
+    if !assets_dir.exists() {
+        std::fs::create_dir_all(&assets_dir).map_err(|e| format!("attachment_add mkdir: {e}"))?;
+    }
+
+    let filename = src_path
+        .file_name()
+        .ok_or_else(|| "attachment_add: invalid source path".to_string())?;
+    let dest_path = assets_dir.join(filename);
+
+    std::fs::copy(&src_path, &dest_path).map_err(|e| format!("attachment_add copy: {e}"))?;
+
+    Ok(filename.to_string_lossy().to_string())
+}
+
+pub fn attachment_upload(
+    ctx: &CerboContext,
+    vault_id: String,
+    slug: String,
+    filename: String,
+    data: Vec<u8>,
+) -> Result<String, String> {
+    let root = vault_root(ctx, &vault_id)?;
+    let assets_dir = root.join(&slug).join("assets");
+    if !assets_dir.exists() {
+        std::fs::create_dir_all(&assets_dir).map_err(|e| format!("attachment_upload mkdir: {e}"))?;
+    }
+
+    let dest_path = assets_dir.join(&filename);
+    std::fs::write(&dest_path, data).map_err(|e| format!("attachment_upload write: {e}"))?;
+
+    Ok(filename)
+}
+
+pub fn attachment_delete(
+    ctx: &CerboContext,
+    vault_id: String,
+    slug: String,
+    filename: String,
+) -> Result<(), String> {
+    let root = vault_root(ctx, &vault_id)?;
+    let file_path = root.join(&slug).join("assets").join(filename);
+    if !file_path.exists() {
+        return Err("attachment_delete: file not found".into());
+    }
+    std::fs::remove_file(file_path).map_err(|e| format!("attachment_delete: {e}"))
+}
+
 pub fn page_list(ctx: &CerboContext, vault_id: String) -> Result<Vec<PageMeta>, String> {
     let root = vault_root(ctx, &vault_id)?;
     let mut pages = Vec::new();
@@ -171,5 +250,43 @@ mod tests {
         assert_eq!(pages[0].slug, "alpha");
         assert_eq!(pages[1].title, "Beta");
         drop(tmp);
+    }
+
+    #[test]
+    fn attachment_ops() {
+        let tmp_dir = TempDir::new().unwrap();
+        let config_dir = tmp_dir.path().join("config");
+        let cache_dir = tmp_dir.path().join("cache");
+        let vault_dir = tmp_dir.path().join("vault");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::create_dir_all(&vault_dir).unwrap();
+
+        let ctx = CerboContext {
+            config_dir,
+            cache_dir,
+        };
+
+        // Add a vault
+        let vault = crate::vault::vault_add(&ctx, "Test".into(), vault_dir.to_str().unwrap().into()).unwrap();
+        let slug = page_create(&ctx, vault.id.clone(), "Test Page".into()).unwrap();
+
+        // 1. List (should be empty)
+        let list = attachment_list(&ctx, vault.id.clone(), slug.clone()).unwrap();
+        assert!(list.is_empty());
+
+        // 2. Add
+        let src_file = tmp_dir.path().join("test.txt");
+        fs::write(&src_file, "hello").unwrap();
+        let filename = attachment_add(&ctx, vault.id.clone(), slug.clone(), src_file).unwrap();
+        assert_eq!(filename, "test.txt");
+
+        // 3. List (should have 1)
+        let list = attachment_list(&ctx, vault.id.clone(), slug.clone()).unwrap();
+        assert_eq!(list, vec!["test.txt"]);
+
+        // 4. Delete
+        attachment_delete(&ctx, vault.id.clone(), slug.clone(), "test.txt".into()).unwrap();
+        let list = attachment_list(&ctx, vault.id.clone(), slug.clone()).unwrap();
+        assert!(list.is_empty());
     }
 }
