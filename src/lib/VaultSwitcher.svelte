@@ -1,7 +1,7 @@
 <script lang="ts">
   import { open } from '@tauri-apps/plugin-dialog';
   import { homeDir } from '@tauri-apps/api/path';
-  import { Square, Plus, FolderOpen } from 'lucide-svelte';
+  import { Vault, Plus, FolderOpen } from 'lucide-svelte';
   import { app, addVault, openVault, loadVaults } from './stores.svelte';
 
   let { onClose }: { onClose: () => void } = $props();
@@ -46,7 +46,7 @@
         class:active={vault.id === app.activeVaultId}
         onclick={() => handleSelect(vault.id)}
       >
-        <Square size={16} class="vault-icon" />
+        <Vault size={16} class="vault-icon" />
         <span class="vault-name">{vault.name}</span>
         {#if vault.id === app.activeVaultId}
           <span class="vault-check">✓</span>
