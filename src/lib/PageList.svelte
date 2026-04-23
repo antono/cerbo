@@ -8,10 +8,6 @@
 
   let deleting = $state(false);
 
-  let renameSlugPreview = $state('');
-  let renaming = $state(false);
-  let renameError = $state('');
-
   // ── Focus handling ────────────────────────────────────────────────────────────
 
   let itemsList = $state<HTMLUListElement | null>(null);
@@ -57,14 +53,6 @@
     }
   }
 
-  async function onRenameTitleInput() {
-    if (app.renameTitle.trim()) {
-      renameSlugPreview = await previewSlug(app.renameTitle);
-    } else {
-      renameSlugPreview = '';
-    }
-  }
-
   // ── UI Actions ────────────────────────────────────────────────────────────────
 
   function toggleSearch() {
@@ -91,23 +79,6 @@
       // error set in store
     } finally {
       deleting = false;
-    }
-  }
-
-  // ── Rename ────────────────────────────────────────────────────────────────────
-
-  async function handleRename() {
-    if (!app.renameSlug || !app.renameTitle.trim()) return;
-    renaming = true;
-    renameError = '';
-    try {
-      await renamePage(app.renameSlug, app.renameTitle.trim());
-      app.renameSlug = null;
-      app.renameTitle = '';
-    } catch (e) {
-      renameError = String(e);
-    } finally {
-      renaming = false;
     }
   }
 </script>
@@ -140,58 +111,29 @@
   <ul class="items" bind:this={itemsList} onkeydown={handleListKeydown}>
     {#each app.pages as page}
       <li class="item" class:active={page.slug === app.currentSlug}>
-        {#if app.renameSlug === page.slug}
-          <!-- Inline rename form -->
-          <div class="rename-form">
-            <input
-              class="input"
-              bind:value={app.renameTitle}
-              oninput={onRenameTitleInput}
-              onkeydown={(e) => {
-                if (e.key === 'Enter') handleRename();
-              }}
-              autofocus
-            />
-            {#if renameSlugPreview}
-              <span class="slug-hint">/{renameSlugPreview}</span>
-            {/if}
-            {#if renameError}
-              <span class="error">{renameError}</span>
-            {/if}
-            <div class="form-actions">
-              <button class="btn-primary" onclick={handleRename} disabled={renaming}>
-                {renaming ? '…' : 'Rename'}
-              </button>
-              <button class="btn-ghost" onclick={() => { app.renameSlug = null; }}>
-                <X size={14} />
-              </button>
-            </div>
-          </div>
-        {:else}
+        <button
+          class="page-btn"
+          onclick={() => openPage(page.slug)}
+        >
+          <FileText size={14} class="opacity-70" />
+          {page.title}
+        </button>
+        <div class="page-actions">
           <button
-            class="page-btn"
-            onclick={() => openPage(page.slug)}
+            class="icon-btn small"
+            title="Rename"
+            onclick={(e) => { e.stopPropagation(); triggerRename(page.slug); }}
           >
-            <FileText size={14} class="opacity-70" />
-            {page.title}
+            <Pencil size={12} />
           </button>
-          <div class="page-actions">
-            <button
-              class="icon-btn small"
-              title="Rename"
-              onclick={(e) => { e.stopPropagation(); triggerRename(page.slug); }}
-            >
-              <Pencil size={12} />
-            </button>
-            <button
-              class="icon-btn small danger"
-              title="Delete"
-              onclick={(e) => { e.stopPropagation(); triggerDelete(page.slug); }}
-            >
-              <Trash2 size={12} />
-            </button>
-          </div>
-        {/if}
+          <button
+            class="icon-btn small danger"
+            title="Delete"
+            onclick={(e) => { e.stopPropagation(); triggerDelete(page.slug); }}
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
       </li>
     {/each}
     {#if app.pages.length === 0 && !app.loading}
@@ -247,40 +189,6 @@
   .icon-btn.small { width: 1.25rem; height: 1.25rem; font-size: 0.75rem; opacity: 0; }
   .icon-btn.danger:hover { color: #dc2626; background: #fee2e2; }
   
-  .rename-form {
-    padding: 0.375rem;
-    display: flex; flex-direction: column; gap: 0.25rem;
-    width: 100%;
-  }
-  .input {
-    padding: 0.3125rem 0.5rem;
-    font-size: 0.8125rem;
-    border: 1px solid var(--border);
-    border-radius: 0.375rem;
-    background: var(--bg);
-    color: inherit;
-    width: 100%;
-    box-sizing: border-box;
-  }
-  .slug-hint { font-size: 0.6875rem; color: var(--muted-foreground); font-family: monospace; }
-  .error { font-size: 0.75rem; color: #dc2626; }
-  .form-actions { display: flex; gap: 0.25rem; }
-  .btn-primary {
-    padding: 0.25rem 0.625rem;
-    background: var(--primary); color: #fff;
-    border: none; border-radius: 0.25rem; cursor: pointer; font-size: 0.8125rem;
-  }
-  .btn-primary:disabled { opacity: 0.6; }
-  .btn-ghost {
-    padding: 0.25rem 0.625rem;
-    background: transparent; border: 1px solid var(--border);
-    border-radius: 0.25rem; cursor: pointer; font-size: 0.8125rem; color: inherit;
-  }
-  .btn-danger {
-    padding: 0.375rem 0.75rem;
-    background: #dc2626; color: #fff;
-    border: none; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem;
-  }
   .items {
     list-style: none;
     padding: 0.25rem;
