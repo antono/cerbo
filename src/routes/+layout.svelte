@@ -8,6 +8,7 @@
   import PageList from '$lib/PageList.svelte';
   import ThemeToggle from '$lib/ThemeToggle.svelte';
   import GlobalSearch from '$lib/GlobalSearch.svelte';
+  import NewPageDialog from '$lib/NewPageDialog.svelte';
   import KeyboardHelp from '$lib/KeyboardHelp.svelte';
   import ExitConfirmation from '$lib/ExitConfirmation.svelte';
   import { isModKey, isInputFocused } from '$lib/hotkeys';
@@ -239,6 +240,10 @@
 
 {#if app.showSearch}
   <GlobalSearch onClose={() => app.showSearch = false} />
+{/if}
+
+{#if app.showNewPageForm}
+  <NewPageDialog onClose={() => app.showNewPageForm = false} />
 {/if}
 
 {#if app.showHelp}

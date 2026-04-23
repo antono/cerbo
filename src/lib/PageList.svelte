@@ -1,16 +1,10 @@
 <script lang="ts">
   import { FileText, Plus, Pencil, Trash2, X, Search } from 'lucide-svelte';
   import { tick } from 'svelte';
-  import { app, openPage, createPage, deletePage, renamePage, previewSlug, closeAllDialogs, triggerRename, triggerDelete } from './stores.svelte';
+  import { app, openPage, createPage, deletePage, renamePage, previewSlug, closeAllDialogs, triggerRename, triggerDelete, openNextPage, openPrevPage } from './stores.svelte';
   import { isInputFocused } from './hotkeys';
 
   // ── State for dialogs ─────────────────────────────────────────────────────────
-
-  let newTitle = $state('');
-  let newSlugPreview = $state('');
-  let creating = $state(false);
-  let createError = $state('');
-  let newTitleInput = $state<HTMLInputElement | null>(null);
 
   let deleting = $state(false);
 
@@ -21,14 +15,6 @@
   // ── Focus handling ────────────────────────────────────────────────────────────
 
   let itemsList = $state<HTMLUListElement | null>(null);
-
-  $effect(() => {
-    if (app.showNewPageForm) {
-      tick().then(() => {
-        newTitleInput?.focus();
-      });
-    }
-  });
 
   function handleListKeydown(e: KeyboardEvent) {
     const isJorK = e.key === 'j' || e.key === 'k';
@@ -71,16 +57,6 @@
     }
   }
 
-  // ── Slug preview as user types ────────────────────────────────────────────────
-
-  async function onNewTitleInput() {
-    if (newTitle.trim()) {
-      newSlugPreview = await previewSlug(newTitle);
-    } else {
-      newSlugPreview = '';
-    }
-  }
-
   async function onRenameTitleInput() {
     if (app.renameTitle.trim()) {
       renameSlugPreview = await previewSlug(app.renameTitle);
@@ -89,7 +65,7 @@
     }
   }
 
-  // ── Search ───────────────────────────────────────────────────────────────────
+  // ── UI Actions ────────────────────────────────────────────────────────────────
 
   function toggleSearch() {
     const nextState = !app.showSearch;
@@ -97,29 +73,10 @@
     app.showSearch = nextState;
   }
 
-  // ── Create ────────────────────────────────────────────────────────────────────
-
-  async function toggleNewForm() {
+  function toggleNewPage() {
     const nextState = !app.showNewPageForm;
     closeAllDialogs();
     app.showNewPageForm = nextState;
-    createError = '';
-  }
-
-  async function handleCreate() {
-    if (!newTitle.trim()) return;
-    creating = true;
-    createError = '';
-    try {
-      await createPage(newTitle.trim());
-      newTitle = '';
-      newSlugPreview = '';
-      app.showNewPageForm = false;
-    } catch (e) {
-      createError = String(e);
-    } finally {
-      creating = false;
-    }
   }
 
   // ── Delete ────────────────────────────────────────────────────────────────────
@@ -171,41 +128,13 @@
       <button
         class="icon-btn"
         title="New page (Ctrl+N)"
-        onclick={toggleNewForm}
+        onclick={toggleNewPage}
         disabled={app.showSearch || app.showExitPrompt}
       >
         <Plus size={16} />
       </button>
     </div>
   </div>
-
-  <!-- New page form -->
-  {#if app.showNewPageForm}
-    <div class="form-inset">
-      <input
-        bind:this={newTitleInput}
-        class="input"
-        placeholder="Page title"
-        bind:value={newTitle}
-        oninput={onNewTitleInput}
-        onkeydown={(e) => { if (e.key === 'Enter') handleCreate(); }}
-      />
-      {#if newSlugPreview}
-        <span class="slug-hint">/{newSlugPreview}</span>
-      {/if}
-      {#if createError}
-        <span class="error">{createError}</span>
-      {/if}
-      <div class="form-actions">
-        <button class="btn-primary" onclick={handleCreate} disabled={creating || !newTitle.trim()}>
-          {creating ? '…' : 'Create'}
-        </button>
-        <button class="btn-ghost" onclick={() => { app.showNewPageForm = false; newTitle = ''; }}>
-          Cancel
-        </button>
-      </div>
-    </div>
-  {/if}
 
   <!-- Page items -->
   <ul class="items" bind:this={itemsList} onkeydown={handleListKeydown}>
@@ -317,12 +246,7 @@
   .icon-btn:hover { background: var(--accent-hover); color: var(--fg); }
   .icon-btn.small { width: 1.25rem; height: 1.25rem; font-size: 0.75rem; opacity: 0; }
   .icon-btn.danger:hover { color: #dc2626; background: #fee2e2; }
-  .form-inset {
-    padding: 0.5rem 0.75rem;
-    display: flex; flex-direction: column; gap: 0.25rem;
-    border-bottom: 1px solid var(--border);
-    background: var(--sidebar-bg);
-  }
+  
   .rename-form {
     padding: 0.375rem;
     display: flex; flex-direction: column; gap: 0.25rem;
