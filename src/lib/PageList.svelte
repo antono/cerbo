@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FileText, Plus, Pencil, Trash2, X } from 'lucide-svelte';
+  import { FileText, Plus, Pencil, Trash2, X, Search } from 'lucide-svelte';
   import { tick } from 'svelte';
   import { app, openPage, createPage, deletePage, renamePage, previewSlug, closeAllDialogs } from './stores.svelte';
   import { isInputFocused } from './hotkeys';
@@ -90,6 +90,14 @@
     }
   }
 
+  // ── Search ───────────────────────────────────────────────────────────────────
+
+  function toggleSearch() {
+    const nextState = !app.showSearch;
+    closeAllDialogs();
+    app.showSearch = nextState;
+  }
+
   // ── Create ────────────────────────────────────────────────────────────────────
 
   async function toggleNewForm() {
@@ -160,14 +168,24 @@
   <!-- Header -->
   <div class="list-header">
     <span class="list-title">Pages</span>
-    <button
-      class="icon-btn"
-      title="New page (Ctrl+N)"
-      onclick={toggleNewForm}
-      disabled={app.showSearch || app.showExitPrompt}
-    >
-      <Plus size={16} />
-    </button>
+    <div class="header-actions">
+      <button
+        class="icon-btn"
+        title="Search pages (Ctrl+P)"
+        onclick={toggleSearch}
+        disabled={app.showExitPrompt}
+      >
+        <Search size={14} />
+      </button>
+      <button
+        class="icon-btn"
+        title="New page (Ctrl+N)"
+        onclick={toggleNewForm}
+        disabled={app.showSearch || app.showExitPrompt}
+      >
+        <Plus size={16} />
+      </button>
+    </div>
   </div>
 
   <!-- New page form -->
@@ -297,6 +315,7 @@
     border-bottom: 1px solid var(--border);
   }
   .list-title { font-weight: 600; font-size: 0.8125rem; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; }
+  .header-actions { display: flex; gap: 0.125rem; }
   .icon-btn {
     display: flex; align-items: center; justify-content: center;
     width: 1.5rem; height: 1.5rem;
