@@ -264,6 +264,12 @@ html, body {
   color: var(--primary); /* Inline code color */
 }
 
+/* Lighten inline code background and text in dark mode */
+:root.dark .carta-renderer code {
+  background-color: #2d3748;
+  color: #93c5fd; /* Lighter blue for dark mode */
+}
+
 .carta-renderer pre {
   background-color: var(--accent);
   padding: 1.25rem;
@@ -271,6 +277,11 @@ html, body {
   overflow-x: auto;
   margin-bottom: 1.5rem;
   border: 1px solid var(--border);
+}
+
+/* Lighten code block background in dark mode for better contrast with syntax highlighting */
+:root.dark .carta-renderer pre {
+  background-color: #2d3748;
 }
 
 .carta-renderer pre code {
