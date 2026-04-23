@@ -493,6 +493,7 @@ name = "cerbo-desktop"
 version = "0.1.0"
 dependencies = [
  "cerbo-core",
+ "clap",
  "notify",
  "serde",
  "serde_json",
