@@ -38,6 +38,9 @@ pub fn start_watcher(
             }
             if let Ok(ctx) = get_context(&app_handle) {
                 if let Some(vpath) = cerbo_core::vault::get_vault_path(&ctx, &vid) {
+                    // ── Ensure all pages have H1 ──
+                    let _ = cerbo_core::page::sync_markdown_titles(&vpath);
+
                     if let Ok(idx) = index::build_index(&vpath) {
                         let _ = index::save_index(&ctx, &vid, &idx);
                     }

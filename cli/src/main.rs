@@ -139,7 +139,7 @@ async fn main() -> Result<(), String> {
                 println!("Deleted page");
             }
             PageCommands::Rename { vault_id, slug, title } => {
-                let new_slug = cerbo_core::rename::page_rename(&ctx, vault_id, slug, title)?;
+                let new_slug = cerbo_core::rename::page_rename(&ctx, vault_id, slug, title, None)?;
                 println!("Renamed page to slug: {}", new_slug);
             }
             PageCommands::Attachment { action } => match action {

@@ -348,6 +348,41 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_markdown_titles() {
+        let (tmp, root) = setup_vault();
+        
+        // 1. Create page with H1
+        let dir1 = root.join("has-title");
+        fs::create_dir_all(&dir1).unwrap();
+        fs::write(dir1.join("page.md"), "# Original Title\nContent").unwrap();
+
+        // 2. Create page without H1
+        let dir2 = root.join("no-title");
+        fs::create_dir_all(&dir2).unwrap();
+        fs::write(dir2.join("page.md"), "Just content").unwrap();
+
+        // 3. Create another page without H1
+        let dir3 = root.join("another-missing");
+        fs::create_dir_all(&dir3).unwrap();
+        fs::write(dir3.join("page.md"), "More content").unwrap();
+
+        let modified = sync_markdown_titles(&root).unwrap();
+        assert_eq!(modified, 2);
+
+        // Verify titles
+        let c1 = fs::read_to_string(dir1.join("page.md")).unwrap();
+        assert!(c1.starts_with("# Original Title")); // Unchanged
+
+        let c2 = fs::read_to_string(dir2.join("page.md")).unwrap();
+        assert!(c2.starts_with("# No Title")); // Humanized from slug
+
+        let c3 = fs::read_to_string(dir3.join("page.md")).unwrap();
+        assert!(c3.starts_with("# Another Missing"));
+
+        drop(tmp);
+    }
+
+    #[test]
     fn attachment_ops() {
         let tmp_dir = TempDir::new().unwrap();
         let config_dir = tmp_dir.path().join("config");
