@@ -10,6 +10,7 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri",
+    "build:favicon": "sed 's/fill=\"white\"/fill=\"#3b82f6\"/g' src-tauri/icons/logo.svg > src/favicon.svg",
     "dev-debug": "WEBKIT_INSPECTOR_SERVER=127.0.0.1:9222 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 bun run tauri dev"
   },
   "license": "LGPL-3.0-or-later",
