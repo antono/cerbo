@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "cerbo")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "A local-first markdown wiki CLI", long_about = None)]
 struct Cli {
     #[command(subcommand)]

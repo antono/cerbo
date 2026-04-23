@@ -12,6 +12,9 @@ result/
 *.db-shm
 *.db-wal
 
+# Nix devenv
+.devenv/
+
 # direnv
 .direnv/
 
