@@ -3,44 +3,41 @@
 This project uses **bd** (beads) for issue tracking. Run `bd prime` for full
 workflow context.
 
-## Package Management
+## Nix Development Environment
 
-**ALWAYS use bun** for all package management tasks (installing, adding, removing dependencies).
-**Commands must be ran inside `devenv shell --no-tui`** to ensure the correct environment is used.
+The project uses Nix Flakes for managing dependencies and development environments.
 
 ```bash
-devenv shell --no-tui "bun install"
-devenv shell --no-tui "bun add <package>"
-devenv shell --no-tui "bun add -d <package>" # for dev dependencies
+# Enter the development shell
+nix develop
+
+# List all available outputs (packages, devShells)
+nix flake show
+```
+
+## Package Management
+
+**ALWAYS use bun** for all package management tasks (installing, adding, removing dependencies). Run them inside the Nix development shell:
+
+```bash
+nix develop --command bash -c "bun install"
+nix develop --command bash -c "bun add <package>"
+nix develop --command bash -c "bun add -d <package>" # for dev dependencies
 ```
 
 ## Building the App
 
-**ALWAYS use devenv tasks** for all build commands:
+**ALWAYS use nix build** for all build commands:
 
 ```bash
-# Enter the devenv shell (for ad-hoc commands)
-devenv shell
+# Build the CLI tool
+nix build .#cerbo
 
-# Run defined tasks (inside the shell)
-devenv tasks run app:dev        # Desktop App (Tauri hot reload)
-devenv tasks run app:build      # Desktop production build
-devenv tasks run app:check      # Workspace type check (cargo check)
-devenv tasks run cli:build      # CLI tool build (cerbo binary)
-devenv tasks run core:test      # Run core logic unit tests
+# Build the Desktop App
+nix build .#cerbo-desktop
 
-# Frontend commands (inside the shell)
-devenv tasks run frontend:dev    # Vite dev server (hot reload)
-devenv tasks run frontend:build   # Vite production build
-devenv tasks run frontend:check   # TypeScript check
-```
-
-### Alternative: run commands in a one-liner
-
-```bash
-devenv shell --no-tui -c "devenv tasks run app:check"
-devenv shell --no-tui -c "devenv tasks run cli:build"
-devenv shell --no-tui -c "devenv tasks run core:test"
+# Run build checks
+nix build .#cerbo .#cerbo-desktop
 ```
 
 ### Rust Workspace
@@ -52,19 +49,19 @@ The backend is split into three crates:
 
 ### CLI usage (cerbo)
 
-**ALWAYS run cargo commands inside `devenv shell --no-tui`**.
+**ALWAYS run cargo commands inside `nix develop`**.
 
 ```bash
-# Vault management
-devenv shell --no-tui "cargo run -p cerbo -- vault list"
-devenv shell --no-tui "cargo run -p cerbo -- vault add 'My Vault' /path/to/vault"
+# Run the CLI tool for vault management
+nix develop --command bash -c "cargo run -p cerbo -- vault list"
+nix develop --command bash -c "cargo run -p cerbo -- vault add 'My Vault' /path/to/vault"
 
-# Page management
-devenv shell --no-tui "cargo run -p cerbo -- page list <vault-id>"
-devenv shell --no-tui "cargo run -p cerbo -- page create <vault-id> 'New Page'"
+# Run page management commands
+nix develop --command bash -c "cargo run -p cerbo -- page list <vault-id>"
+nix develop --command bash -c "cargo run -p cerbo -- page create <vault-id> 'New Page'"
 
-# Headless watcher
-devenv shell --no-tui "cargo run -p cerbo -- watch"
+# Run headless watcher
+nix develop --command bash -c "cargo run -p cerbo -- watch"
 ```
 
 ## Debugging with Chrome DevTools MCP
@@ -73,7 +70,7 @@ To debug the Tauri app using AI-driven browser tools (Chrome DevTools MCP), use 
 
 ```bash
 # Start the app with remote debugging ports enabled (9222)
-npm run dev-debug
+nix develop --command bash -c "npm run dev-debug"
 ```
 
 Once the app is running:
