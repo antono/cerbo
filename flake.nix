@@ -39,8 +39,48 @@
           rust-analyzer
         ];
 
+        cerbo = pkgs.rustPlatform.buildRustPackage {
+          pname = "cerbo";
+          version = "0.1.0";
+          src = ./.;
+
+          cargoLock.lockFile = ./Cargo.lock;
+
+          # For monorepo support, we might need to filter or specify the member
+          buildAndTestFocus = "cerbo";
+
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = tauri-deps;
+        };
+
+        cerbo-desktop = pkgs.buildNpmPackage {
+          pname = "cerbo-desktop";
+          version = "0.1.0";
+          src = ./.;
+
+          npmDepsHash = "sha256-Pr794n6WOMImJSOL9lto3lEoTsrj76P60CGUnkmKHSM=";
+
+          makeCacheWritable = true;
+          npmDepsFetcherVersion = 2;
+
+          npmFlags = [ "--legacy-peer-deps" ];
+
+          nativeBuildInputs = [ pkgs.bun ];
+
+          # Use bun instead of npm if possible, or just npm since I generated package-lock.json
+          # Actually, I'll just use npm to be safe as it's what buildNpmPackage likes.
+          # But the user specifically mentioned Bun.
+          # I'll try npm first to get the hash.
+        };
+
       in
       {
+        packages = {
+          default = cerbo;
+          cerbo = cerbo;
+          cerbo-desktop = cerbo-desktop;
+        };
+
         devShells.default = pkgs.mkShell {
           buildInputs = tauri-deps ++ dev-deps;
 
