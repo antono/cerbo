@@ -6,29 +6,35 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = import nixpkgs {
           inherit system;
         };
 
         tauri-deps = with pkgs; [
-          pkg-config
-          dbus
-          openssl
-          glib
-          gtk3
-          dconf
-          gsettings-desktop-schemas
-          adwaita-icon-theme
-          cairo
-          gdk-pixbuf
-          librsvg
-          webkitgtk_4_1
-          libsoup_3
+        pkg-config
+        dbus
+        openssl
+        glib
+        gtk3
+        dconf
+        gsettings-desktop-schemas
+        adwaita-icon-theme
+        cairo
+        gdk-pixbuf
+        librsvg
+        webkitgtk_4_1
+        libsoup_3
+        xdg-utils
         ];
-
         dev-deps = with pkgs; [
           bun
           cargo-tauri
@@ -53,24 +59,43 @@
           buildInputs = tauri-deps;
         };
 
-        cerbo-desktop = pkgs.buildNpmPackage {
-          pname = "cerbo-desktop";
+        cerbo-frontend = pkgs.buildNpmPackage {
+          pname = "cerbo-frontend";
           version = "0.1.0";
           src = ./.;
 
           npmDepsHash = "sha256-Pr794n6WOMImJSOL9lto3lEoTsrj76P60CGUnkmKHSM=";
-
-          makeCacheWritable = true;
           npmDepsFetcherVersion = 2;
-
+          makeCacheWritable = true;
           npmFlags = [ "--legacy-peer-deps" ];
 
-          nativeBuildInputs = [ pkgs.bun ];
+          nativeBuildInputs = [ pkgs.pnpm ];
 
-          # Use bun instead of npm if possible, or just npm since I generated package-lock.json
-          # Actually, I'll just use npm to be safe as it's what buildNpmPackage likes.
-          # But the user specifically mentioned Bun.
-          # I'll try npm first to get the hash.
+          buildPhase = ''
+            pnpm install --frozen-lockfile
+            pnpm run build
+          '';
+
+          installPhase = ''
+            mkdir -p $out
+            cp -r build/* $out
+          '';
+        };
+
+        cerbo-desktop = pkgs.rustPlatform.buildRustPackage {
+          pname = "cerbo-desktop";
+          version = "0.1.0";
+          src = ./.;
+
+          cargoLock.lockFile = ./Cargo.lock;
+          buildAndTestFocus = "cerbo-desktop";
+          nativeBuildInputs = [ pkgs.pkg-config ];
+          buildInputs = tauri-deps;
+
+          preBuild = ''
+            mkdir -p src-tauri/build
+            cp -r ${cerbo-frontend}/* src-tauri/build/
+          '';
         };
 
       in
@@ -94,11 +119,13 @@
           env = {
             PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
             WEBKIT_DISABLE_COMPOSITING_MODE = "1";
-            XDG_DATA_DIRS = pkgs.lib.makeSearchPath "share" [
-              pkgs.gsettings-desktop-schemas
-              pkgs.gtk3
-              pkgs.adwaita-icon-theme
-            ] + ":$XDG_DATA_DIRS";
+            XDG_DATA_DIRS =
+              pkgs.lib.makeSearchPath "share" [
+                pkgs.gsettings-desktop-schemas
+                pkgs.gtk3
+                pkgs.adwaita-icon-theme
+              ]
+              + ":$XDG_DATA_DIRS";
           };
         };
       }

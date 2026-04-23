@@ -232,7 +232,8 @@ mod tests {
             &fixture.ctx,
             fixture.vault_id.clone(),
             "page-b".into(),
-            "New Page B".into()
+            "New Page B".into(),
+            None
         ).unwrap();
 
         assert_eq!(new_slug, "new-page-b");
