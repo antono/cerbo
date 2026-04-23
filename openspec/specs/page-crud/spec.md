@@ -82,6 +82,28 @@ The system SHALL rename a page by updating its title (H1 heading in `page.md`) a
 - **THEN** the system SHALL reject the operation with a descriptive error in the dialog
 - **THEN** no files or folders are moved
 
+### Requirement: Bidirectional Title Sync
+The system SHALL maintain synchronization between the page's metadata (title/slug) and the first H1 heading in its markdown content.
+
+#### Scenario: Update title via markdown
+- **WHEN** the user edits the first `# Heading` in the markdown editor
+- **THEN** after the auto-save delay, the system SHALL trigger a page rename
+- **THEN** the folder SHALL be renamed to match the new derived slug
+- **THEN** the sidebar and internal state SHALL update to reflect the new title and slug
+
+#### Scenario: Update markdown via rename dialog
+- **WHEN** the user renames a page via the modal dialog
+- **THEN** the system SHALL update the first `# Heading` in the `page.md` file to match the new title
+- **THEN** the editor SHALL reload the updated content to show the new heading
+
+### Requirement: Mandatory Title in Markdown
+The system SHALL ensure that every page has an H1 heading in its markdown content. If a title is missing after an edit or save operation, the system SHALL automatically infer one.
+
+#### Scenario: Save page without H1 heading
+- **WHEN** the user saves a page (via editor auto-save or CLI) that lacks an H1 heading (`# Title`)
+- **THEN** the system SHALL infer a title from the current page metadata or the slug (e.g., humanizing `my-long-slug` to `My Long Slug`)
+- **THEN** the system SHALL prepend the inferred title as an H1 heading to the markdown content before writing to disk
+
 ### Requirement: List pages
 The system SHALL return a list of all pages in the active vault by scanning for folders containing a `page.md` file.
 

@@ -19,7 +19,8 @@
     renaming = true;
     error = '';
     try {
-      await renamePage(currentSlug, title.trim());
+      const contentToPass = currentSlug === app.currentSlug ? app.currentContent : undefined;
+      await renamePage(currentSlug, title.trim(), contentToPass);
       onClose();
     } catch (e) {
       error = String(e);

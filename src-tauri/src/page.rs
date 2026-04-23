@@ -21,7 +21,7 @@ pub fn page_write(
     vaultId: String,
     slug: String,
     content: String,
-) -> Result<(), String> {
+) -> Result<String, String> {
     page::page_write(&get_context(&app)?, vaultId, slug, content)
 }
 

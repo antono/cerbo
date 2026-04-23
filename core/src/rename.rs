@@ -15,6 +15,7 @@ pub fn page_rename(
     vault_id: String,
     old_slug: String,
     new_title: String,
+    content: Option<String>,
 ) -> Result<String, String> {
     let vault_path = vault::get_vault_path(ctx, &vault_id)
         .ok_or_else(|| format!("page_rename: vault not found: {vault_id}"))?;
@@ -33,9 +34,16 @@ pub fn page_rename(
 
     // Retrieve old title from page before rename (for link rewriting)
     let old_page = vault_path.join(&old_slug).join("page.md");
-    let old_content = std::fs::read_to_string(&old_page)
-        .map_err(|e| format!("page_rename: read old page: {e}"))?;
-    let old_title = extract_title_from_content(&old_content, &old_slug);
+    
+    // Use provided content if any, otherwise read from disk
+    let base_content = if let Some(c) = content {
+        c
+    } else {
+        std::fs::read_to_string(&old_page)
+            .map_err(|e| format!("page_rename: read old page: {e}"))?
+    };
+    
+    let old_title = extract_title_from_content(&base_content, &old_slug);
 
     // Rename folder
     if new_slug != old_slug {
@@ -47,7 +55,7 @@ pub fn page_rename(
 
     // Update the heading in the renamed page
     let target_page = vault_path.join(&new_slug).join("page.md");
-    let new_content = rewrite_heading(&old_content, &new_title);
+    let new_content = rewrite_heading(&base_content, &new_title);
     std::fs::write(&target_page, &new_content)
         .map_err(|e| format!("page_rename: write new heading: {e}"))?;
 
@@ -235,7 +243,7 @@ mod tests {
         let fixture = create_fixture_vault().unwrap();
         
         // Rename Page B -> New Page B
-        let new_slug = page_rename(&fixture.ctx, fixture.vault_id.clone(), "page-b".into(), "New Page B".into()).unwrap();
+        let new_slug = page_rename(&fixture.ctx, fixture.vault_id.clone(), "page-b".into(), "New Page B".into(), None).unwrap();
         assert_eq!(new_slug, "new-page-b");
 
         // Verify Page A (Linked to Page B)

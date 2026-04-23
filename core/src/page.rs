@@ -55,16 +55,44 @@ pub fn page_write(
     vault_id: String,
     slug: String,
     content: String,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let root = vault_root(ctx, &vault_id)?;
     let p = page_path(&root, &slug);
     if !p.parent().map(|d| d.exists()).unwrap_or(false) {
         return Err(format!("page_write: page dir does not exist: {slug}"));
     }
+
+    // ── Ensure H1 title exists ──
+    let mut final_content = content;
+    if !has_h1(&final_content) {
+        // Infer title: try to extract from existing file, otherwise use slug
+        let inferred_title = extract_title(&p).unwrap_or_else(|| humanize_slug(&slug));
+        final_content = format!("# {inferred_title}\n\n{final_content}");
+    }
+
     let tmp = p.with_extension("md.tmp");
-    std::fs::write(&tmp, &content).map_err(|e| format!("page_write write tmp: {e}"))?;
+    std::fs::write(&tmp, &final_content).map_err(|e| format!("page_write write tmp: {e}"))?;
     std::fs::rename(&tmp, &p).map_err(|e| format!("page_write rename: {e}"))?;
-    Ok(())
+    Ok(final_content)
+}
+
+fn has_h1(content: &str) -> bool {
+    content.lines().any(|l| l.trim().starts_with("# "))
+}
+
+fn humanize_slug(slug: &str) -> String {
+    slug.replace('-', " ")
+        .replace('_', " ")
+        .split_whitespace()
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub fn page_delete(ctx: &CerboContext, vault_id: String, slug: String) -> Result<(), String> {

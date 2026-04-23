@@ -18,7 +18,9 @@
     openPage,
     createPage,
     savePage,
+    renamePage,
     loadAttachments,
+    extractTitle,
   } from './stores.svelte';
 
   // ── Props ─────────────────────────────────────────────────────────────────────
@@ -140,12 +142,27 @@
     if (!value && !app.currentContent) return;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
+      const targetSlugForSave = slug;
       saving = true;
       try {
-        await savePage(slug, value);
-        // Only update currentContent if the slug hasn't changed in the meantime
-        if (slug === targetSlugForSave) {
-          app.currentContent = value;
+        // ── Detect title change for auto-rename ──
+        const extractedTitle = extractTitle(value);
+        const currentPage = app.pages.find(p => p.slug === slug);
+        
+        if (extractedTitle && currentPage && extractedTitle !== currentPage.title) {
+          // Title changed in markdown, trigger rename
+          await renamePage(slug, extractedTitle, value);
+          // renamePage already calls loadPages and openPage(newSlug)
+        } else {
+          const finalContent = await savePage(slug, value);
+          // Only update currentContent if the slug hasn't changed in the meantime
+          if (slug === targetSlugForSave) {
+            app.currentContent = finalContent ?? value;
+            // If backend modified the content (e.g. prepended title), update the editor
+            if (finalContent && finalContent !== value) {
+              content = finalContent;
+            }
+          }
         }
       } catch (e) {
         app.error = String(e);
@@ -153,7 +170,6 @@
         saving = false;
       }
     }, 800);
-    const targetSlugForSave = slug;
   });
 
   // Attach link click handlers via event delegation on the container

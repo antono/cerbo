@@ -3,11 +3,13 @@ use tauri::AppHandle;
 use crate::get_context;
 
 #[tauri::command]
+#[allow(non_snake_case)]
 pub fn page_rename(
     app: AppHandle,
-    vault_id: String,
-    old_slug: String,
-    new_title: String,
+    vaultId: String,
+    oldSlug: String,
+    newTitle: String,
+    content: Option<String>,
 ) -> Result<String, String> {
-    rename::page_rename(&get_context(&app)?, vault_id, old_slug, new_title)
+    rename::page_rename(&get_context(&app)?, vaultId, oldSlug, newTitle, content)
 }

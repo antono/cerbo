@@ -131,7 +131,7 @@ async fn main() -> Result<(), String> {
                 println!("{}", content);
             }
             PageCommands::Write { vault_id, slug, content } => {
-                cerbo_core::page::page_write(&ctx, vault_id, slug, content)?;
+                let _ = cerbo_core::page::page_write(&ctx, vault_id, slug, content)?;
                 println!("Updated page");
             }
             PageCommands::Delete { vault_id, slug } => {

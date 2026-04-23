@@ -238,10 +238,11 @@ export async function openPrevPage(): Promise<void> {
   await openPage(app.pages[prevIndex].slug);
 }
 
-export async function savePage(slug: string, content: string): Promise<void> {
+export async function savePage(slug: string, content: string): Promise<string | undefined> {
   if (!app.activeVaultId) return;
   try {
-    await invoke('page_write', { vaultId: app.activeVaultId, slug, content });
+    const finalContent = await invoke<string>('page_write', { vaultId: app.activeVaultId, slug, content });
+    return finalContent;
   } catch (e) {
     setError(String(e));
   }
@@ -276,12 +277,13 @@ export async function deletePage(slug: string): Promise<void> {
   }
 }
 
-export async function renamePage(oldSlug: string, newTitle: string): Promise<string> {
+export async function renamePage(oldSlug: string, newTitle: string, content?: string): Promise<string> {
   if (!app.activeVaultId) throw new Error('No active vault');
   const newSlug = await invoke<string>('page_rename', {
     vaultId: app.activeVaultId,
     oldSlug: oldSlug,
     newTitle: newTitle,
+    content: content || null,
   });
   await loadPages();
   if (app.currentSlug === oldSlug) {
@@ -310,6 +312,16 @@ export function triggerDelete(slug?: string) {
 
 export async function previewSlug(title: string): Promise<string> {
   return invoke<string>('slug_from_title', { title });
+}
+
+export function extractTitle(content: string): string | null {
+  const lines = content.split('\n');
+  for (const line of lines) {
+    if (line.trim().startsWith('# ')) {
+      return line.trim().slice(2).trim();
+    }
+  }
+  return null;
 }
 
 export async function loadBacklinks(slug: string): Promise<void> {
