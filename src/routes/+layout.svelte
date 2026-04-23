@@ -201,7 +201,7 @@
       {:else}
         <div class="no-vault">
           <p>Add a vault to get started.</p>
-          <button class="primary-btn" onclick={() => (showVaultSwitcher = true)}>Add Vault</button>
+          <button class="primary-btn" onclick={() => (app.showVaultSwitcher = true)}>Add Vault</button>
         </div>
       {/if}
     </div>
