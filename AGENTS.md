@@ -6,11 +6,12 @@ workflow context.
 ## Package Management
 
 **ALWAYS use bun** for all package management tasks (installing, adding, removing dependencies).
+**Commands must be ran inside `devenv shell --no-tui`** to ensure the correct environment is used.
 
 ```bash
-bun install
-bun add <package>
-bun add -d <package> # for dev dependencies
+devenv shell --no-tui "bun install"
+devenv shell --no-tui "bun add <package>"
+devenv shell --no-tui "bun add -d <package>" # for dev dependencies
 ```
 
 ## Building the App
@@ -51,17 +52,19 @@ The backend is split into three crates:
 
 ### CLI usage (cerbo)
 
+**ALWAYS run cargo commands inside `devenv shell --no-tui`**.
+
 ```bash
 # Vault management
-cargo run -p cerbo -- vault list
-cargo run -p cerbo -- vault add "My Vault" /path/to/vault
+devenv shell --no-tui "cargo run -p cerbo -- vault list"
+devenv shell --no-tui "cargo run -p cerbo -- vault add 'My Vault' /path/to/vault"
 
 # Page management
-cargo run -p cerbo -- page list <vault-id>
-cargo run -p cerbo -- page create <vault-id> "New Page"
+devenv shell --no-tui "cargo run -p cerbo -- page list <vault-id>"
+devenv shell --no-tui "cargo run -p cerbo -- page create <vault-id> 'New Page'"
 
 # Headless watcher
-cargo run -p cerbo -- watch
+devenv shell --no-tui "cargo run -p cerbo -- watch"
 ```
 
 ## Debugging with Chrome DevTools MCP
