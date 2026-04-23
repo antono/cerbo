@@ -1,7 +1,0 @@
-<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <g fill="#3b82f6" transform="translate(36, 36)">
-    <!-- Letter C: Geometric open square, line weight 120, total size 440 -->
-    <path d="M 0 0 H 440 V 120 H 120 V 320 H 440 V 440 H 0 Z" />
-    <rect x="160" y="160" width="120" height="120" />
-  </g>
-</svg>
