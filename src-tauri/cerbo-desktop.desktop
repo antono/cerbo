@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Cerbo
+Comment=A minimalist personal knowledge base
+Exec=cerbo-desktop
+Icon=cerbo-desktop
+Terminal=false
+Categories=Utility;Application;
+StartupWMClass=Cerbo
