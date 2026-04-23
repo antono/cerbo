@@ -1,0 +1,28 @@
+{ pkgs }:
+{
+  tauri-deps = with pkgs; [
+    pkg-config
+    dbus
+    openssl
+    glib
+    gtk3
+    dconf
+    gsettings-desktop-schemas
+    adwaita-icon-theme
+    cairo
+    gdk-pixbuf
+    librsvg
+    webkitgtk_4_1
+    libsoup_3
+    xdg-utils
+  ];
+  dev-deps = with pkgs; [
+    bun
+    cargo-tauri
+    rustc
+    cargo
+    clippy
+    rustfmt
+    rust-analyzer
+  ];
+}
