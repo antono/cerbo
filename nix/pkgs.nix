@@ -53,6 +53,22 @@ let
 
     # Ensure Tauri doesn't try to use a dev server
     TAURI_ENV_DEBUG = "false";
+
+    postInstall = ''
+      # Install desktop file
+      mkdir -p $out/share/applications
+      cp src-tauri/cerbo-desktop.desktop $out/share/applications/
+
+      # Install icons
+      mkdir -p $out/share/icons/hicolor/scalable/apps
+      cp src-tauri/icons/logo.svg $out/share/icons/hicolor/scalable/apps/cerbo-desktop.svg
+
+      # Install fixed-size icons
+      for size in 32 64 128; do
+        mkdir -p $out/share/icons/hicolor/''${size}x''${size}/apps
+        cp src-tauri/icons/''${size}x''${size}.png $out/share/icons/hicolor/''${size}x''${size}/apps/cerbo-desktop.png
+      done
+    '';
   };
 in
 {
