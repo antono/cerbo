@@ -8,6 +8,7 @@ import { visit } from 'unist-util-visit';
 import type { Root as MdastRoot, Image } from 'mdast';
 import type { Root as HastRoot, Element } from 'hast';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import WikilinkAutocomplete from './WikilinkAutocomplete.svelte';
 
 // ── Custom mdast node ─────────────────────────────────────────────────────────
@@ -214,6 +215,14 @@ export function attachPreviewClickHandler(
     const target = (ev.target as HTMLElement).closest('a');
     if (!target) return;
     
+    // Handle External Links
+    const href = target.getAttribute('href');
+    if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
+      ev.preventDefault();
+      openUrl(href).catch((err) => console.error('Failed to open external URL:', err));
+      return;
+    }
+
     // Handle Wikilinks
     if (target.hasAttribute('data-wikilink')) {
       ev.preventDefault();
