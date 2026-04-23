@@ -54,11 +54,11 @@
   const carta = new Carta({
     sanitizer: false,
     theme: {
-      light: 'vitesse-light',
-      dark: 'material-theme-high-contrast',
+      light: 'material-theme-lighter',
+      dark: 'material-theme-palenight',
     },
     shikiOptions: {
-      themes: ['vitesse-light', 'material-theme-high-contrast'],
+      themes: ['material-theme-lighter', 'material-theme-palenight'],
     },
     extensions: [
       wikilinkPlugin({
@@ -83,8 +83,8 @@
       }),
       code({
         theme: {
-          light: 'vitesse-light',
-          dark: 'material-theme-high-contrast'
+          light: 'material-theme-lighter',
+          dark: 'material-theme-palenight'
         }
       }),
       emoji(),
