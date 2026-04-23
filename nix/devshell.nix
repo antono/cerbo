@@ -12,6 +12,8 @@ pkgs.mkShell {
   env = {
     PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig";
     WEBKIT_DISABLE_COMPOSITING_MODE = "1";
+    WEBKIT_DISABLE_DMABUF_RENDERER = "1";
+    GDK_BACKEND = "x11";
     XDG_DATA_DIRS =
       pkgs.lib.makeSearchPath "share" [
         pkgs.gsettings-desktop-schemas

@@ -15,6 +15,8 @@
     webkitgtk_4_1
     libsoup_3
     xdg-utils
+    gobject-introspection
+    glib-networking
   ];
   dev-deps = with pkgs; [
     bun

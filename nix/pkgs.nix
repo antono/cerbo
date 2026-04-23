@@ -37,13 +37,22 @@ let
     src = ../.;
     cargoLock.lockFile = ../Cargo.lock;
     buildAndTestFocus = "cerbo-desktop";
-    nativeBuildInputs = [ pkgs.pkg-config ];
+    nativeBuildInputs = [
+      pkgs.pkg-config
+      pkgs.wrapGAppsHook3
+      pkgs.gobject-introspection
+      pkgs.jq
+    ];
     buildInputs = tauri-deps;
-    preBuild = ''
-      mkdir -p src-tauri/build
-      cp -r ${cerbo-frontend}/* src-tauri/build/
+
+    postPatch = ''
+      # Nullify devUrl and point frontendDist to the built frontend in the Nix store
+      jq '.build.devUrl = null | .build.frontendDist = "${cerbo-frontend}"' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp
+      mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
     '';
-    env.TAURI_DIST_DIR = "../src-tauri/build";
+
+    # Ensure Tauri doesn't try to use a dev server
+    TAURI_ENV_DEBUG = "false";
   };
 in
 {
