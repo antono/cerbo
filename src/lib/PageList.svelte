@@ -1,7 +1,7 @@
 <script lang="ts">
   import { FileText, Plus, Pencil, Trash2, X, Search } from 'lucide-svelte';
   import { tick } from 'svelte';
-  import { app, openPage, createPage, deletePage, renamePage, previewSlug, closeAllDialogs } from './stores.svelte';
+  import { app, openPage, createPage, deletePage, renamePage, previewSlug, closeAllDialogs, triggerRename, triggerDelete } from './stores.svelte';
   import { isInputFocused } from './hotkeys';
 
   // ── State for dialogs ─────────────────────────────────────────────────────────
@@ -12,10 +12,8 @@
   let createError = $state('');
   let newTitleInput = $state<HTMLInputElement | null>(null);
 
-  let confirmDeleteSlug = $state<string | null>(null);
   let deleting = $state(false);
 
-  let renameTitle = $state('');
   let renameSlugPreview = $state('');
   let renaming = $state(false);
   let renameError = $state('');
@@ -36,8 +34,10 @@
     const isJorK = e.key === 'j' || e.key === 'k';
     const isArrow = e.key === 'ArrowDown' || e.key === 'ArrowUp';
     const isTab = e.key === 'Tab';
+    const isR = e.key === 'r';
+    const isDel = e.key === 'Delete' || e.key === 'Backspace';
 
-    if (!isJorK && !isArrow && !isTab) return;
+    if (!isJorK && !isArrow && !isTab && !isR && !isDel) return;
 
     // Navigation keys should only work if no input is focused
     if (isInputFocused()) return;
@@ -48,27 +48,26 @@
     const focusedElement = document.activeElement as HTMLButtonElement;
     const currentIndex = buttons.indexOf(focusedElement);
 
-    let nextIndex = currentIndex;
+    if (isR) {
+      e.preventDefault();
+      const slug = currentIndex !== -1 ? app.pages[currentIndex].slug : app.currentSlug;
+      if (slug) triggerRename(slug);
+      return;
+    }
+
+    if (isDel) {
+      e.preventDefault();
+      const slug = currentIndex !== -1 ? app.pages[currentIndex].slug : app.currentSlug;
+      if (slug) triggerDelete(slug);
+      return;
+    }
 
     if (e.key === 'ArrowDown' || e.key === 'j' || (e.key === 'Tab' && !e.shiftKey)) {
       e.preventDefault();
-      nextIndex = (currentIndex + 1) % buttons.length;
+      openNextPage();
     } else if (e.key === 'ArrowUp' || e.key === 'k' || (e.key === 'Tab' && e.shiftKey)) {
       e.preventDefault();
-      nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
-    }
-
-    if (nextIndex !== currentIndex || currentIndex === -1) {
-      // If nothing is focused, start at the first item
-      const targetIndex = currentIndex === -1 ? 0 : nextIndex;
-      const targetButton = buttons[targetIndex];
-      targetButton?.focus();
-
-      // Immediately switch to the page
-      const page = app.pages[targetIndex];
-      if (page) {
-        openPage(page.slug);
-      }
+      openPrevPage();
     }
   }
 
@@ -83,8 +82,8 @@
   }
 
   async function onRenameTitleInput() {
-    if (renameTitle.trim()) {
-      renameSlugPreview = await previewSlug(renameTitle);
+    if (app.renameTitle.trim()) {
+      renameSlugPreview = await previewSlug(app.renameTitle);
     } else {
       renameSlugPreview = '';
     }
@@ -126,11 +125,11 @@
   // ── Delete ────────────────────────────────────────────────────────────────────
 
   async function handleDelete() {
-    if (!confirmDeleteSlug) return;
+    if (!app.confirmDeleteSlug) return;
     deleting = true;
     try {
-      await deletePage(confirmDeleteSlug);
-      confirmDeleteSlug = null;
+      await deletePage(app.confirmDeleteSlug);
+      app.confirmDeleteSlug = null;
     } catch (_) {
       // error set in store
     } finally {
@@ -140,22 +139,14 @@
 
   // ── Rename ────────────────────────────────────────────────────────────────────
 
-  function startRename(slug: string, currentTitle: string) {
-    closeAllDialogs();
-    app.renameSlug = slug;
-    renameTitle = currentTitle;
-    renameSlugPreview = slug;
-    renameError = '';
-  }
-
   async function handleRename() {
-    if (!app.renameSlug || !renameTitle.trim()) return;
+    if (!app.renameSlug || !app.renameTitle.trim()) return;
     renaming = true;
     renameError = '';
     try {
-      await renamePage(app.renameSlug, renameTitle.trim());
+      await renamePage(app.renameSlug, app.renameTitle.trim());
       app.renameSlug = null;
-      renameTitle = '';
+      app.renameTitle = '';
     } catch (e) {
       renameError = String(e);
     } finally {
@@ -225,7 +216,7 @@
           <div class="rename-form">
             <input
               class="input"
-              bind:value={renameTitle}
+              bind:value={app.renameTitle}
               oninput={onRenameTitleInput}
               onkeydown={(e) => {
                 if (e.key === 'Enter') handleRename();
@@ -259,14 +250,14 @@
             <button
               class="icon-btn small"
               title="Rename"
-              onclick={(e) => { e.stopPropagation(); startRename(page.slug, page.title); }}
+              onclick={(e) => { e.stopPropagation(); triggerRename(page.slug); }}
             >
               <Pencil size={12} />
             </button>
             <button
               class="icon-btn small danger"
               title="Delete"
-              onclick={(e) => { e.stopPropagation(); confirmDeleteSlug = page.slug; }}
+              onclick={(e) => { e.stopPropagation(); triggerDelete(page.slug); }}
             >
               <Trash2 size={12} />
             </button>
@@ -281,19 +272,20 @@
 </aside>
 
 <!-- Delete confirmation overlay -->
-{#if confirmDeleteSlug}
-  <div class="modal-backdrop" role="presentation" onclick={() => { confirmDeleteSlug = null; }}>
+{#if app.confirmDeleteSlug}
+  {@const page = app.pages.find(p => p.slug === app.confirmDeleteSlug)}
+  <div class="modal-backdrop" role="presentation" onclick={() => { app.confirmDeleteSlug = null; }}>
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <div class="modal" role="dialog" aria-modal="true" onclick={(e) => e.stopPropagation()}>
       <p class="modal-title">Delete page?</p>
       <p class="modal-body">
-        This will permanently delete <strong>{confirmDeleteSlug}</strong> and all its assets.
+        This will permanently delete <strong>{page?.title ?? app.confirmDeleteSlug} [slug:{app.confirmDeleteSlug}]</strong> and all its assets.
       </p>
       <div class="modal-actions">
         <button class="btn-danger" onclick={handleDelete} disabled={deleting}>
           {deleting ? 'Deleting…' : 'Delete'}
         </button>
-        <button class="btn-ghost" onclick={() => { confirmDeleteSlug = null; }}>Cancel</button>
+        <button class="btn-ghost" onclick={() => { app.confirmDeleteSlug = null; }}>Cancel</button>
       </div>
     </div>
   </div>

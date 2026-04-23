@@ -15,6 +15,8 @@
     { keys: [mod, 'Q'], desc: 'Quit application' },
     { keys: ['F1'], desc: 'Show this help' },
     { keys: ['Esc'], desc: 'Close active dialog or modal' },
+    { keys: ['r'], desc: 'Rename current page (Preview mode)' },
+    { keys: ['Del'], desc: 'Delete current page (Preview mode)' },
     { keys: ['↓'], desc: 'Next page in sidebar' },
     { keys: ['j'], desc: 'Next page (Vim-style)' },
     { keys: ['↑'], desc: 'Previous page in sidebar' },

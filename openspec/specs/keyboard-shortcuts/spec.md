@@ -21,10 +21,10 @@ The system MUST provide a global keyboard shortcut to open the "New Page" form f
 - **THEN** any other active dialogs or forms (Search, Vault Switcher) SHALL be automatically closed
 
 ### Requirement: Escape to Close
-The system MUST use the `Esc` key as a universal "close" or "cancel" action for all transient UI elements, including modals, forms, and the vault switcher.
+The system MUST use the `Esc` key as a universal "close" or "cancel" action for all transient UI elements, including modals, forms, the vault switcher, and delete confirmations.
 
 #### Scenario: Close active form via Esc
-- **WHEN** any transient UI element is active (New Page form, Search modal, Vault Switcher, Rename form)
+- **WHEN** any transient UI element is active (New Page form, Search modal, Vault Switcher, Rename form, Delete confirmation)
 - **AND** the user presses `Esc`
 - **THEN** the active element SHALL be closed and focus returned to the previous context
 
@@ -63,3 +63,23 @@ The system MUST provide keyboard shortcuts for efficient navigation within the s
 - **WHEN** the Shortcuts Help modal is opened
 - **THEN** it SHALL include a section for "Sidebar Navigation"
 - **AND** it SHALL list `ArrowUp/k` for "Previous page", `ArrowDown/j` for "Next page", and `Tab` for "Cycle pages"
+
+### Requirement: Preview Mode Page Operations
+The system MUST provide keyboard shortcuts for common page operations while in "Preview" mode.
+
+#### Scenario: Navigate pages in preview mode
+- **WHEN** the user is in preview mode and not focusing an input
+- **AND** the user presses `j` or `ArrowDown`
+- **THEN** the system SHALL open the next page in the list
+- **WHEN** the user presses `k` or `ArrowUp`
+- **THEN** the system SHALL open the previous page in the list
+
+#### Scenario: Trigger rename in preview mode
+- **WHEN** the user is in preview mode and not focusing an input
+- **AND** the user presses `r`
+- **THEN** the system SHALL open the rename dialog for the current page
+
+#### Scenario: Trigger delete in preview mode
+- **WHEN** the user is in preview mode and not focusing an input
+- **AND** the user presses `Delete` or `Backspace`
+- **THEN** the system SHALL open the delete confirmation dialog for the current page

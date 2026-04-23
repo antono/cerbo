@@ -60,6 +60,8 @@ export const app = $state({
   showVaultSwitcher: false,
   showHelp: false,
   renameSlug: null as string | null,
+  renameTitle: '',
+  confirmDeleteSlug: null as string | null,
 });
 
 /**
@@ -73,6 +75,8 @@ export function closeAllDialogs() {
   app.showVaultSwitcher = false;
   app.showHelp = false;
   app.renameSlug = null;
+  app.renameTitle = '';
+  app.confirmDeleteSlug = null;
 }
 
 // ── Computed helpers ──────────────────────────────────────────────────────────
@@ -220,6 +224,20 @@ export async function openPage(slug: string): Promise<void> {
   }
 }
 
+export async function openNextPage(): Promise<void> {
+  if (app.pages.length === 0) return;
+  const currentIndex = app.pages.findIndex(p => p.slug === app.currentSlug);
+  const nextIndex = (currentIndex + 1) % app.pages.length;
+  await openPage(app.pages[nextIndex].slug);
+}
+
+export async function openPrevPage(): Promise<void> {
+  if (app.pages.length === 0) return;
+  const currentIndex = app.pages.findIndex(p => p.slug === app.currentSlug);
+  const prevIndex = (currentIndex - 1 + app.pages.length) % app.pages.length;
+  await openPage(app.pages[prevIndex].slug);
+}
+
 export async function savePage(slug: string, content: string): Promise<void> {
   if (!app.activeVaultId) return;
   try {
@@ -270,6 +288,24 @@ export async function renamePage(oldSlug: string, newTitle: string): Promise<str
     await openPage(newSlug);
   }
   return newSlug;
+}
+
+export function triggerRename(slug?: string) {
+  const targetSlug = slug || app.currentSlug;
+  if (!targetSlug) return;
+  const page = app.pages.find(p => p.slug === targetSlug);
+  if (!page) return;
+
+  closeAllDialogs();
+  app.renameSlug = targetSlug;
+  app.renameTitle = page.title;
+}
+
+export function triggerDelete(slug?: string) {
+  const targetSlug = slug || app.currentSlug;
+  if (!targetSlug) return;
+  closeAllDialogs();
+  app.confirmDeleteSlug = targetSlug;
 }
 
 export async function previewSlug(title: string): Promise<string> {
