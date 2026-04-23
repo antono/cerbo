@@ -20,20 +20,20 @@
         };
 
         tauri-deps = with pkgs; [
-        pkg-config
-        dbus
-        openssl
-        glib
-        gtk3
-        dconf
-        gsettings-desktop-schemas
-        adwaita-icon-theme
-        cairo
-        gdk-pixbuf
-        librsvg
-        webkitgtk_4_1
-        libsoup_3
-        xdg-utils
+          pkg-config
+          dbus
+          openssl
+          glib
+          gtk3
+          dconf
+          gsettings-desktop-schemas
+          adwaita-icon-theme
+          cairo
+          gdk-pixbuf
+          librsvg
+          webkitgtk_4_1
+          libsoup_3
+          xdg-utils
         ];
         dev-deps = with pkgs; [
           bun
@@ -59,21 +59,16 @@
           buildInputs = tauri-deps;
         };
 
-        cerbo-frontend = pkgs.buildNpmPackage {
+        cerbo-frontend = pkgs.stdenv.mkDerivation {
           pname = "cerbo-frontend";
           version = "0.1.0";
           src = ./.;
 
-          npmDepsHash = "sha256-Pr794n6WOMImJSOL9lto3lEoTsrj76P60CGUnkmKHSM=";
-          npmDepsFetcherVersion = 2;
-          makeCacheWritable = true;
-          npmFlags = [ "--legacy-peer-deps" ];
-
-          nativeBuildInputs = [ pkgs.pnpm ];
+          nativeBuildInputs = [ pkgs.bun ];
 
           buildPhase = ''
-            pnpm install --frozen-lockfile
-            pnpm run build
+            bun install --frozen-lockfile
+            bun run build
           '';
 
           installPhase = ''
@@ -81,7 +76,6 @@
             cp -r build/* $out
           '';
         };
-
         cerbo-desktop = pkgs.rustPlatform.buildRustPackage {
           pname = "cerbo-desktop";
           version = "0.1.0";
@@ -96,6 +90,8 @@
             mkdir -p src-tauri/build
             cp -r ${cerbo-frontend}/* src-tauri/build/
           '';
+
+          env.TAURI_DIST_DIR = "../src-tauri/build";
         };
 
       in
@@ -104,6 +100,7 @@
           default = cerbo;
           cerbo = cerbo;
           cerbo-desktop = cerbo-desktop;
+          cerbo-frontend = cerbo-frontend;
         };
 
         devShells.default = pkgs.mkShell {
