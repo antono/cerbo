@@ -188,6 +188,9 @@ async fn main() -> Result<(), String> {
                             .any(|p| p.file_name().map(|n| n == "page.md").unwrap_or(false));
                         if affects_page {
                             if let Some(vpath) = cerbo_core::vault::get_vault_path(&ctx_clone, &vid) {
+                                // ── Ensure all pages have H1 ──
+                                let _ = cerbo_core::page::sync_markdown_titles(&vpath);
+                                
                                 if let Ok(idx) = cerbo_core::index::build_index(&vpath) {
                                     let _ = cerbo_core::index::save_index(&ctx_clone, &vid, &idx);
                                     println!("Index updated for vault: {}", vid);

@@ -76,11 +76,11 @@ pub fn page_write(
     Ok(final_content)
 }
 
-fn has_h1(content: &str) -> bool {
+pub fn has_h1(content: &str) -> bool {
     content.lines().any(|l| l.trim().starts_with("# "))
 }
 
-fn humanize_slug(slug: &str) -> String {
+pub fn humanize_slug(slug: &str) -> String {
     slug.replace('-', " ")
         .replace('_', " ")
         .split_whitespace()
@@ -93,6 +93,42 @@ fn humanize_slug(slug: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Ensure a page.md file has an H1 heading. If not, infer and prepend one.
+/// Returns true if the file was modified.
+pub fn ensure_page_has_h1(path: &std::path::Path, slug: &str) -> Result<bool, String> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let content = std::fs::read_to_string(path).map_err(|e| format!("ensure_h1 read: {e}"))?;
+    if has_h1(&content) {
+        return Ok(false);
+    }
+
+    let title = humanize_slug(slug);
+    let new_content = format!("# {title}\n\n{content}");
+    std::fs::write(path, new_content).map_err(|e| format!("ensure_h1 write: {e}"))?;
+    Ok(true)
+}
+
+/// Re-scans the whole vault and ensures all pages have an H1 heading.
+pub fn sync_markdown_titles(vault_path: &std::path::Path) -> Result<usize, String> {
+    let mut modified_count = 0;
+    for entry in WalkDir::new(vault_path).min_depth(1).max_depth(1) {
+        let entry = entry.map_err(|e| format!("sync_titles walk: {e}"))?;
+        if !entry.file_type().is_dir() {
+            continue;
+        }
+        let slug = entry.file_name().to_string_lossy().to_string();
+        let page_md = entry.path().join("page.md");
+        if page_md.exists() {
+            if ensure_page_has_h1(&page_md, &slug)? {
+                modified_count += 1;
+            }
+        }
+    }
+    Ok(modified_count)
 }
 
 pub fn page_delete(ctx: &CerboContext, vault_id: String, slug: String) -> Result<(), String> {
@@ -286,6 +322,28 @@ mod tests {
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[0].slug, "alpha");
         assert_eq!(pages[1].title, "Beta");
+        drop(tmp);
+    }
+
+    #[test]
+    fn test_page_write_infers_title() {
+        let (tmp, root) = setup_vault();
+        let slug = "missing-title";
+        let dir = root.join(slug);
+        fs::create_dir_all(&dir).unwrap();
+        let page_md = dir.join("page.md");
+        fs::write(&page_md, "Just some content without H1.\n").unwrap();
+
+        // ── We need a CerboContext for page_write, but wait ──
+        // page_write calls vault_root which loads from real config.
+        // Let's use ensure_page_has_h1 directly for testing the core logic.
+        
+        let modified = ensure_page_has_h1(&page_md, slug).unwrap();
+        assert!(modified);
+
+        let content = fs::read_to_string(&page_md).unwrap();
+        assert!(content.starts_with("# Missing Title"));
+        assert!(content.contains("Just some content"));
         drop(tmp);
     }
 
