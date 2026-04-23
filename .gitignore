@@ -8,9 +8,6 @@ dist/
 result/
 .svelte-kit/
 
-# devenv
-.devenv/
-
 # Misc
 *.db-shm
 *.db-wal

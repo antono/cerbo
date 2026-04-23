@@ -15,14 +15,20 @@ nix develop
 nix flake show
 ```
 
+Agents should load `direnv` if they know how (e.g. by running `direnv allow` or using a tool that supports it) as the project includes a `.envrc` file.
+
 ## Package Management
 
 **ALWAYS use bun** for all package management tasks (installing, adding, removing dependencies). Run them inside the Nix development shell:
 
 ```bash
+# Native bun commands (inside devshell)
+bun install
+bun add <package>
+bun add -d <package> # for dev dependencies
+
+# Or via nix develop --command (from outside)
 nix develop --command bash -c "bun install"
-nix develop --command bash -c "bun add <package>"
-nix develop --command bash -c "bun add -d <package>" # for dev dependencies
 ```
 
 ## Building the App
@@ -52,16 +58,12 @@ The backend is split into three crates:
 **ALWAYS run cargo commands inside `nix develop`**.
 
 ```bash
-# Run the CLI tool for vault management
+# Run the CLI tool for vault management (inside devshell)
+cargo run -p cerbo -- vault list
+cargo run -p cerbo -- vault add 'My Vault' /path/to/vault
+
+# Or via nix develop --command (from outside)
 nix develop --command bash -c "cargo run -p cerbo -- vault list"
-nix develop --command bash -c "cargo run -p cerbo -- vault add 'My Vault' /path/to/vault"
-
-# Run page management commands
-nix develop --command bash -c "cargo run -p cerbo -- page list <vault-id>"
-nix develop --command bash -c "cargo run -p cerbo -- page create <vault-id> 'New Page'"
-
-# Run headless watcher
-nix develop --command bash -c "cargo run -p cerbo -- watch"
 ```
 
 ## Debugging with Chrome DevTools MCP
@@ -70,7 +72,7 @@ To debug the Tauri app using AI-driven browser tools (Chrome DevTools MCP), use 
 
 ```bash
 # Start the app with remote debugging ports enabled (9222)
-nix develop --command bash -c "npm run dev-debug"
+nix develop --command bash -c "bun run dev-debug"
 ```
 
 Once the app is running:

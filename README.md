@@ -29,35 +29,40 @@ wikilink-based graph navigation as the core interaction model.
 - **Frontend**: [Svelte 5](https://svelte.dev/) +
   [Carta](https://github.com/BearToCode/carta) (Markdown Editor) + Tailwind CSS
 - **Package Manager**: [Bun](https://bun.sh/)
-- **Environment**: [devenv.sh](https://devenv.sh/)
+- **Environment**: [Nix Flakes](https://nixos.org/explore/#nix-flakes)
 
 ## Getting Started
 
-This project uses `devenv` to manage the development environment, including
+This project uses [Nix Flakes](https://nixos.org/explore/#nix-flakes) to manage the development environment, including
 Rust, Bun, and build dependencies.
 
 ### 1. Enter the Environment
 
+You can enter the development shell using:
+
 ```bash
-devenv shell
+nix develop
 ```
+
+Alternatively, if you have [direnv](https://direnv.net/) installed, just run `direnv allow` and the environment will be automatically loaded when you enter the directory.
 
 ### 2. Run Development Tasks
 
-Inside the shell, use `devenv tasks` to manage the project:
+All development commands (bun, cargo) should be run inside the Nix development shell:
 
 ```bash
-devenv tasks run app:dev       # Start Tauri app with hot reload
-devenv tasks run cli:build     # Build the standalone CLI binary
-devenv tasks run core:test     # Run core logic tests
-devenv tasks run app:check     # Run Rust workspace type checks
+bun run tauri dev          # Start Tauri app with hot reload
+cargo check                # Run Rust workspace type checks
+cargo test -p cerbo-core   # Run core logic tests
 ```
 
 ### 3. Build for Production
 
+Use `nix build` to build the components:
+
 ```bash
-devenv tasks run app:build     # Build Desktop App
-devenv tasks run cli:build     # Build CLI Binary
+nix build .#cerbo-desktop  # Build Desktop App
+nix build .#cerbo          # Build CLI Binary
 ```
 
 ## Data Storage
