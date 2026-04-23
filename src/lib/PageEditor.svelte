@@ -123,6 +123,14 @@
       if (page) {
         content = app.currentContent ?? '';
       }
+      
+      // Reset scroll position
+      if (editorContainer) {
+        const input = editorContainer.querySelector('.carta-input');
+        const renderer = editorContainer.querySelector('.carta-renderer');
+        if (input) input.scrollTop = 0;
+        if (renderer) renderer.scrollTop = 0;
+      }
     });
   });
 
