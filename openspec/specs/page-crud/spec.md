@@ -6,17 +6,17 @@ Enable creating, reading, updating, and deleting pages within a vault.
 ## Requirements
 
 ### Requirement: Create page
-The system SHALL create a new page by deriving a slug from the provided title, creating a folder named after the slug inside the active vault, and writing an empty `page.md` with the title as an H1 heading.
+The system SHALL create a new page by deriving a slug from the provided title, creating a folder named after the slug inside the active vault, and writing an empty `page.md` with the title as an H1 heading. The UI SHALL provide a focused modal dialog with a live slug preview for this operation.
 
 #### Scenario: Create page with valid title
-- **WHEN** the user creates a page with title "Rust Ownership"
+- **WHEN** the user creates a page with title "Rust Ownership" via the New Page dialog
 - **THEN** the folder `rust-ownership/` is created in the vault root
 - **THEN** `rust-ownership/page.md` is created with content `# Rust Ownership`
 - **THEN** the system SHALL switch the editor to "Write" mode for the new page
 
 #### Scenario: Create page with title that conflicts with existing slug
 - **WHEN** the user creates a page whose derived slug matches an existing page's slug
-- **THEN** the system SHALL reject the operation with a descriptive error
+- **THEN** the system SHALL reject the operation with a descriptive error in the dialog
 - **THEN** no folder is created
 
 ### Requirement: Read page
@@ -59,12 +59,28 @@ The system SHALL write updated markdown content to a page's `page.md` file atomi
 - **THEN** the FS watcher triggers an incremental link index update
 
 ### Requirement: Delete page
-The system SHALL delete a page by removing its entire folder (including all assets) from the vault. This operation SHALL be irreversible.
+The system SHALL delete a page by removing its entire folder (including all assets) from the vault. This operation SHALL be irreversible and MUST require confirmation via a modal dialog.
 
 #### Scenario: Delete existing page
-- **WHEN** the user deletes a page
+- **WHEN** the user triggers a delete operation
+- **THEN** the system SHALL display a confirmation modal showing the page title and slug (e.g., `Title [slug:slug]`)
+- **WHEN** the user confirms the deletion
 - **THEN** the page folder and all its contents are removed from disk
 - **THEN** the link index is updated to remove the page and its outbound links
+
+### Requirement: Rename page
+The system SHALL rename a page by updating its title (H1 heading in `page.md`) and/or its slug (folder name). The UI SHALL provide a focused modal dialog showing current metadata and a preview of the new slug.
+
+#### Scenario: Rename page title and slug
+- **WHEN** the user provides a new title "Advanced Rust" for a page with slug "rust-intro"
+- **THEN** the folder is renamed from `rust-intro/` to `advanced-rust/`
+- **THEN** the H1 heading in `page.md` is updated to `# Advanced Rust`
+- **THEN** the link index is updated to reflect the new slug
+
+#### Scenario: Rename results in slug conflict
+- **WHEN** the user renames a page to a title whose derived slug already exists
+- **THEN** the system SHALL reject the operation with a descriptive error in the dialog
+- **THEN** no files or folders are moved
 
 ### Requirement: List pages
 The system SHALL return a list of all pages in the active vault by scanning for folders containing a `page.md` file.
