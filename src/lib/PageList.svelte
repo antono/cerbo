@@ -61,7 +61,14 @@
     if (nextIndex !== currentIndex || currentIndex === -1) {
       // If nothing is focused, start at the first item
       const targetIndex = currentIndex === -1 ? 0 : nextIndex;
-      buttons[targetIndex]?.focus();
+      const targetButton = buttons[targetIndex];
+      targetButton?.focus();
+
+      // Immediately switch to the page
+      const page = app.pages[targetIndex];
+      if (page) {
+        openPage(page.slug);
+      }
     }
   }
 
@@ -361,6 +368,7 @@
     border-radius: 0.375rem; font-size: 0.875rem; color: inherit;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     min-width: 0;
+    outline: none;
   }
   .page-actions { display: flex; gap: 0.125rem; padding-right: 0.25rem; flex-shrink: 0; }
   .empty-hint { padding: 0.75rem; color: var(--muted-foreground); font-size: 0.8125rem; }

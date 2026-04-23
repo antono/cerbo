@@ -148,7 +148,6 @@ html, body {
 .carta-theme__default, .carta-theme__light {
   --border-color: var(--border) !important;
   --selection-color: rgba(59, 130, 246, 0.2) !important;
-  --focus-outline: var(--primary) !important;
   --hover-color: var(--accent-hover) !important;
   --caret-color: var(--fg) !important;
   --text-color: var(--fg) !important;
@@ -159,7 +158,6 @@ html, body {
 .carta-theme__dark {
   --border-color: var(--border) !important;
   --selection-color: rgba(59, 130, 246, 0.3) !important;
-  --focus-outline: var(--primary) !important;
   --hover-color: var(--accent-hover) !important;
   --caret-color: var(--fg) !important;
   --text-color: var(--fg) !important;
@@ -356,14 +354,6 @@ html, body {
 .sidebar:focus,
 .main-area:focus,
 .right-panels:focus {
-  outline: 2px solid var(--primary);
-  outline-offset: -2px;
-}
-
-/* Ensure children don't lose focus feedback if they are not the panel itself */
-.sidebar:focus-within,
-.main-area:focus-within,
-.right-panels:focus-within {
-  box-shadow: inset 0 0 0 1px var(--primary);
+  outline: none;
 }
 
