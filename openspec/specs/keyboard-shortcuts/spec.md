@@ -83,3 +83,19 @@ The system MUST provide keyboard shortcuts for common page operations while in "
 - **WHEN** the user is in preview mode and not focusing an input
 - **AND** the user presses `Delete` or `Backspace`
 - **THEN** the system SHALL open the delete confirmation dialog for the current page
+
+### Requirement: Go Back Shortcut
+The system MUST provide a global keyboard shortcut to navigate back in the page history.
+
+#### Scenario: Navigate back via Alt+Left
+- **WHEN** the user presses `Alt+Left` (Linux/Windows) or `Option+Left` (Mac)
+- **THEN** the system SHALL navigate to the previously viewed page
+- **AND** the forward history SHALL be preserved for forward navigation
+
+### Requirement: Go Forward Shortcut
+The system MUST provide a global keyboard shortcut to navigate forward in the page history.
+
+#### Scenario: Navigate forward via Alt+Right
+- **WHEN** the user presses `Alt+Right` (Linux/Windows) or `Option+Right` (Mac)
+- **THEN** the system SHALL navigate to the next page in history (if available)
+- **AND** the back history SHALL be preserved for back navigation

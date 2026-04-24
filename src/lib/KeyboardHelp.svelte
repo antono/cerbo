@@ -15,6 +15,8 @@
     { keys: [mod, 'Q'], desc: 'Quit application' },
     { keys: ['F1'], desc: 'Show this help' },
     { keys: ['Esc'], desc: 'Close active dialog or modal' },
+    { keys: ['Alt', '←'], desc: 'Go back in history' },
+    { keys: ['Alt', '→'], desc: 'Go forward in history' },
     { keys: ['r'], desc: 'Rename current page (Preview mode)' },
     { keys: ['Del'], desc: 'Delete current page (Preview mode)' },
     { keys: ['↓'], desc: 'Next page in sidebar' },

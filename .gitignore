@@ -27,3 +27,4 @@ result/
 .codannaignore
 *.log
 result
+.gitnexus

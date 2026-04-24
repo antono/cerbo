@@ -47,6 +47,10 @@ export const app = $state({
   loadingMessage: '',
   error: null as string | null,
 
+  // History for navigation
+  history: [] as string[],
+  historyIndex: -1,
+
   // Layout state
   sidebarWidth: 260,
   backlinksWidth: 280,
@@ -206,8 +210,27 @@ export async function loadPages(): Promise<void> {
   }
 }
 
-export async function openPage(slug: string): Promise<void> {
+export interface OpenPageOptions {
+  pushToHistory?: boolean;
+}
+
+export async function openPage(slug: string, options?: OpenPageOptions): Promise<void> {
   if (!app.activeVaultId) return;
+  const pushToHistory = options?.pushToHistory ?? true;
+
+  // Handle history
+  if (pushToHistory) {
+    // If we're not at the end of history, truncate forward history
+    if (app.historyIndex < app.history.length - 1) {
+      app.history = app.history.slice(0, app.historyIndex + 1);
+    }
+    // Add to history if it's different from current
+    if (app.history[app.history.length - 1] !== slug) {
+      app.history.push(slug);
+      app.historyIndex = app.history.length - 1;
+    }
+  }
+
   try {
     const content = await invoke<string>('page_read', { vaultId: app.activeVaultId, slug });
     app.currentSlug = slug;
@@ -335,6 +358,20 @@ export async function loadBacklinks(slug: string): Promise<void> {
   } catch (_) {
     app.backlinks = [];
   }
+}
+
+export async function goBack(): Promise<void> {
+  if (app.historyIndex <= 0) return;
+  app.historyIndex--;
+  const slug = app.history[app.historyIndex];
+  if (slug) await openPage(slug, { pushToHistory: false });
+}
+
+export async function goForward(): Promise<void> {
+  if (app.historyIndex >= app.history.length - 1) return;
+  app.historyIndex++;
+  const slug = app.history[app.historyIndex];
+  if (slug) await openPage(slug, { pushToHistory: false });
 }
 
 export async function loadAttachments(slug: string): Promise<void> {

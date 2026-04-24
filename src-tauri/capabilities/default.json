@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "core:window:allow-set-theme",
+    "core:app:allow-set-app-theme",
     "core:path:default",
     "opener:default",
     "dialog:allow-open"

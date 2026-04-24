@@ -2,8 +2,9 @@
   import { onMount } from 'svelte';
   import { ModeWatcher, mode, setMode } from 'mode-watcher';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { setTheme } from '@tauri-apps/api/app';
   import { Vault } from 'lucide-svelte';
-  import { app, loadVaults, openVault, quickAddVault, quitApp, closeAllDialogs, openNextPage, openPrevPage, triggerRename, triggerDelete } from '$lib/stores.svelte';
+  import { app, loadVaults, openVault, quickAddVault, quitApp, closeAllDialogs, openNextPage, openPrevPage, triggerRename, triggerDelete, goBack, goForward } from '$lib/stores.svelte';
   import VaultSwitcher from '$lib/VaultSwitcher.svelte';
   import PageList from '$lib/PageList.svelte';
   import ThemeToggle from '$lib/ThemeToggle.svelte';
@@ -67,6 +68,20 @@
       // Ignore other global shortcuts if any modal is open
       if (app.showSearch || app.showExitPrompt || app.showNewPageForm || app.showHelp || app.confirmDeleteSlug) return;
 
+      // 5. Go Back (Alt+Left)
+      if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'Left')) {
+        e.preventDefault();
+        goBack();
+        return;
+      }
+
+      // 6. Go Forward (Alt+Right)
+      if (e.altKey && (e.key === 'ArrowRight' || e.key === 'Right')) {
+        e.preventDefault();
+        goForward();
+        return;
+      }
+
       // ── Preview Mode Shortcuts ──────────────────────────────────────────────────
       if (app.editorTab === 'preview' && !isInputFocused()) {
         // Switch pages
@@ -126,10 +141,12 @@
   $effect(() => {
     // Synchronize Tauri window theme with app theme
     if (mode.current) {
+      const targetTheme = mode.current === 'dark' ? 'dark' : 'light';
       const win = getCurrentWindow();
-      win.setTheme(mode.current === 'dark' ? 'dark' : 'light').catch(() => {
-        // Ignore errors if not running in Tauri or permission denied
-      });
+      setTheme(targetTheme)
+        .then(() => win.setTheme(targetTheme))
+        .then(() => console.log('Window theme set to:', targetTheme))
+        .catch((e) => console.warn('Window theme sync failed:', e));
     }
   });
 
