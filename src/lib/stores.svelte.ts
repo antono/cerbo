@@ -33,6 +33,16 @@ export interface VaultsFile {
   activeVaultId: string | null;
 }
 
+export interface UiSettings {
+  theme: ThemeMode | null;
+  fontSize: number | null;
+  sidebarWidth: number | null;
+  rightSidebarVisible: boolean | null;
+  windowBounds: { width: number; height: number } | null;
+}
+
+export type ThemeMode = 'light' | 'dark' | 'system';
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 export const app = $state({
@@ -54,9 +64,10 @@ export const app = $state({
   // Layout state
   sidebarWidth: 260,
   backlinksWidth: 280,
-  backlinksVisible: true,
+  showRightSidebar: true,
 
   // UI state
+  theme: 'light' as ThemeMode,
   editorTab: 'preview' as 'write' | 'preview',
   showSearch: false,
   showExitPrompt: false,
@@ -67,6 +78,41 @@ export const app = $state({
   renameTitle: '',
   confirmDeleteSlug: null as string | null,
 });
+
+export async function loadUiSettings(): Promise<void> {
+  try {
+    const res = await invoke<UiSettings>('ui_settings_load');
+    if (res.theme) app.theme = res.theme;
+    if (typeof res.fontSize === 'number') {
+      // TODO: apply font size in editor UI when settings are exposed.
+    }
+    if (typeof res.sidebarWidth === 'number') {
+      app.sidebarWidth = res.sidebarWidth;
+    }
+    if (typeof res.rightSidebarVisible === 'boolean') {
+      app.showRightSidebar = res.rightSidebarVisible;
+    }
+    if (res.windowBounds) {
+      // Window bounds are applied in the desktop layer.
+    }
+  } catch (e) {
+    setError(String(e));
+  }
+}
+
+export async function saveUiSettings(): Promise<void> {
+  try {
+    await invoke('ui_settings_save', {
+      theme: app.theme,
+      fontSize: null,
+      sidebarWidth: app.sidebarWidth,
+      rightSidebarVisible: app.showRightSidebar,
+      windowBounds: null,
+    });
+  } catch (e) {
+    console.error('Failed to save UI settings:', e);
+  }
+}
 
 /**
  * Closes all transient UI elements (modals, forms, switchers).
@@ -97,6 +143,7 @@ export function pageSlugs(): string[] {
 
 export async function quitApp(): Promise<void> {
   try {
+    await saveUiSettings();
     await invoke('app_exit');
   } catch (e) {
     console.error('Failed to quit app:', e);

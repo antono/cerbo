@@ -3,7 +3,7 @@
   import { ModeWatcher, mode, setMode } from 'mode-watcher';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { Vault } from 'lucide-svelte';
-  import { app, loadVaults, openVault, quickAddVault, quitApp, closeAllDialogs, openNextPage, openPrevPage, triggerRename, triggerDelete, goBack, goForward } from '$lib/stores.svelte';
+  import { app, loadVaults, loadUiSettings, saveUiSettings, openVault, quickAddVault, quitApp, closeAllDialogs, openNextPage, openPrevPage, triggerRename, triggerDelete, goBack, goForward } from '$lib/stores.svelte';
   import VaultSwitcher from '$lib/VaultSwitcher.svelte';
   import PageList from '$lib/PageList.svelte';
   import ThemeToggle from '$lib/ThemeToggle.svelte';
@@ -22,6 +22,8 @@
   let mainEl = $state<HTMLElement | null>(null);
 
   onMount(async () => {
+    await loadUiSettings();
+    setMode(app.theme as 'light' | 'dark' | 'system');
     await loadVaults();
     if (app.activeVaultId) {
       await openVault(app.activeVaultId);
@@ -51,7 +53,10 @@
       // 3. Theme Toggle (Ctrl+T)
       if (isModKey(e, 't')) {
         e.preventDefault();
-        setMode(mode.current === 'light' ? 'dark' : 'light');
+        const nextMode = mode.current === 'light' ? 'dark' : 'light';
+        app.theme = nextMode;
+        setMode(nextMode);
+        saveUiSettings();
         return;
       }
 
@@ -140,6 +145,7 @@
   $effect(() => {
     // Synchronize Tauri window theme with app theme
     if (mode.current) {
+      app.theme = mode.current;
       const win = getCurrentWindow();
       win.setTheme(mode.current === 'dark' ? 'dark' : 'light').catch(() => {
         // Ignore errors if not running in Tauri or permission denied
@@ -169,6 +175,7 @@
     isResizingSidebar = false;
     window.removeEventListener('mousemove', handleSidebarResize);
     window.removeEventListener('mouseup', stopResizing);
+    saveUiSettings();
   }
 
   function toggleVaultSwitcher() {

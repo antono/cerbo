@@ -88,9 +88,29 @@ enum IndexCommands {
 
 fn get_context() -> Result<CerboContext, String> {
     let core = CoreContext::new()?;
-    Ok(CerboContext {
+    let ctx = CerboContext {
         config_dir: core.config_dir,
         cache_dir: core.cache_dir,
+    };
+    let _ = cerbo_core::migration::migrate_if_needed(&ctx)?;
+    if !ctx.config_dir.join("vaults.toml").exists() {
+        cerbo_core::config::save_config(&ctx, &cerbo_core::config::Config::default())?;
+    }
+    if !ctx.config_dir.join("ui.toml").exists() {
+        cerbo_core::ui_settings::save_ui_settings(
+            &ctx,
+            &cerbo_core::ui_settings::UiSettings::default(),
+        )?;
+    }
+    if !ctx.cache_dir.join("state.toml").exists() {
+        cerbo_core::state::save_state(&ctx, &cerbo_core::state::State::default())?;
+    }
+    let _ = cerbo_core::config::load_config(&ctx)?;
+    let _ = cerbo_core::ui_settings::load_ui_settings(&ctx)?;
+    let _ = cerbo_core::state::load_state(&ctx)?;
+    Ok(CerboContext {
+        config_dir: ctx.config_dir,
+        cache_dir: ctx.cache_dir,
     })
 }
 

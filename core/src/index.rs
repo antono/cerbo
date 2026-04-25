@@ -41,7 +41,7 @@ impl LinkIndex {
 }
 
 fn chrono_now() -> String {
-    format!("{:?}", std::time::SystemTime::now())
+    chrono::Utc::now().to_rfc3339()
 }
 
 // ---------------------------------------------------------------------------
@@ -277,5 +277,12 @@ mod tests {
         let svelte_entry = index.pages.get("svelte").unwrap();
         assert_eq!(svelte_entry.title, "Svelte");
         assert!(svelte_entry.links.is_empty());
+    }
+
+    #[test]
+    fn test_built_at_is_portable_timestamp() {
+        let index = LinkIndex::new(HashMap::new());
+        assert!(!index.built_at.starts_with("SystemTime {"));
+        assert!(index.built_at.contains('T'));
     }
 }

@@ -6,12 +6,16 @@ pub struct CerboContext {
     pub cache_dir: PathBuf,
 }
 
+pub mod config;
 pub mod context;
 pub mod index;
+pub mod migration;
 pub mod page;
 pub mod paths;
 pub mod rename;
 pub mod slug;
+pub mod state;
+pub mod ui_settings;
 pub mod vault;
 
 #[cfg(any(test, feature = "test-utils"))]

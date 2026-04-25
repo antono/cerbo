@@ -1,13 +1,13 @@
 <script lang="ts">
   import { mode, setMode } from 'mode-watcher';
   import { Sun, Moon } from 'lucide-svelte';
+  import { app, saveUiSettings } from '$lib/stores.svelte';
 
   function toggleTheme() {
-    if (mode.current === 'light') {
-      setMode('dark');
-    } else {
-      setMode('light');
-    }
+    const next = mode.current === 'light' ? 'dark' : 'light';
+    app.theme = next;
+    setMode(next);
+    saveUiSettings();
   }
 </script>
 
@@ -17,7 +17,7 @@
   title="Toggle theme"
   aria-label="Toggle theme"
 >
-  {#if mode.current === 'dark'}
+  {#if app.theme === 'dark'}
     <Moon size={18} />
   {:else}
     <Sun size={18} />

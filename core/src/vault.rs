@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
+use crate::config;
 use crate::paths;
+use crate::state;
 use crate::CerboContext;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,36 +14,25 @@ pub struct Vault {
     pub id: String,
     pub name: String,
     pub path: PathBuf,
-    pub last_open_page: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultsFile {
     pub vaults: Vec<Vault>,
-    pub active_vault_id: Option<String>,
-}
-
-fn vaults_path(ctx: &CerboContext) -> Result<PathBuf, String> {
-    Ok(paths::config_dir(ctx.config_dir.clone())?.join("vaults.json"))
 }
 
 pub fn load_vaults(ctx: &CerboContext) -> Result<VaultsFile, String> {
-    let p = vaults_path(ctx)?;
-    if !p.exists() {
-        return Ok(VaultsFile::default());
-    }
-    let raw = std::fs::read_to_string(&p).map_err(|e| format!("load_vaults read: {e}"))?;
-    serde_json::from_str(&raw).map_err(|e| format!("load_vaults parse: {e}"))
+    Ok(VaultsFile {
+        vaults: config::load_config(ctx)?.vaults,
+    })
 }
 
 pub fn save_vaults(ctx: &CerboContext, registry: &VaultsFile) -> Result<(), String> {
-    let p = vaults_path(ctx)?;
-    let tmp = p.with_extension("json.tmp");
-    let json = serde_json::to_string_pretty(registry)
-        .map_err(|e| format!("save_vaults serialize: {e}"))?;
-    std::fs::write(&tmp, json).map_err(|e| format!("save_vaults write tmp: {e}"))?;
-    std::fs::rename(&tmp, &p).map_err(|e| format!("save_vaults rename: {e}"))?;
+    let config = config::Config {
+        vaults: registry.vaults.clone(),
+    };
+    config::save_config(ctx, &config)?;
     Ok(())
 }
 
@@ -57,13 +48,14 @@ pub fn vault_add(ctx: &CerboContext, name: String, path: String) -> Result<Vault
         id: Uuid::new_v4().to_string(),
         name,
         path: path_buf,
-        last_open_page: None,
     };
     reg.vaults.push(vault.clone());
-    if reg.active_vault_id.is_none() {
-        reg.active_vault_id = Some(vault.id.clone());
-    }
     save_vaults(ctx, &reg)?;
+    let mut st = state::load_state(ctx)?;
+    if st.active_vault_id.is_none() {
+        st.active_vault_id = Some(vault.id.clone());
+        state::save_state(ctx, &st)?;
+    }
     Ok(vault)
 }
 
@@ -74,10 +66,12 @@ pub fn vault_remove(ctx: &CerboContext, id: String) -> Result<(), String> {
     if reg.vaults.len() == before {
         return Err(format!("vault_remove: vault not found: {id}"));
     }
-    if reg.active_vault_id.as_deref() == Some(&id) {
-        reg.active_vault_id = reg.vaults.first().map(|v| v.id.clone());
-    }
     save_vaults(ctx, &reg)?;
+    let mut st = state::load_state(ctx)?;
+    if st.active_vault_id.as_deref() == Some(&id) {
+        st.active_vault_id = reg.vaults.first().map(|v| v.id.clone());
+        state::save_state(ctx, &st)?;
+    }
     // Best-effort: delete cache dir
     if let Ok(cache) = paths::cache_dir(ctx.cache_dir.clone(), &id) {
         let _ = std::fs::remove_dir_all(cache);
@@ -90,12 +84,14 @@ pub fn vault_list(ctx: &CerboContext) -> Result<VaultsFile, String> {
 }
 
 pub fn vault_set_active(ctx: &CerboContext, id: String) -> Result<(), String> {
-    let mut reg = load_vaults(ctx)?;
+    let reg = load_vaults(ctx)?;
     if !reg.vaults.iter().any(|v| v.id == id) {
         return Err(format!("vault_set_active: vault not found: {id}"));
     }
-    reg.active_vault_id = Some(id);
-    save_vaults(ctx, &reg)
+    save_vaults(ctx, &reg)?;
+    let mut st = state::load_state(ctx)?;
+    st.active_vault_id = Some(id);
+    state::save_state(ctx, &st)
 }
 
 pub fn vault_update_last_page(
@@ -103,14 +99,18 @@ pub fn vault_update_last_page(
     vault_id: String,
     slug: Option<String>,
 ) -> Result<(), String> {
-    let mut reg = load_vaults(ctx)?;
+    let reg = load_vaults(ctx)?;
     let vault = reg
         .vaults
-        .iter_mut()
+        .iter()
         .find(|v| v.id == vault_id)
         .ok_or_else(|| format!("vault_update_last_page: vault not found: {vault_id}"))?;
-    vault.last_open_page = slug;
-    save_vaults(ctx, &reg)
+    let mut st = state::load_state(ctx)?;
+    st.vault_states
+        .entry(vault.id.clone())
+        .or_default()
+        .last_open_page = slug;
+    state::save_state(ctx, &st)
 }
 
 pub fn vault_relocate(ctx: &CerboContext, id: String, new_path: String) -> Result<(), String> {
@@ -165,6 +165,7 @@ fn vault_root(ctx: &CerboContext, vault_id: &str) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state;
     use std::fs;
     use tempfile::TempDir;
 
@@ -174,22 +175,65 @@ mod tests {
                 id: "a".into(),
                 name: "Test".into(),
                 path: dir.path().to_path_buf(),
-                last_open_page: None,
             }],
-            active_vault_id: Some("a".into()),
         }
     }
 
     #[test]
     fn round_trip_vaults_file() {
         let tmp = TempDir::new().unwrap();
-        let p = tmp.path().join("vaults.json");
+        let p = tmp.path().join("vaults.toml");
         let reg = make_vaults_file(&tmp);
-        let json = serde_json::to_string_pretty(&reg).unwrap();
-        fs::write(&p, &json).unwrap();
-        let loaded: VaultsFile = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
+        let toml = toml::to_string_pretty(&config::Config { vaults: reg.vaults }).unwrap();
+        fs::write(&p, &toml).unwrap();
+        let loaded = load_vaults(&CerboContext {
+            config_dir: tmp.path().to_path_buf(),
+            cache_dir: tmp.path().to_path_buf(),
+        })
+        .unwrap();
         assert_eq!(loaded.vaults.len(), 1);
         assert_eq!(loaded.vaults[0].id, "a");
-        assert_eq!(loaded.active_vault_id.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn vault_set_active_persists_to_state() {
+        let tmp = TempDir::new().unwrap();
+        let vault_dir = tmp.path().join("vault");
+        fs::create_dir_all(&vault_dir).unwrap();
+        let ctx = CerboContext {
+            config_dir: tmp.path().join("config"),
+            cache_dir: tmp.path().join("cache"),
+        };
+        let vault =
+            vault_add(&ctx, "Test".into(), vault_dir.to_string_lossy().to_string()).unwrap();
+
+        vault_set_active(&ctx, vault.id.clone()).unwrap();
+
+        let loaded = state::load_state(&ctx).unwrap();
+        assert_eq!(loaded.active_vault_id.as_deref(), Some(vault.id.as_str()));
+    }
+
+    #[test]
+    fn vault_update_last_page_persists_to_state() {
+        let tmp = TempDir::new().unwrap();
+        let vault_dir = tmp.path().join("vault");
+        fs::create_dir_all(&vault_dir).unwrap();
+        let ctx = CerboContext {
+            config_dir: tmp.path().join("config"),
+            cache_dir: tmp.path().join("cache"),
+        };
+        let vault =
+            vault_add(&ctx, "Test".into(), vault_dir.to_string_lossy().to_string()).unwrap();
+
+        vault_update_last_page(&ctx, vault.id.clone(), Some("page-slug".into())).unwrap();
+
+        let loaded = state::load_state(&ctx).unwrap();
+        assert_eq!(
+            loaded
+                .vault_states
+                .get(&vault.id)
+                .and_then(|s| s.last_open_page.as_deref()),
+            Some("page-slug")
+        );
     }
 }

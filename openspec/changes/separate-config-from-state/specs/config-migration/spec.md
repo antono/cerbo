@@ -15,7 +15,7 @@ The system SHALL detect and migrate legacy JSON config to TOML format when old c
 
 #### Scenario: Migration creates config.toml
 - **WHEN** migration runs with old vaults in JSON
-- **THEN** config.toml created with vaults array
+- **THEN** vaults.toml created with vaults array
 
 #### Scenario: Migration creates state.toml
 - **WHEN** migration runs with active_vault_id in JSON

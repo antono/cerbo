@@ -32,7 +32,7 @@ Problems:
 
 | File | Location | Persists | Contains |
 |------|----------|----------|-----------|
-| `config.toml` | `$XDG_CONFIG_DIR/cerbo/` | Yes | Vaults list |
+| `vaults.toml` | `$XDG_CONFIG_DIR/cerbo/` | Yes | Vaults list |
 | `ui.toml` | `$XDG_CONFIG_DIR/cerbo/` | Yes | Theme, font size, sidebar width |
 | `state.toml` | `$XDG_CACHE_DIR/cerbo/` | No | active_vault, last_open_page |
 | `<vault_id>/` | `$XDG_CACHE_DIR/cerbo/` | No | Search index, render cache |
@@ -43,7 +43,7 @@ Problems:
 
 ```
 on startup:
-1. Load config.toml (vaults)
+1. Load vaults.toml (vaults)
 2. Load ui.toml (UI settings)  [optional, use defaults if missing]
 3. Load state.toml          [optional, init empty if missing]
 4. Check for old vaults.json → if found, migrate and delete
@@ -57,7 +57,7 @@ on startup:
 1. Check if `$XDG_CONFIG_DIR/cerbo/vaults.json` exists
 2. If yes:
    - Parse JSON
-   - Write config.toml (vaults array)
+    - Write vaults.toml (vaults array)
    - Write state.toml (active_vault_id, per-vault last_open_page)
    - Write ui.toml (any UI settings found in JSON, else defaults)
    - Delete old vaults.json
@@ -142,4 +142,4 @@ Alternative considered: `toml` crate directly — rejected because `serde_toml` 
 ## Open Questions
 
 - Q: Should state.toml use `serde_hjson` or manual `toml`? → Use `toml::to_string` for simplicity
-- Q: Should we keep vaults list in separate file per vault? → No, single config.toml is simpler
+- Q: Should we keep vaults list in separate file per vault? → No, single vaults.toml is simpler

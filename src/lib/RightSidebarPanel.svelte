@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { app, loadBacklinks, openPage } from './stores.svelte';
+  import { app, loadBacklinks, openPage, saveUiSettings } from './stores.svelte';
 
   let { slug }: { slug: string } = $props();
 
@@ -11,13 +11,16 @@
   });
 </script>
 
-<aside class="backlinks-panel">
+<aside class="right-sidebar-panel">
   <div class="panel-header">
     <h3 class="panel-title">Backlinks</h3>
-    <button 
-      class="close-btn" 
-      onclick={() => app.backlinksVisible = false}
-      title="Hide backlinks"
+    <button
+      class="close-btn"
+      onclick={async () => {
+        app.showRightSidebar = false;
+        await saveUiSettings();
+      }}
+      title="Hide right sidebar"
     >
       ✕
     </button>
@@ -45,7 +48,7 @@
 </aside>
 
 <style>
-  .backlinks-panel {
+  .right-sidebar-panel {
     display: flex;
     flex-direction: column;
     height: 100%;

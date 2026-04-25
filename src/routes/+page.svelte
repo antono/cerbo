@@ -1,8 +1,8 @@
 <script lang="ts">
   import { List, Pencil } from 'lucide-svelte';
-  import { app, activeVault, quickAddVault } from '$lib/stores.svelte';
+  import { app, activeVault, quickAddVault, saveUiSettings } from '$lib/stores.svelte';
   import PageEditor from '$lib/PageEditor.svelte';
-  import BacklinksPanel from '$lib/BacklinksPanel.svelte';
+  import RightSidebarPanel from '$lib/RightSidebarPanel.svelte';
   import AttachmentsPanel from '$lib/AttachmentsPanel.svelte';
 
   // ── State ─────────────────────────────────────────────────────────────────────
@@ -48,10 +48,13 @@
         onSaving={(s) => isSaving = s}
       />
       
-      {#if !app.backlinksVisible}
-        <button 
-          class="show-backlinks-btn" 
-          onclick={() => app.backlinksVisible = true}
+        {#if !app.showRightSidebar}
+          <button 
+            class="show-backlinks-btn" 
+            onclick={() => {
+            app.showRightSidebar = true;
+            saveUiSettings();
+          }}
           title="Show panels"
         >
           <List size={16} />
@@ -60,7 +63,7 @@
     </div>
 
     <!-- Right Resize Handle -->
-    {#if app.backlinksVisible}
+    {#if app.showRightSidebar}
       <div 
         class="resize-handle" 
         onmousedown={startBacklinksResize}
@@ -75,7 +78,7 @@
         tabindex="-1"
       >
         <div class="panel-section">
-          <BacklinksPanel slug={app.currentSlug} />
+          <RightSidebarPanel slug={app.currentSlug} />
         </div>
         <div class="panel-section">
           <AttachmentsPanel slug={app.currentSlug} />

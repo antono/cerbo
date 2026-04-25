@@ -7,7 +7,7 @@ Cerbo currently stores both persistent configuration and ephemeral UI state in a
 ## What Changes
 
 - **BREAKING**: Config format changes from JSON to TOML
-- Store persistent config in `$XDG_CONFIG_DIR/cerbo/config.toml`
+- Store persistent config in `$XDG_CONFIG_DIR/cerbo/vaults.toml`
 - Store ephemeral UI state in `$XDG_CACHE_DIR/cerbo/state.toml` (active vault, last open page, window state)
 - Store per-vault cache in vault cache directory (search index, rendered content cache)
 - Add migration: detect old JSON config at `$XDG_CONFIG_DIR/cerbo/config.json` and migrate to TOML
