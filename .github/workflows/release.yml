@@ -1,0 +1,308 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semantic version bump to publish
+        type: choice
+        required: true
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      previous_tag: ${{ steps.version.outputs.previous_tag }}
+      tag: ${{ steps.version.outputs.tag }}
+      branch: ${{ steps.version.outputs.branch }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Resolve next release version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess
+
+          bump = os.environ["BUMP"]
+          tags = subprocess.check_output(
+              ["git", "tag", "--list", "v*", "--sort=-version:refname"],
+              text=True,
+          ).splitlines()
+          previous_tag = tags[0] if tags else "v0.0.0"
+          major, minor, patch = (int(part) for part in previous_tag.removeprefix("v").split("."))
+
+          if bump == "major":
+              major += 1
+              minor = 0
+              patch = 0
+          elif bump == "minor":
+              minor += 1
+              patch = 0
+          else:
+              patch += 1
+
+          version = f"{major}.{minor}.{patch}"
+          tag = f"v{version}"
+          branch = subprocess.check_output(
+              ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+              text=True,
+          ).strip()
+
+          output = os.environ["GITHUB_OUTPUT"]
+          with open(output, "a", encoding="utf-8") as fh:
+              fh.write(f"previous_tag={previous_tag}\n")
+              fh.write(f"version={version}\n")
+              fh.write(f"tag={tag}\n")
+              fh.write(f"branch={branch}\n")
+          PY
+
+      - name: Update version-bearing files
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+
+          for path in [
+              Path("core/Cargo.toml"),
+              Path("cli/Cargo.toml"),
+              Path("src-tauri/Cargo.toml"),
+          ]:
+              text = path.read_text(encoding="utf-8")
+              text, count = re.subn(
+                  r'(?m)^version = "[^"]+"$',
+                  f'version = "{version}"',
+                  text,
+                  count=1,
+              )
+              if count != 1:
+                  raise SystemExit(f"failed to update package version in {path}")
+              path.write_text(text, encoding="utf-8")
+
+          package_json = Path("package.json")
+          package_data = json.loads(package_json.read_text(encoding="utf-8"))
+          package_data["version"] = version
+          package_json.write_text(
+              json.dumps(package_data, indent=2) + "\n",
+              encoding="utf-8",
+          )
+
+          tauri_conf = Path("src-tauri/tauri.conf.json")
+          tauri_data = json.loads(tauri_conf.read_text(encoding="utf-8"))
+          tauri_data["version"] = version
+          tauri_conf.write_text(
+              json.dumps(tauri_data, indent=2) + "\n",
+              encoding="utf-8",
+          )
+
+          nix_file = Path("nix/pkgs.nix")
+          nix_text = nix_file.read_text(encoding="utf-8")
+          nix_text = re.sub(r'version = "[^"]+";', f'version = "{version}";', nix_text)
+          nix_file.write_text(nix_text, encoding="utf-8")
+          PY
+
+      - name: Commit and push version bump
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+        run: |
+          git add core/Cargo.toml cli/Cargo.toml src-tauri/Cargo.toml src-tauri/tauri.conf.json package.json nix/pkgs.nix
+          git commit -m "chore(release): bump version to ${VERSION}"
+          git push origin "HEAD:${BRANCH}"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "${TAG}"
+
+  build-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: prepare
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Build Linux release artifacts
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          nix develop --command bash -euo pipefail <<'BASH'
+          bun install --frozen-lockfile
+          cargo build --locked --release -p cerbo
+
+          dist_dir=dist/linux
+          mkdir -p "$dist_dir"
+          tar -C target/release -czf "$dist_dir/cerbo-${TAG#v}-linux-x86_64.tgz" cerbo
+
+          bun run tauri build --bundles appimage,deb,rpm
+          find src-tauri/target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} "$dist_dir/" \;
+          BASH
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release-artifacts
+          path: dist/linux/*
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    needs: prepare
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Build macOS release artifact
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          nix develop --command bash -euo pipefail <<'BASH'
+          bun install --frozen-lockfile
+          bun run tauri build --bundles dmg
+
+          dist_dir=dist/macos
+          mkdir -p "$dist_dir"
+          find src-tauri/target/release/bundle/dmg -type f -name '*.dmg' -exec cp {} "$dist_dir/" \;
+          BASH
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release-artifact
+          path: dist/macos/*
+          if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs:
+      - prepare
+      - build-linux
+      - build-macos
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate release notes
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PREVIOUS_TAG: ${{ needs.prepare.outputs.previous_tag }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          repo = os.environ["REPO"]
+          tag = os.environ["TAG"]
+          previous_tag = os.environ["PREVIOUS_TAG"]
+
+          generated = subprocess.check_output(
+              [
+                  "gh",
+                  "api",
+                  f"repos/{repo}/releases/generate-notes",
+                  "-f",
+                  f"tag_name={tag}",
+                  "-f",
+                  f"previous_tag_name={previous_tag}",
+              ],
+              text=True,
+          )
+          generated = json.loads(generated)["body"]
+
+          body = "\n".join(
+              [
+                  "## Installation",
+                  "",
+                  "### Nix users",
+                  f"- CLI: `nix profile install github:{repo}#cerbo`",
+                  f"- Desktop: `nix profile install github:{repo}#cerbo-desktop`",
+                  "",
+                  "### Debian users",
+                  "- Install the `.deb` artifact with `sudo dpkg -i <artifact>.deb`",
+                  "",
+                  "### Red Hat users",
+                  "- Install the `.rpm` artifact with `sudo rpm -Uvh <artifact>.rpm`",
+                  "",
+                  "### macOS users",
+                  "- Open the `.dmg` artifact and drag Cerbo into Applications.",
+                  "",
+                  generated,
+              ]
+          )
+
+          Path("release-notes.md").write_text(body, encoding="utf-8")
+          PY
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" --title "${TAG}" --notes-file release-notes.md
+          else
+            gh release create "${TAG}" --target "${TAG}" --title "${TAG}" --notes-file release-notes.md
+          fi
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          gh release upload "${TAG}" release-assets/* --clobber

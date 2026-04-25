@@ -35,6 +35,17 @@
           inherit cerbo cerbo-frontend cerbo-desktop;
         };
 
+        checks.release-workflow =
+          let
+            src = builtins.path { path = ./.; name = "cerbo-src"; };
+          in
+          pkgs.runCommand "release-workflow-check" {
+            nativeBuildInputs = [ pkgs.actionlint ];
+          } ''
+          actionlint ${src}/.github/workflows/release.yml
+          touch $out
+          '';
+
         devShells.default = import ./nix/devshell.nix {
           inherit pkgs tauri-deps dev-deps;
         };

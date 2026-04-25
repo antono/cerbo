@@ -57,3 +57,10 @@ The system SHALL enforce a 20 minute timeout on each release job.
 #### Scenario: Release job hangs
 - **WHEN** any job in the release workflow exceeds 20 minutes
 - **THEN** GitHub Actions SHALL terminate the job
+
+### Requirement: Local workflow validation
+The system SHALL provide a flake-backed local validation path for the release workflow so maintainers can test workflow commands before pushing.
+
+#### Scenario: Maintainer validates the workflow locally
+- **WHEN** a maintainer runs the repo's flake validation command in the Nix environment
+- **THEN** the workflow-related commands and checks SHALL run locally with the same dependencies used in CI
