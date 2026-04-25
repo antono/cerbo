@@ -120,6 +120,7 @@ pub fn run() {
             ui_settings_save,
             window_bounds_load,
             window_bounds_save,
+            state_load,
             app_exit,
         ])
         .run(tauri::generate_context!())
@@ -129,6 +130,12 @@ pub fn run() {
 #[tauri::command]
 fn app_exit(app: tauri::AppHandle) {
     app.exit(0);
+}
+
+#[tauri::command]
+fn state_load(app: tauri::AppHandle) -> Result<cerbo_core::state::State, String> {
+    let ctx = get_context(&app)?;
+    cerbo_core::state::load_state(&ctx)
 }
 
 #[tauri::command]

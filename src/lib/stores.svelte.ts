@@ -18,6 +18,11 @@ export interface Vault {
   lastOpenPage: string | null;
 }
 
+interface AppStateFile {
+  activeVaultId: string | null;
+  vaultStates: Record<string, { lastOpenPage: string | null }>;
+}
+
 export interface PageMeta {
   slug: string;
   title: string;
@@ -158,6 +163,11 @@ export async function loadVaults(): Promise<void> {
     const res = await invoke<VaultsFile>('vault_list');
     app.vaults = res.vaults;
     app.activeVaultId = res.activeVaultId;
+
+    const state = await invoke<AppStateFile>('state_load');
+    for (const vault of app.vaults) {
+      vault.lastOpenPage = state.vaultStates[vault.id]?.lastOpenPage ?? null;
+    }
 
     // Fallback if activeVaultId is invalid
     if (app.activeVaultId && !app.vaults.find((v) => v.id === app.activeVaultId)) {
