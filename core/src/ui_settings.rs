@@ -90,4 +90,27 @@ mod tests {
 
         assert!(config_dir.join("ui.toml").exists());
     }
+
+    #[test]
+    fn save_ui_settings_persists_sidebar_width() {
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("config");
+        let ctx = CerboContext {
+            config_dir: config_dir.clone(),
+            cache_dir: tmp.path().join("cache"),
+        };
+
+        let settings = UiSettings {
+            theme: Some("dark".into()),
+            font_size: Some(16),
+            sidebar_width: Some(320),
+            right_sidebar_visible: Some(false),
+            window_bounds: None,
+        };
+        save_ui_settings(&ctx, &settings).unwrap();
+
+        let loaded = load_ui_settings(&ctx).unwrap();
+        assert_eq!(loaded.sidebar_width, Some(320));
+        assert_eq!(loaded.right_sidebar_visible, Some(false));
+    }
 }

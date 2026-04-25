@@ -45,8 +45,8 @@
 ## 8. Test and Verify
 
 - [x] 8.1 Test fresh start creates vaults.toml, ui.toml, state.toml
-- [ ] 8.2 Test migration from old vaults.json works
-- [ ] 8.3 Test active vault persists to state.toml
-- [ ] 8.4 Test last_open_page persists to state.toml
-- [ ] 8.5 Test UI settings persist to ui.toml
-- [ ] 8.6 Verify files in correct XDG directories
+- [x] 8.2 Test migration from old vaults.json works
+- [x] 8.3 Test active vault persists to state.toml
+- [x] 8.4 Test last_open_page persists to state.toml
+- [x] 8.5 Test UI settings persist to ui.toml
+- [x] 8.6 Verify files in correct XDG directories

@@ -61,4 +61,35 @@ mod tests {
         assert_eq!(config.vaults.len(), 1);
         assert_eq!(config.vaults[0].id, "vault-1");
     }
+
+    #[test]
+    fn migrate_legacy_json_creates_state_file() {
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("config");
+        let cache_dir = tmp.path().join("cache");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&cache_dir).unwrap();
+
+        let legacy = vault::VaultsFile {
+            vaults: vec![vault::Vault {
+                id: "vault-1".into(),
+                name: "Vault One".into(),
+                path: tmp.path().join("vault-1"),
+            }],
+        };
+        std::fs::write(
+            config_dir.join("vaults.json"),
+            serde_json::to_string_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        let ctx = CerboContext {
+            config_dir,
+            cache_dir: cache_dir.clone(),
+        };
+
+        migrate_if_needed(&ctx).unwrap();
+
+        assert!(cache_dir.join("state.toml").exists());
+    }
 }

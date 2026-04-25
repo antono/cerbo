@@ -236,4 +236,21 @@ mod tests {
             Some("page-slug")
         );
     }
+
+    #[test]
+    fn vault_add_persists_active_vault_to_state() {
+        let tmp = TempDir::new().unwrap();
+        let vault_dir = tmp.path().join("vault");
+        fs::create_dir_all(&vault_dir).unwrap();
+        let ctx = CerboContext {
+            config_dir: tmp.path().join("config"),
+            cache_dir: tmp.path().join("cache"),
+        };
+
+        let vault =
+            vault_add(&ctx, "Test".into(), vault_dir.to_string_lossy().to_string()).unwrap();
+
+        let loaded = state::load_state(&ctx).unwrap();
+        assert_eq!(loaded.active_vault_id.as_deref(), Some(vault.id.as_str()));
+    }
 }
