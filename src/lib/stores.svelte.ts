@@ -162,12 +162,13 @@ export async function loadVaults(): Promise<void> {
   try {
     const res = await invoke<VaultsFile>('vault_list');
     app.vaults = res.vaults;
-    app.activeVaultId = res.activeVaultId;
 
     const state = await invoke<AppStateFile>('state_load');
     for (const vault of app.vaults) {
       vault.lastOpenPage = state.vaultStates[vault.id]?.lastOpenPage ?? null;
     }
+
+    app.activeVaultId = state.activeVaultId ?? res.activeVaultId;
 
     // Fallback if activeVaultId is invalid
     if (app.activeVaultId && !app.vaults.find((v) => v.id === app.activeVaultId)) {
