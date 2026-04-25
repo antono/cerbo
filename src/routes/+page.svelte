@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Eye, Pencil } from 'lucide-svelte';
+  import { List, Pencil } from 'lucide-svelte';
   import { app, activeVault, quickAddVault } from '$lib/stores.svelte';
   import PageEditor from '$lib/PageEditor.svelte';
   import BacklinksPanel from '$lib/BacklinksPanel.svelte';
@@ -54,7 +54,7 @@
           onclick={() => app.backlinksVisible = true}
           title="Show panels"
         >
-          <Eye size={16} />
+          <List size={16} />
         </button>
       {/if}
     </div>
