@@ -43,7 +43,7 @@ let
       pkgs.gobject-introspection
       pkgs.jq
     ];
-    buildInputs = tauri-deps;
+    buildInputs = tauri-deps ++ [ pkgs.gtk3 pkgs.gsettings-desktop-schemas pkgs.adwaita-icon-theme ];
 
     postPatch = ''
       # Nullify devUrl and point frontendDist to the built frontend in the Nix store

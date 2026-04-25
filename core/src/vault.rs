@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
+use walkdir::WalkDir;
 
 use crate::paths;
 use crate::CerboContext;
@@ -37,8 +38,8 @@ pub fn load_vaults(ctx: &CerboContext) -> Result<VaultsFile, String> {
 pub fn save_vaults(ctx: &CerboContext, registry: &VaultsFile) -> Result<(), String> {
     let p = vaults_path(ctx)?;
     let tmp = p.with_extension("json.tmp");
-    let json =
-        serde_json::to_string_pretty(registry).map_err(|e| format!("save_vaults serialize: {e}"))?;
+    let json = serde_json::to_string_pretty(registry)
+        .map_err(|e| format!("save_vaults serialize: {e}"))?;
     std::fs::write(&tmp, json).map_err(|e| format!("save_vaults write tmp: {e}"))?;
     std::fs::rename(&tmp, &p).map_err(|e| format!("save_vaults rename: {e}"))?;
     Ok(())
@@ -97,9 +98,16 @@ pub fn vault_set_active(ctx: &CerboContext, id: String) -> Result<(), String> {
     save_vaults(ctx, &reg)
 }
 
-pub fn vault_update_last_page(ctx: &CerboContext, vault_id: String, slug: Option<String>) -> Result<(), String> {
+pub fn vault_update_last_page(
+    ctx: &CerboContext,
+    vault_id: String,
+    slug: Option<String>,
+) -> Result<(), String> {
     let mut reg = load_vaults(ctx)?;
-    let vault = reg.vaults.iter_mut().find(|v| v.id == vault_id)
+    let vault = reg
+        .vaults
+        .iter_mut()
+        .find(|v| v.id == vault_id)
         .ok_or_else(|| format!("vault_update_last_page: vault not found: {vault_id}"))?;
     vault.last_open_page = slug;
     save_vaults(ctx, &reg)
@@ -129,6 +137,28 @@ pub fn get_vault_path(ctx: &CerboContext, vault_id: &str) -> Option<PathBuf> {
         .into_iter()
         .find(|v| v.id == vault_id)
         .map(|v| v.path)
+}
+
+pub fn vault_page_count(ctx: &CerboContext, vault_id: &str) -> Result<usize, String> {
+    let root = vault_root(ctx, vault_id)?;
+    let count = WalkDir::new(&root)
+        .max_depth(1)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_dir())
+        .filter(|e| e.path().join("page.md").exists())
+        .count();
+    Ok(count)
+}
+
+fn vault_root(ctx: &CerboContext, vault_id: &str) -> Result<PathBuf, String> {
+    let reg = load_vaults(ctx)?;
+    let vault = reg
+        .vaults
+        .iter()
+        .find(|v| v.id == vault_id)
+        .ok_or_else(|| format!("vault not found: {vault_id}"))?;
+    Ok(vault.path.clone())
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────

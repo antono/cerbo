@@ -5,16 +5,15 @@ mod rename;
 mod slug;
 mod vault;
 
+use cerbo_core::context::CoreContext;
 use cerbo_core::CerboContext;
-use tauri::Manager;
 use index::WatcherState;
 
-pub fn get_context(app: &tauri::AppHandle) -> Result<CerboContext, String> {
-    let config_dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+pub fn get_context(_app: &tauri::AppHandle) -> Result<CerboContext, String> {
+    let core = CoreContext::new()?;
     Ok(CerboContext {
-        config_dir,
-        cache_dir,
+        config_dir: core.config_dir,
+        cache_dir: core.cache_dir,
     })
 }
 

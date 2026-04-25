@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Eye, Pencil } from 'lucide-svelte';
-  import { app, activeVault } from '$lib/stores.svelte';
+  import { app, activeVault, quickAddVault } from '$lib/stores.svelte';
   import PageEditor from '$lib/PageEditor.svelte';
   import BacklinksPanel from '$lib/BacklinksPanel.svelte';
   import AttachmentsPanel from '$lib/AttachmentsPanel.svelte';
@@ -90,6 +90,9 @@
 {:else}
   <div class="empty-state">
     <p>Welcome to Cerbo. Add a vault to begin.</p>
+    <button class="add-vault-btn" onclick={quickAddVault}>
+      Add vault to begin
+    </button>
   </div>
 {/if}
 
@@ -208,5 +211,29 @@
     color: var(--muted-foreground);
     gap: 1rem;
     font-size: 0.95rem;
+  }
+
+  .add-vault-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem 1.25rem;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+  }
+
+  .add-vault-btn:hover {
+    background: var(--primary-hover);
+  }
+
+  .add-vault-btn:active {
+    transform: translateY(1px);
   }
 </style>

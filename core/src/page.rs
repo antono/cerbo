@@ -2,8 +2,8 @@ use serde::Serialize;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
-use crate::{slug::derive_slug, vault::load_vaults};
 use crate::CerboContext;
+use crate::{slug::derive_slug, vault::load_vaults};
 
 #[derive(Debug, Serialize)]
 pub struct PageMeta {
@@ -39,8 +39,7 @@ pub fn page_create(ctx: &CerboContext, vault_id: String, title: String) -> Resul
     }
     std::fs::create_dir_all(&dir).map_err(|e| format!("page_create mkdir: {e}"))?;
     let content = format!("# {title}\n");
-    std::fs::write(dir.join("page.md"), content)
-        .map_err(|e| format!("page_create write: {e}"))?;
+    std::fs::write(dir.join("page.md"), content).map_err(|e| format!("page_create write: {e}"))?;
     Ok(slug)
 }
 
@@ -196,7 +195,8 @@ pub fn attachment_upload(
     let root = vault_root(ctx, &vault_id)?;
     let assets_dir = root.join(&slug).join("assets");
     if !assets_dir.exists() {
-        std::fs::create_dir_all(&assets_dir).map_err(|e| format!("attachment_upload mkdir: {e}"))?;
+        std::fs::create_dir_all(&assets_dir)
+            .map_err(|e| format!("attachment_upload mkdir: {e}"))?;
     }
 
     let dest_path = assets_dir.join(&filename);
@@ -337,7 +337,7 @@ mod tests {
         // ── We need a CerboContext for page_write, but wait ──
         // page_write calls vault_root which loads from real config.
         // Let's use ensure_page_has_h1 directly for testing the core logic.
-        
+
         let modified = ensure_page_has_h1(&page_md, slug).unwrap();
         assert!(modified);
 
@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn test_sync_markdown_titles() {
         let (tmp, root) = setup_vault();
-        
+
         // 1. Create page with H1
         let dir1 = root.join("has-title");
         fs::create_dir_all(&dir1).unwrap();
@@ -397,7 +397,9 @@ mod tests {
         };
 
         // Add a vault
-        let vault = crate::vault::vault_add(&ctx, "Test".into(), vault_dir.to_str().unwrap().into()).unwrap();
+        let vault =
+            crate::vault::vault_add(&ctx, "Test".into(), vault_dir.to_str().unwrap().into())
+                .unwrap();
         let slug = page_create(&ctx, vault.id.clone(), "Test Page".into()).unwrap();
 
         // 1. List (should be empty)

@@ -83,8 +83,8 @@ pub fn extract_title(content: &str, slug: &str) -> String {
 pub fn build_index(vault_path: &Path) -> Result<LinkIndex, String> {
     let mut pages: HashMap<String, PageEntry> = HashMap::new();
 
-    let entries = std::fs::read_dir(vault_path)
-        .map_err(|e| format!("build_index read_dir: {e}"))?;
+    let entries =
+        std::fs::read_dir(vault_path).map_err(|e| format!("build_index read_dir: {e}"))?;
 
     for entry in entries.flatten() {
         let slug_path = entry.path();
@@ -117,8 +117,8 @@ pub fn load_index(ctx: &CerboContext, vault_id: &str) -> Option<LinkIndex> {
 
 pub fn save_index(ctx: &CerboContext, vault_id: &str, index: &LinkIndex) -> Result<(), String> {
     let path = index_path(ctx, vault_id)?;
-    let data = serde_json::to_string_pretty(index)
-        .map_err(|e| format!("save_index serialize: {e}"))?;
+    let data =
+        serde_json::to_string_pretty(index).map_err(|e| format!("save_index serialize: {e}"))?;
     std::fs::write(&path, data).map_err(|e| format!("save_index write: {e}"))?;
     Ok(())
 }

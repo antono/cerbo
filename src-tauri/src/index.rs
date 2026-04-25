@@ -1,9 +1,9 @@
-use cerbo_core::index::{self, BacklinkEntry};
-use tauri::{AppHandle, State};
 use crate::get_context;
-use std::path::PathBuf;
-use notify::Watcher;
 pub use cerbo_core::index::WatcherState;
+use cerbo_core::index::{self, BacklinkEntry};
+use notify::Watcher;
+use std::path::PathBuf;
+use tauri::{AppHandle, State};
 
 #[tauri::command]
 #[allow(non_snake_case)]
@@ -13,8 +13,8 @@ pub fn backlinks_get(
     slug: String,
 ) -> Result<Vec<BacklinkEntry>, String> {
     let ctx = get_context(&app)?;
-    let index = index::load_index(&ctx, &vaultId)
-        .ok_or_else(|| format!("No index for vault {vaultId}"))?;
+    let index =
+        index::load_index(&ctx, &vaultId).ok_or_else(|| format!("No index for vault {vaultId}"))?;
     Ok(index::compute_backlinks(&index, &slug))
 }
 

@@ -1,6 +1,6 @@
 use cerbo_core::CerboContext;
+use cerbo_core::context::CoreContext;
 use clap::{Parser, Subcommand};
-use directories::ProjectDirs;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -31,6 +31,8 @@ enum Commands {
     },
     /// Watch vaults for changes
     Watch,
+    /// Show configuration and vault info
+    Info,
 }
 
 #[derive(Subcommand)]
@@ -85,12 +87,10 @@ enum IndexCommands {
 }
 
 fn get_context() -> Result<CerboContext, String> {
-    let proj_dirs = ProjectDirs::from("io", "cerbo", "cerbo")
-        .ok_or_else(|| "Could not determine project directories".to_string())?;
-    
+    let core = CoreContext::new()?;
     Ok(CerboContext {
-        config_dir: proj_dirs.config_dir().to_path_buf(),
-        cache_dir: proj_dirs.cache_dir().to_path_buf(),
+        config_dir: core.config_dir,
+        cache_dir: core.cache_dir,
     })
 }
 
@@ -210,6 +210,34 @@ async fn main() -> Result<(), String> {
             // Keep the process alive
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            }
+        }
+        Commands::Info => {
+            use cerbo_core::vault;
+            use std::path::PathBuf;
+            
+            fn display_path(p: &PathBuf) -> String {
+                if let Ok(home) = std::env::var("HOME") {
+                    if let Some(rest) = p.to_str().and_then(|s| s.strip_prefix(&home)) {
+                        return format!("~{}", rest);
+                    }
+                }
+                p.to_string_lossy().to_string()
+            }
+            
+            println!("Config:  {}", display_path(&ctx.config_dir));
+            println!("Cache:   {}", display_path(&ctx.cache_dir));
+            println!();
+            
+            let reg = vault::vault_list(&ctx)?;
+            if reg.vaults.is_empty() {
+                println!("No vaults registered");
+            } else {
+                println!("Vaults: {} registered", reg.vaults.len());
+                for v in &reg.vaults {
+                    let count = vault::vault_page_count(&ctx, &v.id).unwrap_or(0);
+                    println!("├── {} ({}) - {} pages", v.name, display_path(&v.path), count);
+                }
             }
         }
     }

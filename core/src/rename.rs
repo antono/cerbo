@@ -26,15 +26,13 @@ pub fn page_rename(
     if new_slug != old_slug {
         let new_dir = vault_path.join(&new_slug);
         if new_dir.exists() {
-            return Err(format!(
-                "page_rename: slug already exists: {new_slug}"
-            ));
+            return Err(format!("page_rename: slug already exists: {new_slug}"));
         }
     }
 
     // Retrieve old title from page before rename (for link rewriting)
     let old_page = vault_path.join(&old_slug).join("page.md");
-    
+
     // Use provided content if any, otherwise read from disk
     let base_content = if let Some(c) = content {
         c
@@ -42,7 +40,7 @@ pub fn page_rename(
         std::fs::read_to_string(&old_page)
             .map_err(|e| format!("page_rename: read old page: {e}"))?
     };
-    
+
     let old_title = extract_title_from_content(&base_content, &old_slug);
 
     // Rename folder
@@ -72,7 +70,13 @@ pub fn page_rename(
         get_all_slugs(&vault_path)?
     };
 
-    rewrite_links_in_pages(&vault_path, &affected_slugs, &old_title, &new_title, &new_slug)?;
+    rewrite_links_in_pages(
+        &vault_path,
+        &affected_slugs,
+        &old_title,
+        &new_title,
+        &new_slug,
+    )?;
 
     // Rebuild link index
     let idx = index::build_index(&vault_path)?;
@@ -83,8 +87,8 @@ pub fn page_rename(
 
 fn get_all_slugs(vault_path: &Path) -> Result<Vec<String>, String> {
     let mut slugs = Vec::new();
-    let entries = std::fs::read_dir(vault_path)
-        .map_err(|e| format!("get_all_slugs: read_dir: {e}"))?;
+    let entries =
+        std::fs::read_dir(vault_path).map_err(|e| format!("get_all_slugs: read_dir: {e}"))?;
     for entry in entries.flatten() {
         if entry.path().is_dir() {
             if let Some(s) = entry.file_name().to_str() {
@@ -241,35 +245,46 @@ mod tests {
         use std::fs;
 
         let fixture = create_fixture_vault().unwrap();
-        
+
         // Rename Page B -> New Page B
-        let new_slug = page_rename(&fixture.ctx, fixture.vault_id.clone(), "page-b".into(), "New Page B".into(), None).unwrap();
+        let new_slug = page_rename(
+            &fixture.ctx,
+            fixture.vault_id.clone(),
+            "page-b".into(),
+            "New Page B".into(),
+            None,
+        )
+        .unwrap();
         assert_eq!(new_slug, "new-page-b");
 
         // Verify Page A (Linked to Page B)
-        let a_content = fs::read_to_string(fixture.vault_path.join("page-a").join("page.md")).unwrap();
+        let a_content =
+            fs::read_to_string(fixture.vault_path.join("page-a").join("page.md")).unwrap();
         assert!(a_content.contains("[[New Page B]]"));
         assert!(!a_content.contains("[[Page B]]"));
 
         // Verify Page C (Linked to page b - case insensitive)
-        let c_content = fs::read_to_string(fixture.vault_path.join("page-c").join("page.md")).unwrap();
+        let c_content =
+            fs::read_to_string(fixture.vault_path.join("page-c").join("page.md")).unwrap();
         assert!(c_content.contains("[[New Page B]]"));
         assert!(!c_content.contains("[[page b]]"));
 
         // Verify Page E (Linked to Page B and Page A)
-        let e_content = fs::read_to_string(fixture.vault_path.join("page-e").join("page.md")).unwrap();
+        let e_content =
+            fs::read_to_string(fixture.vault_path.join("page-e").join("page.md")).unwrap();
         assert!(e_content.contains("[[New Page B]]"));
         assert!(e_content.contains("[[Page A]]"));
 
         // Verify Page D (No links)
-        let d_content = fs::read_to_string(fixture.vault_path.join("page-d").join("page.md")).unwrap();
+        let d_content =
+            fs::read_to_string(fixture.vault_path.join("page-d").join("page.md")).unwrap();
         assert!(!d_content.contains("New Page B"));
 
         // Verify Index updated
         let idx = index::load_index(&fixture.ctx, &fixture.vault_id).unwrap();
         assert!(idx.pages.contains_key("new-page-b"));
         assert!(!idx.pages.contains_key("page-b"));
-        
+
         let a_entry = idx.pages.get("page-a").unwrap();
         assert!(a_entry.links.contains(&"New Page B".to_string()));
     }

@@ -1,4 +1,4 @@
-use crate::{CerboContext, vault, page, index};
+use crate::{index, page, vault, CerboContext};
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -38,18 +38,33 @@ pub fn create_fixture_vault() -> Result<FixtureVault, String> {
 
     // Create Page A (Links to B)
     let a_slug = page::page_create(&ctx, vault_id.clone(), "Page A".into())?;
-    page::page_write(&ctx, vault_id.clone(), a_slug, "# Page A\n\nLink to [[Page B]].".into())?;
+    page::page_write(
+        &ctx,
+        vault_id.clone(),
+        a_slug,
+        "# Page A\n\nLink to [[Page B]].".into(),
+    )?;
 
     // Create Page C (Links to B case-insensitively)
     let c_slug = page::page_create(&ctx, vault_id.clone(), "Page C".into())?;
-    page::page_write(&ctx, vault_id.clone(), c_slug, "# Page C\n\nLink to [[page b]].".into())?;
+    page::page_write(
+        &ctx,
+        vault_id.clone(),
+        c_slug,
+        "# Page C\n\nLink to [[page b]].".into(),
+    )?;
 
     // Create Page D (No links to B)
     page::page_create(&ctx, vault_id.clone(), "Page D".into())?;
 
     // Create Page E (Links to B and A)
     let e_slug = page::page_create(&ctx, vault_id.clone(), "Page E".into())?;
-    page::page_write(&ctx, vault_id.clone(), e_slug, "# Page E\n\nLinks to [[Page B]] and [[Page A]].".into())?;
+    page::page_write(
+        &ctx,
+        vault_id.clone(),
+        e_slug,
+        "# Page E\n\nLinks to [[Page B]] and [[Page A]].".into(),
+    )?;
 
     // Build index initially
     let idx = index::build_index(&vault_path)?;

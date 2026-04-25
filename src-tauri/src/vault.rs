@@ -1,6 +1,6 @@
+use crate::get_context;
 use cerbo_core::vault::{self, Vault, VaultsFile};
 use tauri::AppHandle;
-use crate::get_context;
 
 #[tauri::command]
 pub fn vault_add(app: AppHandle, name: String, path: String) -> Result<Vault, String> {
@@ -24,7 +24,11 @@ pub fn vault_set_active(app: AppHandle, id: String) -> Result<(), String> {
 
 #[tauri::command]
 #[allow(non_snake_case)]
-pub fn vault_update_last_page(app: AppHandle, vaultId: String, slug: Option<String>) -> Result<(), String> {
+pub fn vault_update_last_page(
+    app: AppHandle,
+    vaultId: String,
+    slug: Option<String>,
+) -> Result<(), String> {
     vault::vault_update_last_page(&get_context(&app)?, vaultId, slug)
 }
 
