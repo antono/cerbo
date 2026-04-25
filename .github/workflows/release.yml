@@ -167,7 +167,7 @@ jobs:
         run: |
           nix develop --command bash -euo pipefail <<'BASH'
           bun install --frozen-lockfile
-          cargo build --locked --release -p cerbo
+          cargo build --release -p cerbo
 
           dist_dir=dist/linux
           mkdir -p "$dist_dir"

@@ -32,9 +32,9 @@
         src = builtins.path { path = ./.; name = "cerbo-src"; };
         releaseWorkflowCheck = pkgs.writeShellApplication {
           name = "release-workflow-check";
-          runtimeInputs = [ pkgs.nix pkgs.actionlint ];
+          runtimeInputs = [ pkgs.actionlint ];
           text = ''
-            nix develop --command actionlint ${src}/.github/workflows/release.yml
+            actionlint ${src}/.github/workflows/release.yml
           '';
         };
       in
@@ -46,7 +46,7 @@
         };
 
         checks.release-workflow = pkgs.runCommand "release-workflow-check" {
-          nativeBuildInputs = [ pkgs.nix ];
+          nativeBuildInputs = [ pkgs.actionlint ];
         } ''
           ${releaseWorkflowCheck}/bin/release-workflow-check
           touch $out
