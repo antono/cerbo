@@ -16,7 +16,7 @@
 - [x] 3.2 Build the Linux `AppImage` artifact
 - [x] 3.3 Build the Linux `deb` artifact
 - [x] 3.4 Build the Linux `rpm` artifact
-- [x] 3.5 Build the macOS `dmg` artifact
+- [ ] 3.5 Build the macOS `dmg` artifact (disabled for now)
 
 ## 4. Release publication
 

@@ -132,13 +132,16 @@ jobs:
           nix_file.write_text(nix_text, encoding="utf-8")
           PY
 
+      - name: Refresh Cargo lockfile
+        run: cargo generate-lockfile
+
       - name: Commit and push version bump
         env:
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
           BRANCH: ${{ steps.version.outputs.branch }}
         run: |
-          git add core/Cargo.toml cli/Cargo.toml src-tauri/Cargo.toml src-tauri/tauri.conf.json package.json nix/pkgs.nix
+          git add Cargo.lock core/Cargo.toml cli/Cargo.toml src-tauri/Cargo.toml src-tauri/tauri.conf.json package.json nix/pkgs.nix
           git commit -m "chore(release): bump version to ${VERSION}"
           git push origin "HEAD:${BRANCH}"
           git tag -a "${TAG}" -m "Release ${TAG}"
@@ -181,47 +184,12 @@ jobs:
           path: dist/linux/*
           if-no-files-found: error
 
-  build-macos:
-    runs-on: macos-latest
-    timeout-minutes: 20
-    needs: prepare
-    steps:
-      - name: Check out release tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.tag }}
-          fetch-depth: 0
-
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@v16
-
-      - name: Build macOS release artifact
-        env:
-          TAG: ${{ needs.prepare.outputs.tag }}
-        run: |
-          nix develop --command bash -euo pipefail <<'BASH'
-          bun install --frozen-lockfile
-          bun run tauri build --bundles dmg
-
-          dist_dir=dist/macos
-          mkdir -p "$dist_dir"
-          find src-tauri/target/release/bundle/dmg -type f -name '*.dmg' -exec cp {} "$dist_dir/" \;
-          BASH
-
-      - name: Upload macOS artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-release-artifact
-          path: dist/macos/*
-          if-no-files-found: error
-
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs:
       - prepare
       - build-linux
-      - build-macos
     steps:
       - name: Check out release tag
         uses: actions/checkout@v4

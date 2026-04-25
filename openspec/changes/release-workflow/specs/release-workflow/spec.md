@@ -22,11 +22,7 @@ The system SHALL build Linux release artifacts for `tgz`, `AppImage`, `deb`, and
 - **THEN** the workflow SHALL produce `tgz`, `AppImage`, `deb`, and `rpm` artifacts for upload
 
 ### Requirement: macOS release artifact
-The system SHALL build a macOS `dmg` release artifact.
-
-#### Scenario: macOS artifact is built
-- **WHEN** the workflow runs on a macOS runner for a release tag
-- **THEN** the workflow SHALL produce a `dmg` artifact for upload
+The system SHOULD build a macOS `dmg` release artifact in a follow-up change once the Nix packaging issue is resolved.
 
 ### Requirement: PR-based release notes
 The system SHALL generate release notes from merged pull requests between the previous tag and the new tag.

@@ -28,23 +28,34 @@
 
         cerbo-pkgs = import ./nix/pkgs.nix { inherit pkgs tauri-deps; };
         inherit (cerbo-pkgs) cerbo cerbo-frontend cerbo-desktop;
+
+        src = builtins.path { path = ./.; name = "cerbo-src"; };
+        releaseWorkflowCheck = pkgs.writeShellApplication {
+          name = "release-workflow-check";
+          runtimeInputs = [ pkgs.nix pkgs.actionlint ];
+          text = ''
+            nix develop --command actionlint ${src}/.github/workflows/release.yml
+          '';
+        };
       in
       {
         packages = {
           default = cerbo;
           inherit cerbo cerbo-frontend cerbo-desktop;
+          release-workflow-check = releaseWorkflowCheck;
         };
 
-        checks.release-workflow =
-          let
-            src = builtins.path { path = ./.; name = "cerbo-src"; };
-          in
-          pkgs.runCommand "release-workflow-check" {
-            nativeBuildInputs = [ pkgs.actionlint ];
-          } ''
-          actionlint ${src}/.github/workflows/release.yml
+        checks.release-workflow = pkgs.runCommand "release-workflow-check" {
+          nativeBuildInputs = [ pkgs.nix ];
+        } ''
+          ${releaseWorkflowCheck}/bin/release-workflow-check
           touch $out
-          '';
+        '';
+
+        apps.release-workflow-check = {
+          type = "app";
+          program = "${releaseWorkflowCheck}/bin/release-workflow-check";
+        };
 
         devShells.default = import ./nix/devshell.nix {
           inherit pkgs tauri-deps dev-deps;
