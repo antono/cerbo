@@ -146,68 +146,73 @@ jobs:
       id-token: write
       contents: read
     steps:
-        - name: Check out release tag
-          uses: actions/checkout@v4
-          with:
-            ref: ${{ needs.prepare.outputs.tag }}
-            fetch-depth: 0
+      - name: Check out release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
 
-        - name: Install Nix
-          uses: DeterminateSystems/nix-installer-action@v16
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
 
-        - name: Set up FlakeHub cache
-          uses: DeterminateSystems/flakehub-cache-action@v1
+      - name: Set up FlakeHub cache
+        uses: DeterminateSystems/flakehub-cache-action@v1
 
-        - name: Cache Rust dependencies
-          uses: actions/cache@v4
-          with:
-            path: |
-              ~/.cargo/bin/
-              ~/.cargo/registry/index/
-              ~/.cargo/registry/cache/
-              ~/.cargo/git/db/
-              target/
-            key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-            restore-keys: |
-              ${{ runner.os }}-cargo-
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
-        - name: Cache Bun dependencies
-          uses: actions/cache@v4
-          with:
-            path: |
-              node_modules/
-              ~/.bun/install/cache/
-            key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lockb') }}
-            restore-keys: |
-              ${{ runner.os }}-bun-
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            node_modules/
+            ~/.bun/install/cache/
+          key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
-        - name: Download dependencies
-          run: |
-            nix develop --command bash -euo pipefail <<'BASH'
-            bun install --frozen-lockfile
-            BASH
+      - name: Cache cerbo flake outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            /nix/store
+          key: ${{ runner.os }}-cerbo-flake-${{ hashFiles('flake.nix', 'flake.lock', 'nix/**/*.nix', 'Cargo.lock', 'bun.lockb') }}
 
-        - name: Build Linux release artifacts
-          env:
-            TAG: ${{ needs.prepare.outputs.tag }}
-          run: |
-            nix develop --command bash -euo pipefail <<'BASH'
-            cargo build --release -p cerbo
+      - name: Download dependencies
+        run: |
+          nix build .#cerbo .#cerbo-desktop
 
-            dist_dir=dist/linux
-            mkdir -p "$dist_dir"
-            tar -C target/release -czf "$dist_dir/cerbo-${TAG#v}-linux-x86_64.tgz" cerbo
+      - name: Build Linux release artifacts
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          nix develop --command bash -euo pipefail <<'BASH'
+          cargo build --release -p cerbo
 
-            bun run tauri build --bundles deb
-            find target/release/bundle/deb -type f -name '*.deb' -exec cp {} "$dist_dir/" \;
-            BASH
+          dist_dir=dist/linux
+          mkdir -p "$dist_dir"
+          tar -C target/release -czf "$dist_dir/cerbo-${TAG#v}-linux-x86_64.tgz" cerbo
 
-        - name: Upload Linux artifacts
-          uses: actions/upload-artifact@v4
-          with:
-            name: linux-release-artifacts
-            path: dist/linux/*
-            if-no-files-found: error
+          bun run tauri build --bundles deb
+          find target/release/bundle/deb -type f -name '*.deb' -exec cp {} "$dist_dir/" \;
+          BASH
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release-artifacts
+          path: dist/linux/*
+          if-no-files-found: error
 
   release:
     runs-on: ubuntu-latest
