@@ -289,7 +289,7 @@ jobs:
           if gh release view "${TAG}" >/dev/null 2>&1; then
             gh release edit "${TAG}" --title "${TAG}" --notes-file release-notes.md
           else
-            gh release create "${TAG}" --target "${TAG}" --title "${TAG}" --notes-file release-notes.md
+            gh release create "${TAG}" --title "${TAG}" --notes-file release-notes.md
           fi
       - name: Upload release assets
         env:
