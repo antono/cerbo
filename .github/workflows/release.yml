@@ -199,7 +199,7 @@ jobs:
             tar -C target/release -czf "$dist_dir/cerbo-${TAG#v}-linux-x86_64.tgz" cerbo
 
             bun run tauri build --bundles deb
-            find src-tauri/target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} "$dist_dir/" \;
+            find src-tauri/target/release/bundle/deb -type f -name '*.deb' -exec cp {} "$dist_dir/" \;
             BASH
 
         - name: Upload Linux artifacts
