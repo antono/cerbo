@@ -189,6 +189,7 @@ jobs:
 
         - name: Build Linux release artifacts
           env:
+            VERSION: ${{ needs.prepare.outputs.version }}
             TAG: ${{ needs.prepare.outputs.tag }}
           run: |
             nix develop --command bash -euo pipefail <<'BASH'
@@ -199,7 +200,21 @@ jobs:
             tar -C target/release -czf "$dist_dir/cerbo-${TAG#v}-linux-x86_64.tgz" cerbo
 
             bun run tauri build --bundles deb
-            find target/release/bundle/deb -type f -name '*.deb' -exec cp {} "$dist_dir/" \;
+            python3 - <<'PY'
+            import os
+            import shutil
+            from pathlib import Path
+
+            version = os.environ["VERSION"]
+            bundle_dir = Path("target/release/bundle/deb")
+            dist_dir = Path("dist/linux")
+
+            candidates = sorted(bundle_dir.glob(f"*{version}*amd64.deb"))
+            if not candidates:
+                raise SystemExit(f"no deb bundle found for {version} in {bundle_dir}")
+
+            shutil.copy2(candidates[0], dist_dir / f"cerbo-desktop_{version}_amd64.deb")
+            PY
             BASH
 
         - name: Upload Linux artifacts
