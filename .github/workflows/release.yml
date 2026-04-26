@@ -229,6 +229,7 @@ jobs:
           merge-multiple: true
       - name: Generate release notes
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           TAG: ${{ needs.prepare.outputs.tag }}
           PREVIOUS_TAG: ${{ needs.prepare.outputs.previous_tag }}
@@ -282,7 +283,7 @@ jobs:
           PY
       - name: Create or update GitHub Release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           if gh release view "${TAG}" >/dev/null 2>&1; then
@@ -292,7 +293,7 @@ jobs:
           fi
       - name: Upload release assets
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           gh release upload "${TAG}" release-assets/* --clobber
