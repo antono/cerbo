@@ -2,7 +2,7 @@
 let
   cerbo = pkgs.rustPlatform.buildRustPackage {
     pname = "cerbo";
-    version = "0.0.6";
+    version = "0.0.7";
     src = ../.;
     cargoLock.lockFile = ../Cargo.lock;
     buildAndTestFocus = "cerbo";
@@ -12,7 +12,7 @@ let
 
   cerbo-frontend = pkgs.stdenv.mkDerivation {
     pname = "cerbo-frontend";
-    version = "0.0.6";
+    version = "0.0.7";
     src = ../.;
     nativeBuildInputs = [
       pkgs.bun
@@ -33,7 +33,7 @@ let
 
   cerbo-desktop = pkgs.rustPlatform.buildRustPackage {
     pname = "cerbo-desktop";
-    version = "0.0.6";
+    version = "0.0.7";
     src = ../.;
     cargoLock.lockFile = ../Cargo.lock;
     buildAndTestFocus = "cerbo-desktop";
