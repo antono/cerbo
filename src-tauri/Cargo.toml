@@ -1,6 +1,6 @@
 [package]
 name = "cerbo-desktop"
-version = "0.0.7"
+version = "0.0.8"
 description = "A local-first markdown wiki"
 authors = []
 edition = "2021"
