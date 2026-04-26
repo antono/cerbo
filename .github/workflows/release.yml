@@ -137,43 +137,78 @@ jobs:
           git push origin "HEAD:${BRANCH}"
           git tag -a "${TAG}" -m "Release ${TAG}"
           git push origin "${TAG}"
+
   build-linux:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: prepare
+    permissions:
+      id-token: write
+      contents: read
     steps:
-      - name: Check out release tag
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.tag }}
-          fetch-depth: 0
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@v16
-      - name: Download dependencies
-        run: |
-          nix develop --command bash -euo pipefail <<'BASH'
-          bun install --frozen-lockfile
-          BASH
-      - name: Build Linux release artifacts
-        env:
-          TAG: ${{ needs.prepare.outputs.tag }}
-        run: |
-          nix develop --command bash -euo pipefail <<'BASH'
-          cargo build --release -p cerbo
+        - name: Check out release tag
+          uses: actions/checkout@v4
+          with:
+            ref: ${{ needs.prepare.outputs.tag }}
+            fetch-depth: 0
 
-          dist_dir=dist/linux
-          mkdir -p "$dist_dir"
-          tar -C target/release -czf "$dist_dir/cerbo-${TAG#v}-linux-x86_64.tgz" cerbo
+        - name: Install Nix
+          uses: DeterminateSystems/nix-installer-action@v16
 
-          bun run tauri build --bundles deb
-          find src-tauri/target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} "$dist_dir/" \;
-          BASH
-      - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-release-artifacts
-          path: dist/linux/*
-          if-no-files-found: error
+        - name: Set up FlakeHub cache
+          uses: DeterminateSystems/flakehub-cache-action@v1
+
+        - name: Cache Rust dependencies
+          uses: actions/cache@v4
+          with:
+            path: |
+              ~/.cargo/bin/
+              ~/.cargo/registry/index/
+              ~/.cargo/registry/cache/
+              ~/.cargo/git/db/
+              target/
+            key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            restore-keys: |
+              ${{ runner.os }}-cargo-
+
+        - name: Cache Bun dependencies
+          uses: actions/cache@v4
+          with:
+            path: |
+              node_modules/
+              ~/.bun/install/cache/
+            key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lockb') }}
+            restore-keys: |
+              ${{ runner.os }}-bun-
+
+        - name: Download dependencies
+          run: |
+            nix develop --command bash -euo pipefail <<'BASH'
+            bun install --frozen-lockfile
+            BASH
+
+        - name: Build Linux release artifacts
+          env:
+            TAG: ${{ needs.prepare.outputs.tag }}
+          run: |
+            nix develop --command bash -euo pipefail <<'BASH'
+            cargo build --release -p cerbo
+
+            dist_dir=dist/linux
+            mkdir -p "$dist_dir"
+            tar -C target/release -czf "$dist_dir/cerbo-${TAG#v}-linux-x86_64.tgz" cerbo
+
+            bun run tauri build --bundles deb
+            find src-tauri/target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} "$dist_dir/" \;
+            BASH
+
+        - name: Upload Linux artifacts
+          uses: actions/upload-artifact@v4
+          with:
+            name: linux-release-artifacts
+            path: dist/linux/*
+            if-no-files-found: error
+
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -186,6 +221,7 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
