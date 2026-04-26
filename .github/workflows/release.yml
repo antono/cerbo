@@ -147,16 +147,13 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.tag }}
           fetch-depth: 0
-
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v16
-
       - name: Download dependencies
         run: |
           nix develop --command bash -euo pipefail <<'BASH'
           bun install --frozen-lockfile
           BASH
-
       - name: Build Linux release artifacts
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
@@ -168,7 +165,7 @@ jobs:
           mkdir -p "$dist_dir"
           tar -C target/release -czf "$dist_dir/cerbo-${TAG#v}-linux-x86_64.tgz" cerbo
 
-          bun run tauri build --bundles appimage
+          bun run tauri build --bundles deb
           find src-tauri/target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} "$dist_dir/" \;
           BASH
       - name: Upload Linux artifacts
