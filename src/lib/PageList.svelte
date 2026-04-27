@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { FileText, Plus, Pencil, Trash2, X, Search } from 'lucide-svelte';
+  import { FileText, Plus, Pencil, Trash2, Search } from 'lucide-svelte';
   import { tick } from 'svelte';
   import { app, openPage, createPage, deletePage, renamePage, previewSlug, closeAllDialogs, triggerRename, triggerDelete, openNextPage, openPrevPage } from './stores.svelte';
   import { isInputFocused } from './hotkeys';
+  import ConfirmationDialog from './ConfirmationDialog.svelte';
 
   // ── State for dialogs ─────────────────────────────────────────────────────────
 
@@ -108,8 +109,9 @@
   </div>
 
   <!-- Page items -->
-  <ul class="items" bind:this={itemsList} onkeydown={handleListKeydown}>
-    {#each app.pages as page}
+  <div class="items-wrap" onkeydown={handleListKeydown} role="listbox" tabindex="0" aria-label="Page list navigation">
+    <ul class="items" bind:this={itemsList}>
+    {#each app.pages as page (page.slug)}
       <li class="item" class:active={page.slug === app.currentSlug}>
         <button
           class="page-btn"
@@ -139,27 +141,21 @@
     {#if app.pages.length === 0 && !app.loading}
       <li class="empty-hint">No pages yet.</li>
     {/if}
-  </ul>
+    </ul>
+  </div>
 </aside>
 
 <!-- Delete confirmation overlay -->
 {#if app.confirmDeleteSlug}
   {@const page = app.pages.find(p => p.slug === app.confirmDeleteSlug)}
-  <div class="modal-backdrop" role="presentation" onclick={() => { app.confirmDeleteSlug = null; }}>
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <div class="modal" role="dialog" aria-modal="true" onclick={(e) => e.stopPropagation()}>
-      <p class="modal-title">Delete page?</p>
-      <p class="modal-body">
-        This will permanently delete <strong>{page?.title ?? app.confirmDeleteSlug} [slug:{app.confirmDeleteSlug}]</strong> and all its assets.
-      </p>
-      <div class="modal-actions">
-        <button class="btn-danger" onclick={handleDelete} disabled={deleting}>
-          {deleting ? 'Deleting…' : 'Delete'}
-        </button>
-        <button class="btn-ghost" onclick={() => { app.confirmDeleteSlug = null; }}>Cancel</button>
-      </div>
-    </div>
-  </div>
+  <ConfirmationDialog
+    title="Delete page?"
+    message={`This will permanently delete ${page?.title ?? app.confirmDeleteSlug} [slug:${app.confirmDeleteSlug}] and all its assets.`}
+    confirmLabel={deleting ? 'Deleting…' : 'Delete'}
+    confirmDisabled={deleting}
+    onClose={() => { app.confirmDeleteSlug = null; }}
+    onConfirm={handleDelete}
+  />
 {/if}
 
 <style>
@@ -196,6 +192,10 @@
     overflow-y: auto;
     flex: 1;
   }
+  .items-wrap {
+    flex: 1;
+    min-height: 0;
+  }
   .item {
     display: flex; align-items: center; gap: 0.25rem;
     border-radius: 0.375rem;
@@ -215,18 +215,4 @@
   }
   .page-actions { display: flex; gap: 0.125rem; padding-right: 0.25rem; flex-shrink: 0; }
   .empty-hint { padding: 0.75rem; color: var(--muted-foreground); font-size: 0.8125rem; }
-  .modal-backdrop {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.4);
-    display: flex; align-items: center; justify-content: center; z-index: 200;
-  }
-  .modal {
-    background: var(--bg);
-    border-radius: 0.5rem; padding: 1.5rem;
-    max-width: 360px; width: 100%;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.2);
-    color: var(--fg);
-  }
-  .modal-title { font-weight: 700; font-size: 1rem; margin: 0 0 0.5rem; }
-  .modal-body { font-size: 0.875rem; margin: 0 0 1rem; color: var(--muted-foreground); }
-  .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
 </style>

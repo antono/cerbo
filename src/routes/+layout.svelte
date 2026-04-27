@@ -44,6 +44,9 @@
         }
       }
 
+      // Confirmation dialogs own their own keyboard handling.
+      if (app.showExitPrompt || app.confirmDeleteSlug) return;
+
       // 2. New Page (Ctrl+N) - Handle first so it can toggle itself
       if (isModKey(e, 'n')) {
         e.preventDefault();
