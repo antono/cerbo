@@ -187,17 +187,14 @@ jobs:
             bun install --frozen-lockfile
             BASH
 
-        - name: Build Linux release artifacts
+        - name: Build desktop release artifacts
           env:
             VERSION: ${{ needs.prepare.outputs.version }}
             TAG: ${{ needs.prepare.outputs.tag }}
           run: |
             nix develop --command bash -euo pipefail <<'BASH'
-            cargo build --release -p cerbo
-
             dist_dir=dist/linux
             mkdir -p "$dist_dir"
-            tar -C target/release -czf "$dist_dir/cerbo-${TAG#v}-linux-x86_64.tgz" cerbo
 
             bun run tauri build --bundles deb
             python3 - <<'PY'
@@ -274,14 +271,13 @@ jobs:
           generated = json.loads(generated)["body"]
 
           body = "\n".join(
-              [
-                  "## Installation",
-                  "",
-                  "### Nix users",
-                  f"- CLI: `nix profile install github:{repo}#cerbo`",
-                  f"- Desktop: `nix profile install github:{repo}#cerbo-desktop`",
-                  "",
-                  "### Debian users",
+                  [
+                      "## Installation",
+                      "",
+                      "### Nix users",
+                      f"- Desktop: `nix profile install github:{repo}#cerbo-desktop`",
+                      "",
+                      "### Debian users",
                   "- Install the `.deb` artifact with `sudo dpkg -i <artifact>.deb`",
                   "",
                   "### Red Hat users",
