@@ -249,7 +249,7 @@
   }
 </script>
 
-<div class="page-editor" bind:this={editorContainer}>
+<div class="page-editor" class:write-mode={app.editorTab === 'write'} bind:this={editorContainer}>
   <button 
     class="mode-toggle-btn" 
     onclick={toggleMode}
@@ -281,6 +281,30 @@
     background: var(--bg);
     position: relative;
     overflow: hidden;
+    isolation: isolate;
+  }
+
+  .page-editor.write-mode {
+    background: var(--bg);
+  }
+
+  .page-editor.write-mode::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      radial-gradient(circle at 1px 1px, color-mix(in oklab, var(--muted-foreground) 16%, transparent) 1px, transparent 0),
+      radial-gradient(circle at 50% 50%, color-mix(in oklab, var(--muted-foreground) 12%, transparent) 1px, transparent 0);
+    background-size: 16px 16px, 16px 16px;
+    background-position: -1px -1px, 7px 7px;
+    opacity: 0.62;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .page-editor > * {
+    position: relative;
+    z-index: 1;
   }
 
   .mode-toggle-btn {
@@ -313,26 +337,31 @@
     overflow: hidden;
     border: none;
     border-radius: 0;
+    background: transparent;
   }
 
   .page-editor :global(.carta-wrapper) {
     flex: 1;
     min-height: 0;
     overflow: hidden;
+    background: transparent;
   }
 
   .page-editor :global(.carta-container) {
     height: 100%;
+    background: transparent;
   }
 
   .page-editor :global(.carta-input) {
     height: 100%;
     overflow-y: auto;
+    background: transparent;
   }
 
   .page-editor :global(.carta-renderer) {
     height: 100%;
     overflow-y: auto;
+    background: transparent;
   }
 
   :global(.carta-renderer a.wikilink) {
