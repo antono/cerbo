@@ -56,6 +56,16 @@ The system MUST provide a global keyboard shortcut to trigger the "Add Vault" wo
 - **WHEN** the user presses `Ctrl+O` (Linux/Windows) or `Cmd+O` (Mac)
 - **THEN** the native system directory picker SHALL be displayed for vault selection
 
+### Requirement: Vault Selector Shortcut
+The system MUST provide a global keyboard shortcut to open the vault selector.
+
+#### Scenario: Open vault selector via Ctrl+Shift+O
+- **WHEN** the user presses `Ctrl+Shift+O` (Linux/Windows) or `Cmd+Shift+O` (Mac)
+- **THEN** the vault selector SHALL be displayed
+
+### Requirement: Existing Shortcuts Preserved
+The keyboard shortcuts list MUST continue to document the existing page search, new page, theme toggle, help, and quit shortcuts.
+
 ### Requirement: Sidebar Navigation Shortcuts
 The system MUST provide keyboard shortcuts for efficient navigation within the sidebar's page list.
 
