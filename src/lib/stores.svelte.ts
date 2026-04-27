@@ -77,7 +77,7 @@ export const app = $state({
   showSearch: false,
   showExitPrompt: false,
   showNewPageForm: false,
-  showVaultSwitcher: false,
+  showVaultSelector: false,
   showHelp: false,
   renameSlug: null as string | null,
   renameTitle: '',
@@ -127,7 +127,7 @@ export function closeAllDialogs() {
   app.showSearch = false;
   app.showExitPrompt = false;
   app.showNewPageForm = false;
-  app.showVaultSwitcher = false;
+  app.showVaultSelector = false;
   app.showHelp = false;
   app.renameSlug = null;
   app.renameTitle = '';

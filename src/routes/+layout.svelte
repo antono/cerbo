@@ -1,12 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { fade } from 'svelte/transition';
   import { ModeWatcher, mode, setMode } from 'mode-watcher';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { Vault } from 'lucide-svelte';
+  import { ChevronDown, HelpCircle, Moon, Plus, Sun, Vault } from 'lucide-svelte';
   import { app, loadVaults, loadUiSettings, saveUiSettings, openVault, quickAddVault, quitApp, closeAllDialogs, openNextPage, openPrevPage, triggerRename, triggerDelete, goBack, goForward } from '$lib/stores.svelte';
-  import VaultSwitcher from '$lib/VaultSwitcher.svelte';
   import PageList from '$lib/PageList.svelte';
-  import ThemeToggle from '$lib/ThemeToggle.svelte';
   import GlobalSearch from '$lib/GlobalSearch.svelte';
   import NewPageDialog from '$lib/NewPageDialog.svelte';
   import RenamePageDialog from '$lib/RenamePageDialog.svelte';
@@ -20,6 +19,10 @@
   // Focusable panel refs
   let sidebarEl = $state<HTMLElement | null>(null);
   let mainEl = $state<HTMLElement | null>(null);
+  let vaultSelectorEl = $state<HTMLElement | null>(null);
+  let selectedVaultIndex = $state(0);
+
+  const modKeyLabel = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl';
 
   onMount(async () => {
     await loadUiSettings();
@@ -35,7 +38,7 @@
     function handleKeydown(e: KeyboardEvent) {
       // 1. Escape: Close active dialogs/forms
       if (e.key === 'Escape') {
-        if (app.showSearch || app.showNewPageForm || app.showVaultSwitcher || app.showHelp || app.renameSlug || app.confirmDeleteSlug) {
+        if (app.showSearch || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.renameSlug || app.confirmDeleteSlug) {
           closeAllDialogs();
           return;
         }
@@ -70,7 +73,7 @@
       }
 
       // Ignore other global shortcuts if any modal is open
-      if (app.showSearch || app.showExitPrompt || app.showNewPageForm || app.showHelp || app.confirmDeleteSlug) return;
+      if (app.showSearch || app.showExitPrompt || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.confirmDeleteSlug) return;
 
       // 5. Go Back (Alt+Left) - only when not in input
       if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'Left') && !isInputFocused()) {
@@ -123,9 +126,19 @@
       }
 
       // 6. Add Vault (Ctrl+O)
-      if (isModKey(e, 'o')) {
+      if (isModKey(e, 'o') && !e.shiftKey) {
         e.preventDefault();
-        quickAddVault();
+        closeAllDialogs();
+        void quickAddVault();
+        return;
+      }
+
+      // 6. Vault Selector (Ctrl+Shift+O)
+      if (isModKey(e, 'o') && e.shiftKey) {
+        e.preventDefault();
+        const nextState = !app.showVaultSelector;
+        closeAllDialogs();
+        app.showVaultSelector = nextState;
         return;
       }
 
@@ -155,6 +168,12 @@
 
   let vault = $derived(app.vaults.find((v) => v.id === app.activeVaultId));
 
+  $effect(() => {
+    if (!app.showVaultSelector) return;
+    selectedVaultIndex = Math.max(0, app.vaults.findIndex((v) => v.id === app.activeVaultId));
+    vaultSelectorEl?.focus();
+  });
+
   // ── Resizing Logic ──────────────────────────────────────────────────────────
 
   let isResizingSidebar = $state(false);
@@ -178,10 +197,75 @@
     saveUiSettings();
   }
 
-  function toggleVaultSwitcher() {
-    const nextState = !app.showVaultSwitcher;
+  function toggleVaultSelector() {
+    const nextState = !app.showVaultSelector;
     closeAllDialogs();
-    app.showVaultSwitcher = nextState;
+    app.showVaultSelector = nextState;
+  }
+
+  function toggleHelp() {
+    const nextState = !app.showHelp;
+    closeAllDialogs();
+    app.showHelp = nextState;
+  }
+
+  function handleVaultSelectorKeydown(e: KeyboardEvent) {
+    e.stopPropagation();
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      app.showVaultSelector = false;
+      return;
+    }
+
+    if (!app.vaults.length) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        app.showVaultSelector = false;
+        void quickAddVault();
+      }
+      return;
+    }
+
+    if (e.key === 'ArrowDown' || e.key === 'j') {
+      e.preventDefault();
+      selectedVaultIndex = (selectedVaultIndex + 1) % app.vaults.length;
+      return;
+    }
+
+    if (e.key === 'ArrowUp' || e.key === 'k') {
+      e.preventDefault();
+      selectedVaultIndex = (selectedVaultIndex - 1 + app.vaults.length) % app.vaults.length;
+      return;
+    }
+
+    if (e.key === 'Home') {
+      e.preventDefault();
+      selectedVaultIndex = 0;
+      return;
+    }
+
+    if (e.key === 'End') {
+      e.preventDefault();
+      selectedVaultIndex = app.vaults.length - 1;
+      return;
+    }
+
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const selected = app.vaults[selectedVaultIndex];
+      if (selected) {
+        void openVault(selected.id).then(() => {
+          app.showVaultSelector = false;
+        });
+      }
+    }
+  }
+
+  function selectVault(vaultId: string) {
+    void openVault(vaultId).then(() => {
+      app.showVaultSelector = false;
+    });
   }
 </script>
 
@@ -199,20 +283,15 @@
     <div class="vault-header">
       <button
         class="vault-name-btn"
-        onclick={toggleVaultSwitcher}
-        title="Switch vault"
+        onclick={toggleVaultSelector}
+        title={`Switch vault (${modKeyLabel}+Shift+O)`}
         disabled={app.showNewPageForm}
       >
         <Vault size={18} class="vault-icon" />
         <span class="vault-label">{vault?.name ?? 'No vault'}</span>
-        <span class="vault-chevron">{app.showVaultSwitcher ? '▲' : '▼'}</span>
+        <span class="vault-chevron"><ChevronDown size={12} /></span>
       </button>
 
-      {#if app.showVaultSwitcher}
-        <div class="vault-switcher-popup">
-          <VaultSwitcher onClose={closeAllDialogs} />
-        </div>
-      {/if}
     </div>
 
     <!-- Page list -->
@@ -222,18 +301,33 @@
       {:else}
         <div class="no-vault">
           <p>Add a vault to get started.</p>
-          <button class="primary-btn" onclick={() => (app.showVaultSwitcher = true)}>Add Vault</button>
+          <button class="primary-btn" onclick={toggleVaultSelector}>Add Vault</button>
         </div>
       {/if}
     </div>
 
     <!-- Bottom actions area -->
     <div class="sidebar-footer">
-       <ThemeToggle />
+        <button class="theme-icon-btn" onclick={toggleHelp} title="Keyboard shortcuts" aria-label="Keyboard shortcuts">
+         <HelpCircle size={16} />
+       </button>
+       <button class="theme-toggle" onclick={() => {
+         const nextMode = mode.current === 'light' ? 'dark' : 'light';
+         app.theme = nextMode;
+         setMode(nextMode);
+         saveUiSettings();
+       }} title="Toggle theme" aria-label="Toggle theme">
+         {#if app.theme === 'dark'}
+           <Moon size={18} />
+         {:else}
+           <Sun size={18} />
+         {/if}
+       </button>
     </div>
   </aside>
 
   <!-- Resize Handle -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div 
     class="resize-handle" 
     onmousedown={startSidebarResize}
@@ -274,6 +368,40 @@
 
 {#if app.showHelp}
   <KeyboardHelp onClose={() => app.showHelp = false} />
+{/if}
+
+{#if app.showVaultSelector}
+  <div class="modal-backdrop" onclick={() => (app.showVaultSelector = false)} role="presentation">
+    <div bind:this={vaultSelectorEl} class="vault-selector-modal" onkeydown={handleVaultSelectorKeydown} onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1" transition:fade={{ duration: 150 }}>
+      <header class="modal-header">
+        <h2>Switch Vault</h2>
+        <button class="close-btn" onclick={() => (app.showVaultSelector = false)} title="Close (Esc)">✕</button>
+      </header>
+
+      <div class="vault-selector-body">
+        {#each app.vaults as item (item.id)}
+          <button class="vault-item" class:selected={item.id === app.vaults[selectedVaultIndex]?.id} onclick={() => selectVault(item.id)}>
+            <Vault size={16} />
+            <span class="vault-item-name">{item.name}</span>
+            {#if item.id === app.activeVaultId}
+              <span class="vault-item-check">✓</span>
+            {/if}
+          </button>
+        {/each}
+
+        {#if app.vaults.length === 0}
+          <p class="empty-hint">No vaults yet.</p>
+        {/if}
+      </div>
+
+      <footer class="vault-selector-footer">
+        <button class="add-vault-btn" onclick={async () => { app.showVaultSelector = false; await quickAddVault(); }} disabled={app.loading}>
+          <Plus size={16} />
+          <span>{app.loading ? 'Adding…' : 'Add vault'}</span>
+        </button>
+      </footer>
+    </div>
+  </div>
 {/if}
 
 {#if app.showExitPrompt}
@@ -360,6 +488,28 @@
     transition: background 0.15s;
   }
 
+  .theme-icon-btn,
+  .theme-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    border-radius: var(--radius);
+    color: var(--muted-foreground);
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .theme-icon-btn:hover,
+  .theme-toggle:hover {
+    background: var(--accent-hover);
+    color: var(--fg);
+  }
+
   .vault-name-btn:hover {
     background: var(--accent-hover);
   }
@@ -377,19 +527,132 @@
     color: var(--muted-foreground);
   }
 
-  .vault-switcher-popup {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0.75rem;
-    right: 0.75rem;
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.4);
+    backdrop-filter: blur(2px);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 20vh;
+    z-index: 1000;
+  }
+
+  .vault-selector-modal {
+    width: 100%;
+    max-width: 600px;
     background: var(--bg);
     border: 1px solid var(--border);
+    border-radius: var(--radius-lg, 12px);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .modal-header h2 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+  }
+
+  .close-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--muted-foreground);
+    padding: 0.25rem;
     border-radius: var(--radius);
-    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-    z-index: 100;
-    max-height: 60vh;
+  }
+
+  .close-btn:hover {
+    background: var(--accent-hover);
+    color: var(--fg);
+  }
+
+  .vault-selector-body {
+    padding: 0.5rem;
+    max-height: 50vh;
     overflow-y: auto;
-    overflow-x: hidden;
+  }
+
+  .vault-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.6rem 0.75rem;
+    border: none;
+    background: transparent;
+    border-radius: var(--radius);
+    cursor: pointer;
+    text-align: left;
+    color: var(--fg);
+    transition: all 0.1s;
+  }
+
+  .vault-item:hover {
+    background: var(--accent-hover);
+  }
+
+  .vault-item.selected {
+    background: var(--primary);
+    color: #fff;
+  }
+
+  .vault-item-check {
+    color: inherit;
+    flex-shrink: 0;
+  }
+
+  .vault-item-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .vault-selector-footer {
+    padding: 0.75rem;
+    border-top: 1px solid var(--border);
+    background: var(--sidebar-bg);
+  }
+
+  .add-vault-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.5rem 1rem;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: background 0.15s, transform 0.1s;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+  }
+
+  .add-vault-btn:hover {
+    background: var(--primary-hover);
+  }
+
+  .add-vault-btn:active {
+    transform: translateY(1px);
   }
 
   .page-list-wrap {
@@ -403,6 +666,26 @@
     border-top: 1px solid var(--border);
     display: flex;
     justify-content: flex-start;
+  }
+
+  .theme-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    border-radius: var(--radius);
+    color: var(--muted-foreground);
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .theme-toggle:hover {
+    background: var(--accent-hover);
+    color: var(--fg);
   }
 
   .no-vault {

@@ -11,7 +11,7 @@
     { keys: [mod, 'P'], desc: 'Open page search' },
     { keys: [mod, 'N'], desc: 'Create new page' },
     { keys: [mod, 'T'], desc: 'Toggle light/dark theme' },
-    { keys: [mod, 'O'], desc: 'Add new vault' },
+    { keys: [mod, 'Shift', 'O'], desc: 'Open vault selector' },
     { keys: [mod, 'Q'], desc: 'Quit application' },
     { keys: ['F1'], desc: 'Show this help' },
     { keys: ['Esc'], desc: 'Close active dialog or modal' },
@@ -31,11 +31,14 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div 
   class="modal-backdrop" 
-  onmousedown={(e) => e.target === e.currentTarget && onClose()}
+  onclick={(e) => e.target === e.currentTarget && onClose()}
   transition:fade={{ duration: 150 }}
 >
   <div 
     class="modal-content" 
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
     transition:fly={{ y: 20, duration: 200 }}
   >
     <header class="modal-header">
@@ -44,10 +47,10 @@
     </header>
 
     <div class="shortcuts-grid">
-      {#each shortcuts as { keys, desc }}
+    {#each shortcuts as { keys, desc } (desc)}
         <div class="shortcut-row">
           <div class="keys">
-            {#each keys as key, i}
+            {#each keys as key, i (i)}
               <kbd>{key}</kbd>
               {#if i < keys.length - 1}<span class="plus">+</span>{/if}
             {/each}
