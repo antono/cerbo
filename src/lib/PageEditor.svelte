@@ -192,21 +192,12 @@
    */
   async function focusEditor() {
     await tick();
-    let attempts = 0;
-    const tryFocus = () => {
-      const textarea = carta.input?.textarea;
-      if (textarea) {
-        textarea.focus();
-        // Force selection to ensure cursor visibility
-        const start = textarea.selectionStart;
-        const end = textarea.selectionEnd;
-        textarea.setSelectionRange(start, end);
-      } else if (attempts < 10) {
-        attempts++;
-        setTimeout(tryFocus, 20);
-      }
-    };
-    tryFocus();
+    const textarea = carta.input?.textarea;
+    if (!textarea) return;
+
+    textarea.focus();
+    const end = textarea.value.length;
+    textarea.setSelectionRange(end, end);
   }
 
   // Handle 'i' and 'Esc' keys for mode switching
@@ -263,13 +254,15 @@
     {/if}
   </button>
 
-  <MarkdownEditor
-    {carta}
-    bind:value={content}
-    selectedTab={app.editorTab}
-    mode="tabs"
-    theme={mode.current === 'dark' ? 'dark' : 'light'}
-  />
+  {#key app.editorTab}
+    <MarkdownEditor
+      {carta}
+      bind:value={content}
+      selectedTab={app.editorTab}
+      mode="tabs"
+      theme={mode.current === 'dark' ? 'dark' : 'light'}
+    />
+  {/key}
 </div>
 
 <style>
