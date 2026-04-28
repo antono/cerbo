@@ -608,8 +608,8 @@
   }
 
   .vault-item.selected {
-    background: var(--primary);
-    color: #fff;
+    background: var(--highlight);
+    color: var(--highlight-fg);
   }
 
   .vault-item-check {

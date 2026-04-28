@@ -12,6 +12,8 @@
   --sidebar-bg: #f8fafc;
   --accent: #f1f5f9;
   --accent-hover: #e2e8f0;
+  --highlight: var(--accent);
+  --highlight-fg: var(--fg);
   --primary: #3b82f6;
   --primary-hover: #2563eb;
   --muted-foreground: #64748b;
@@ -52,6 +54,8 @@ html, body {
   --sidebar-bg: #161b22;
   --accent: #1e2535;
   --accent-hover: #252d3d;
+  --highlight: var(--accent);
+  --highlight-fg: var(--fg);
   --primary: #60a5fa;
   --primary-hover: #93c5fd;
   --muted-foreground: #94a3b8;
@@ -67,6 +71,8 @@ html, body {
     --sidebar-bg: #161b22;
     --accent: #1e2535;
     --accent-hover: #252d3d;
+    --highlight: var(--accent);
+    --highlight-fg: var(--fg);
     --primary: #60a5fa;
     --primary-hover: #93c5fd;
     --muted-foreground: #94a3b8;
@@ -367,4 +373,3 @@ html, body {
 .right-panels:focus {
   outline: none;
 }
-

@@ -13,3 +13,6 @@ Modal confirmation dialogs MUST use a consistent primary/ghost action treatment 
 
 ### Requirement: Modal confirmation focus state tokens
 Focused or selected actions in modal confirmation dialogs MUST use the same visible focus treatment as the quit confirmation dialog.
+
+### Requirement: Highlighted item tokens
+Highlighted or selected list items MUST use a shared highlight token that matches the current left sidebar selection styling.
