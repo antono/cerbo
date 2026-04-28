@@ -111,6 +111,8 @@ pub fn run() {
             page::page_write,
             page::page_delete,
             page::page_list,
+            page::cursor_position_save,
+            page::cursor_position_load,
             page::attachment_list,
             page::attachment_add,
             page::attachment_upload,

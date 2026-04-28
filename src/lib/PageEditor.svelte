@@ -11,6 +11,7 @@
   import { Eye, Edit3 } from 'lucide-svelte';
   import { tick, untrack } from 'svelte';
   import { wikilinkPlugin, attachPreviewClickHandler } from './wikilink-plugin';
+  import { getCursorPositionFromOffset, restoreCursorPosition as resolveCursorPosition } from './cursor-position';
   import {
     app,
     activeVault,
@@ -196,9 +197,45 @@
     if (!textarea) return;
 
     textarea.focus();
-    const end = textarea.value.length;
-    textarea.setSelectionRange(end, end);
   }
+
+  async function saveCursorPosition() {
+    const textarea = carta.input?.textarea;
+    if (!textarea || !app.activeVaultId || !app.currentSlug) return;
+    const selectionStart = textarea.selectionStart ?? 0;
+    const cursor = getCursorPositionFromOffset(textarea.value, selectionStart);
+
+    await invoke('cursor_position_save', {
+      vaultId: app.activeVaultId,
+      slug: app.currentSlug,
+      line: cursor.line,
+      column: cursor.column,
+    });
+  }
+
+  async function restoreCursorPosition() {
+    if (!app.activeVaultId || !app.currentSlug) return;
+
+    const saved = await invoke<{ line: number; column: number } | null>('cursor_position_load', {
+      vaultId: app.activeVaultId,
+      slug: app.currentSlug,
+    });
+
+    const textarea = carta.input?.textarea;
+    if (!textarea) return;
+
+    const { offset } = resolveCursorPosition(textarea.value, saved);
+
+    await focusEditor();
+    textarea.setSelectionRange(offset, offset);
+    await tick();
+    textarea.scrollIntoView({ block: 'center' });
+  }
+
+  $effect(() => {
+    if (app.editorTab !== 'write') return;
+    void restoreCursorPosition();
+  });
 
   // Handle 'i' and 'Esc' keys for mode switching
   $effect(() => {
@@ -213,6 +250,7 @@
         if (e.key === 'Escape' && app.editorTab === 'write') {
           e.preventDefault();
           e.stopPropagation();
+          void saveCursorPosition();
           app.editorTab = 'preview';
           carta.input?.textarea?.blur();
         }
@@ -223,7 +261,6 @@
       if ((e.key === 'i' || modI) && app.editorTab === 'preview') {
         e.preventDefault();
         app.editorTab = 'write';
-        focusEditor();
       }
     }
 
@@ -234,8 +271,8 @@
 
   function toggleMode() {
     app.editorTab = app.editorTab === 'write' ? 'preview' : 'write';
-    if (app.editorTab === 'write') {
-      focusEditor();
+    if (app.editorTab === 'preview') {
+      void saveCursorPosition();
     }
   }
 </script>

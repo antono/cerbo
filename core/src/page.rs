@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
@@ -9,6 +9,12 @@ use crate::{slug::derive_slug, vault::load_vaults};
 pub struct PageMeta {
     pub slug: String,
     pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CursorPosition {
+    pub line: u32,
+    pub column: u32,
 }
 
 pub fn vault_root(ctx: &CerboContext, vault_id: &str) -> Result<PathBuf, String> {
@@ -23,6 +29,14 @@ pub fn vault_root(ctx: &CerboContext, vault_id: &str) -> Result<PathBuf, String>
 
 pub fn page_path(root: &PathBuf, slug: &str) -> PathBuf {
     root.join(slug).join("page.md")
+}
+
+fn cursor_dir(ctx: &CerboContext, vault_id: &str) -> Result<PathBuf, String> {
+    Ok(crate::paths::cache_dir(ctx.cache_dir.clone(), vault_id)?.join("editor-cursor"))
+}
+
+pub fn cursor_position_path(ctx: &CerboContext, vault_id: &str, slug: &str) -> Result<PathBuf, String> {
+    Ok(cursor_dir(ctx, vault_id)?.join(format!("{slug}.json")))
 }
 
 // ── Business Logic ────────────────────────────────────────────────────────────
@@ -73,6 +87,42 @@ pub fn page_write(
     std::fs::write(&tmp, &final_content).map_err(|e| format!("page_write write tmp: {e}"))?;
     std::fs::rename(&tmp, &p).map_err(|e| format!("page_write rename: {e}"))?;
     Ok(final_content)
+}
+
+pub fn cursor_position_save(
+    ctx: &CerboContext,
+    vault_id: String,
+    slug: String,
+    line: u32,
+    column: u32,
+) -> Result<(), String> {
+    let path = cursor_position_path(ctx, &vault_id, &slug)?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("cursor_position_save mkdir: {e}"))?;
+    }
+    let data = serde_json::to_string_pretty(&CursorPosition { line, column })
+        .map_err(|e| format!("cursor_position_save serialize: {e}"))?;
+    std::fs::write(&path, data).map_err(|e| format!("cursor_position_save write: {e}"))?;
+    Ok(())
+}
+
+pub fn cursor_position_load(
+    ctx: &CerboContext,
+    vault_id: String,
+    slug: String,
+) -> Result<Option<CursorPosition>, String> {
+    let path = match cursor_position_path(ctx, &vault_id, &slug) {
+        Ok(path) => path,
+        Err(err) => return Err(err),
+    };
+    let data = match std::fs::read_to_string(&path) {
+        Ok(data) => data,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(format!("cursor_position_load read: {err}")),
+    };
+    let position = serde_json::from_str(&data)
+        .map_err(|e| format!("cursor_position_load parse: {e}"))?;
+    Ok(Some(position))
 }
 
 pub fn has_h1(content: &str) -> bool {
@@ -420,5 +470,29 @@ mod tests {
         attachment_delete(&ctx, vault.id.clone(), slug.clone(), "test.txt".into()).unwrap();
         let list = attachment_list(&ctx, vault.id.clone(), slug.clone()).unwrap();
         assert!(list.is_empty());
+    }
+
+    #[test]
+    fn cursor_position_save_and_load_roundtrip() {
+        let tmp_dir = TempDir::new().unwrap();
+        let config_dir = tmp_dir.path().join("config");
+        let cache_dir = tmp_dir.path().join("cache");
+        let vault_dir = tmp_dir.path().join("vault");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::create_dir_all(&vault_dir).unwrap();
+
+        let ctx = CerboContext {
+            config_dir,
+            cache_dir,
+        };
+
+        let vault = crate::vault::vault_add(&ctx, "Test".into(), vault_dir.to_str().unwrap().into())
+            .unwrap();
+        let slug = page_create(&ctx, vault.id.clone(), "Test Page".into()).unwrap();
+
+        cursor_position_save(&ctx, vault.id.clone(), slug.clone(), 4, 12).unwrap();
+        let loaded = cursor_position_load(&ctx, vault.id.clone(), slug.clone()).unwrap();
+
+        assert_eq!(loaded, Some(CursorPosition { line: 4, column: 12 }));
     }
 }

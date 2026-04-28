@@ -27,6 +27,28 @@ pub fn page_write(
 
 #[tauri::command]
 #[allow(non_snake_case)]
+pub fn cursor_position_save(
+    app: AppHandle,
+    vaultId: String,
+    slug: String,
+    line: u32,
+    column: u32,
+) -> Result<(), String> {
+    page::cursor_position_save(&get_context(&app)?, vaultId, slug, line, column)
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+pub fn cursor_position_load(
+    app: AppHandle,
+    vaultId: String,
+    slug: String,
+) -> Result<Option<page::CursorPosition>, String> {
+    page::cursor_position_load(&get_context(&app)?, vaultId, slug)
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
 pub fn page_delete(app: AppHandle, vaultId: String, slug: String) -> Result<(), String> {
     page::page_delete(&get_context(&app)?, vaultId, slug)
 }
