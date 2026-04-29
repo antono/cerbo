@@ -3,7 +3,7 @@ pub use cerbo_core::index::WatcherState;
 use cerbo_core::index::{self, BacklinkEntry};
 use notify::Watcher;
 use std::path::PathBuf;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
 #[allow(non_snake_case)]
@@ -36,14 +36,15 @@ pub fn start_watcher(
             if !affects_page {
                 return;
             }
-            if let Ok(ctx) = get_context(&app_handle) {
-                if let Some(vpath) = cerbo_core::vault::get_vault_path(&ctx, &vid) {
-                    // ── Ensure all pages have H1 ──
-                    let _ = cerbo_core::page::sync_markdown_titles(&vpath);
-
-                    if let Ok(idx) = index::build_index(&vpath) {
-                        let _ = index::save_index(&ctx, &vid, &idx);
-                    }
+            if get_context(&app_handle).is_ok() {
+                for path in &event.paths {
+                    let _ = app_handle.emit(
+                        "page-file-changed",
+                        serde_json::json!({
+                            "vaultId": vid,
+                            "path": path.to_string_lossy(),
+                        }),
+                    );
                 }
             }
         }

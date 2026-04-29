@@ -9,9 +9,12 @@
   import { invoke } from '@tauri-apps/api/core';
   import { mode } from 'mode-watcher';
   import { Eye, Edit3 } from 'lucide-svelte';
-  import { tick, untrack } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
+  import { listen } from '@tauri-apps/api/event';
+  import ExternalChangeDialog from './ExternalChangeDialog.svelte';
   import { wikilinkPlugin, attachPreviewClickHandler } from './wikilink-plugin';
   import { getCursorPositionFromOffset, restoreCursorPosition as resolveCursorPosition } from './cursor-position';
+  import { decideExternalPageChange, logPageContentDiff, pageChangeKey, pageMdPathToSlug, shouldIgnoreUnchangedPageChange, shouldSkipExternalPageChange } from './page-sync';
   import {
     app,
     activeVault,
@@ -39,13 +42,90 @@
   // ── State ────────────────────────────────────────────────────────────────────
 
   let content = $state('');
+  let baselineContent = $state('');
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let saving = $state(false);
   let editorContainer = $state<HTMLElement | null>(null);
+  let showConflictPrompt = $state(false);
+  let lastConflictKey = '';
+  let suppressedConflictKey: string | null = null;
 
   // Notify parent of saving state
   $effect(() => {
     onSaving(saving);
+  });
+
+  let isDirty = $derived(content !== baselineContent);
+
+  let loadedSlug = $state<string | null>(null);
+
+  $effect(() => {
+    const currentSlug = app.currentSlug;
+    if (!currentSlug || currentSlug === loadedSlug) return;
+    loadedSlug = currentSlug;
+
+    untrack(() => {
+      const currentContent = app.currentContent ?? '';
+      baselineContent = currentContent;
+      content = currentContent;
+      showConflictPrompt = false;
+    });
+  });
+
+  onMount(() => {
+    let unlisten: (() => void) | null = null;
+    void listen<{ vaultId: string; path: string }>('page-file-changed', (event) => {
+      const vault = activeVault();
+      const currentSlug = app.currentSlug;
+      if (!vault || event.payload.vaultId !== vault.id || !currentSlug) return;
+
+      const conflictKey = pageChangeKey(event.payload.vaultId, event.payload.path);
+      if (shouldSkipExternalPageChange(conflictKey, suppressedConflictKey)) {
+        suppressedConflictKey = null;
+        return;
+      }
+      if (showConflictPrompt && conflictKey === lastConflictKey) return;
+      lastConflictKey = conflictKey;
+
+      const changedSlug = pageMdPathToSlug(vault.path, event.payload.path);
+      const action = decideExternalPageChange({
+        currentSlug,
+        changedSlug,
+        editorTab: app.editorTab,
+        dirty: isDirty,
+      });
+
+      const readCurrentDiskContent = async () => {
+        const nextContent = await invoke<string>('page_read', {
+          vaultId: vault.id,
+          slug: currentSlug,
+        });
+        return nextContent;
+      };
+
+      if (action === 'ignore') return;
+      void (async () => {
+        const nextContent = await readCurrentDiskContent();
+        if (shouldIgnoreUnchangedPageChange(content, nextContent)) {
+          return;
+        }
+
+        logPageContentDiff(`[page-change-diff] ${currentSlug}`, content, nextContent);
+
+        if (action === 'reload') {
+          app.currentContent = nextContent;
+          baselineContent = nextContent;
+          content = nextContent;
+          return;
+        }
+
+        showConflictPrompt = true;
+      })();
+    }).then((stop) => {
+      unlisten = stop;
+    });
+
+    return () => unlisten?.();
   });
 
   // ── Carta instance ──────────────────────────────────────────────────────────
@@ -155,10 +235,12 @@
           await renamePage(slug, extractedTitle, value);
           // renamePage already calls loadPages and openPage(newSlug)
         } else {
+          suppressNextOwnPageChange();
           const finalContent = await savePage(slug, value);
           // Only update currentContent if the slug hasn't changed in the meantime
           if (slug === targetSlugForSave) {
             app.currentContent = finalContent ?? value;
+            baselineContent = finalContent ?? value;
             // If backend modified the content (e.g. prepended title), update the editor
             if (finalContent && finalContent !== value) {
               content = finalContent;
@@ -275,6 +357,35 @@
       void saveCursorPosition();
     }
   }
+
+  async function loadCurrentPageFromDisk() {
+    const vault = activeVault();
+    if (!vault || !app.currentSlug) return;
+
+    const nextContent = await invoke<string>('page_read', {
+      vaultId: vault.id,
+      slug: app.currentSlug,
+    });
+    logPageContentDiff(`[page-change-diff] ${app.currentSlug}`, content, nextContent);
+    app.currentContent = nextContent;
+    baselineContent = nextContent;
+    content = nextContent;
+    showConflictPrompt = false;
+    lastConflictKey = '';
+  }
+
+  function suppressNextOwnPageChange() {
+    const vault = activeVault();
+    if (!vault) return;
+    suppressedConflictKey = pageChangeKey(vault.id, `${vault.path}/${slug}/page.md`);
+  }
+
+  async function overwriteCurrentPage() {
+    suppressNextOwnPageChange();
+    showConflictPrompt = false;
+    lastConflictKey = '';
+    await savePage(slug, content);
+  }
 </script>
 
 <div class="page-editor" class:write-mode={app.editorTab === 'write'} bind:this={editorContainer}>
@@ -300,6 +411,13 @@
       theme={mode.current === 'dark' ? 'dark' : 'light'}
     />
   {/key}
+
+  {#if showConflictPrompt}
+    <ExternalChangeDialog
+      onLoad={loadCurrentPageFromDisk}
+      onOverwrite={overwriteCurrentPage}
+    />
+  {/if}
 </div>
 
 <style>

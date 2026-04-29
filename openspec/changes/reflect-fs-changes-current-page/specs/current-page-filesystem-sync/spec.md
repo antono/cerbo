@@ -23,3 +23,11 @@ When the current page is open in edit mode and its backing file changes on disk,
 - **WHEN** the current page is in edit mode and `page.md` changes on disk
 - **THEN** the application SHALL display a dialog with load and overwrite choices
 - **THEN** the system SHALL apply only the user's chosen action
+
+### Requirement: Ignore unchanged file events
+When the backing `page.md` file changes on disk but the file content is unchanged, the system SHALL ignore the event and SHALL NOT surface a reload or conflict prompt.
+
+#### Scenario: Skip no-op file changes
+- **WHEN** the current page's `page.md` receives a filesystem change event but the file content matches the current in-app content
+- **THEN** the application SHALL ignore the event
+- **THEN** the application SHALL NOT reload the page or open the conflict dialog
