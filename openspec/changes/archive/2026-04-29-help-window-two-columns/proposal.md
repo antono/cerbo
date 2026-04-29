@@ -1,9 +1,10 @@
 ## Why
 
-The keyboard shortcuts help modal is currently a single-column list, which makes it harder to scan on wider screens. A two-column layout on large viewports improves readability and uses available space better without changing the help content.
+The keyboard shortcuts help modal is currently too narrow and rendered as a single-column list, which makes it harder to scan on wider screens. A wider modal with a two-column layout on large viewports improves readability and uses available space better without changing the help content.
 
 ## What Changes
 
+- Widen the shortcuts help modal shell for large screens.
 - Update the shortcuts help modal to render in two columns on wide screens.
 - Preserve a single-column layout on narrow screens.
 - Split shortcuts by meaning so related actions stay grouped together.

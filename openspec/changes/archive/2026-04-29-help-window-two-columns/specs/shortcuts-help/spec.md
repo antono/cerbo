@@ -11,7 +11,8 @@ The system MUST provide a modal dialog that lists all available application-leve
 #### Scenario: Display shortcuts help on wide screens
 - **WHEN** the Shortcuts Help action is triggered (via `F1`)
 - **AND** the viewport is wide enough for the responsive breakpoint
-- **THEN** the modal dialog SHALL display the shortcuts list in two columns
+- **THEN** the modal dialog SHALL display in a wider shell
+- **AND** the shortcuts list SHALL display in two columns
 - **AND** related shortcuts SHALL be grouped by meaning
 - **AND** each shortcut SHALL retain its description
 

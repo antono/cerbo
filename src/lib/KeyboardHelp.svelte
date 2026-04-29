@@ -7,23 +7,38 @@
 
   const mod = isMac ? '⌘' : 'Ctrl';
 
-  const shortcuts = [
-    { keys: [mod, 'P'], desc: 'Open page search' },
-    { keys: [mod, 'N'], desc: 'Create new page' },
-    { keys: [mod, 'T'], desc: 'Toggle light/dark theme' },
-    { keys: [mod, 'Shift', 'O'], desc: 'Open vault selector' },
-    { keys: [mod, 'Q'], desc: 'Quit application' },
-    { keys: ['F1'], desc: 'Show this help' },
-    { keys: ['Esc'], desc: 'Close active dialog or modal' },
-    { keys: ['Alt', '←'], desc: 'Go back in history' },
-    { keys: ['Alt', '→'], desc: 'Go forward in history' },
-    { keys: ['r'], desc: 'Rename current page (Preview mode)' },
-    { keys: ['Del'], desc: 'Delete current page (Preview mode)' },
-    { keys: ['↓'], desc: 'Next page in sidebar' },
-    { keys: ['j'], desc: 'Next page (Vim-style)' },
-    { keys: ['↑'], desc: 'Previous page in sidebar' },
-    { keys: ['k'], desc: 'Previous page (Vim-style)' },
-    { keys: ['Tab'], desc: 'Cycle pages in sidebar' },
+  const shortcutGroups = [
+    {
+      title: 'App actions',
+      shortcuts: [
+        { keys: [mod, 'P'], desc: 'Open page search' },
+        { keys: [mod, 'N'], desc: 'Create new page' },
+        { keys: [mod, 'T'], desc: 'Toggle light/dark theme' },
+        { keys: [mod, 'Shift', 'O'], desc: 'Open vault selector' },
+        { keys: [mod, 'Q'], desc: 'Quit application' },
+        { keys: ['F1'], desc: 'Show this help' },
+        { keys: ['Esc'], desc: 'Close active dialog or modal' },
+      ],
+    },
+    {
+      title: 'Navigation',
+      shortcuts: [
+        { keys: ['Alt', '←'], desc: 'Go back in history' },
+        { keys: ['Alt', '→'], desc: 'Go forward in history' },
+        { keys: ['↓'], desc: 'Next page in sidebar' },
+        { keys: ['j'], desc: 'Next page (Vim-style)' },
+        { keys: ['↑'], desc: 'Previous page in sidebar' },
+        { keys: ['k'], desc: 'Previous page (Vim-style)' },
+        { keys: ['Tab'], desc: 'Cycle pages in sidebar' },
+      ],
+    },
+    {
+      title: 'Preview mode',
+      shortcuts: [
+        { keys: ['r'], desc: 'Rename current page (Preview mode)' },
+        { keys: ['Del'], desc: 'Delete current page (Preview mode)' },
+      ],
+    },
   ];
 </script>
 
@@ -46,17 +61,24 @@
       <button class="close-btn" onclick={onClose} title="Close (Esc)">✕</button>
     </header>
 
-    <div class="shortcuts-grid">
-    {#each shortcuts as { keys, desc } (desc)}
-        <div class="shortcut-row">
-          <div class="keys">
-            {#each keys as key, i (i)}
-              <kbd>{key}</kbd>
-              {#if i < keys.length - 1}<span class="plus">+</span>{/if}
+    <div class="shortcuts-layout">
+      {#each shortcutGroups as group (group.title)}
+        <section class="shortcut-group" aria-label={group.title}>
+          <h3>{group.title}</h3>
+          <div class="shortcuts-grid">
+            {#each group.shortcuts as { keys, desc } (desc)}
+              <div class="shortcut-row">
+                <div class="keys">
+                  {#each keys as key, i (i)}
+                    <kbd>{key}</kbd>
+                    {#if i < keys.length - 1}<span class="plus">+</span>{/if}
+                  {/each}
+                </div>
+                <div class="desc">{desc}</div>
+              </div>
             {/each}
           </div>
-          <div class="desc">{desc}</div>
-        </div>
+        </section>
       {/each}
     </div>
 
@@ -84,7 +106,7 @@
   .modal-content {
     background: var(--bg);
     width: 100%;
-    max-width: 450px;
+    max-width: 1350px;
     border-radius: var(--radius-lg);
     border: 1px solid var(--border);
     box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
@@ -119,10 +141,31 @@
     color: var(--fg);
   }
 
-  .shortcuts-grid {
+  .shortcuts-layout {
     padding: 1rem 0;
     max-height: 60vh;
     overflow-y: auto;
+    display: grid;
+    gap: 1rem;
+  }
+
+  .shortcut-group {
+    padding: 0 0.25rem;
+  }
+
+  .shortcut-group h3 {
+    margin: 0 0 0.5rem;
+    padding: 0 1rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted-foreground);
+  }
+
+  .shortcuts-grid {
+    display: grid;
+    gap: 0.125rem;
   }
 
   .shortcut-row {
@@ -180,5 +223,16 @@
     margin: 0;
     font-size: 0.8rem;
     color: var(--muted-foreground);
+  }
+
+  @media (min-width: 720px) {
+    .shortcuts-layout {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1.25rem;
+    }
+
+    .shortcut-group {
+      min-width: 0;
+    }
   }
 </style>

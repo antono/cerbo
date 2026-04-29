@@ -1,11 +1,12 @@
 ## Context
 
-The shortcuts help modal currently renders as a single vertical list. The content is already stable; the requested change is purely presentational and should make the list easier to scan on larger screens without changing the shortcut set or dismissal behavior.
+The shortcuts help modal currently renders as a single vertical list inside a narrow shell. The content is already stable; the requested change is presentational and should make the dialog wider and easier to scan on larger screens without changing the shortcut set or dismissal behavior.
 
 ## Goals / Non-Goals
 
 **Goals:**
 - Show the help content in two columns on wide screens.
+- Make the modal shell much wider on large screens.
 - Preserve a single-column layout on narrow screens.
 - Keep shortcut content, keyboard handling, and modal close behavior unchanged.
 - Group shortcuts by meaning so related actions stay together.
@@ -17,8 +18,8 @@ The shortcuts help modal currently renders as a single vertical list. The conten
 
 ## Decisions
 
-### Use a responsive grid inside the existing modal
-The modal shell should remain unchanged. Only the shortcuts body should switch from a single list to a two-column layout at a wide-screen breakpoint. A grid is the simplest fit because it keeps the content flow predictable and collapses cleanly to one column.
+### Use a responsive grid inside a wider modal
+The modal shell should be widened substantially, while the shortcuts body should switch from a single list to a two-column layout at a wide-screen breakpoint. A grid is the simplest fit because it keeps the content flow predictable and collapses cleanly to one column.
 
 Alternatives considered:
 - Two separate lists with duplicated row markup: too much markup noise for a small layout change.
@@ -38,7 +39,7 @@ Each shortcut row should retain the existing key-chord + description pattern. Th
 
 - [Content growth] → If the list grows, one column may become much longer than the other. Mitigation: use a breakpoint that only enables two columns when there is enough horizontal space.
 - [Uneven group sizes] → One semantic group may be noticeably larger than the other. Mitigation: choose group boundaries based on readability first, not perfect balance.
-- [Responsive regression] → The new layout could compress the modal on medium screens. Mitigation: keep the two-column breakpoint conservative and verify the narrow layout remains unchanged.
+- [Responsive regression] → The new wider modal could crowd smaller laptops. Mitigation: cap the width at a conservative maximum and verify the narrow layout remains unchanged.
 
 ## Migration Plan
 
