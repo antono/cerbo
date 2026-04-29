@@ -14,6 +14,7 @@
   import ExternalChangeDialog from './ExternalChangeDialog.svelte';
   import { wikilinkPlugin, attachPreviewClickHandler } from './wikilink-plugin';
   import { getCursorPositionFromOffset, restoreCursorPosition as resolveCursorPosition } from './cursor-position';
+  import { focusTextareaAtOffset } from './textarea-focus';
   import { decideExternalPageChange, logPageContentDiff, pageChangeKey, pageMdPathToSlug, shouldIgnoreUnchangedPageChange, shouldSkipExternalPageChange } from './page-sync';
   import {
     app,
@@ -273,14 +274,6 @@
   /**
    * Focuses the editor's textarea with a retry mechanism to ensure the DOM is ready.
    */
-  async function focusEditor() {
-    await tick();
-    const textarea = carta.input?.textarea;
-    if (!textarea) return;
-
-    textarea.focus();
-  }
-
   async function saveCursorPosition() {
     const textarea = carta.input?.textarea;
     if (!textarea || !app.activeVaultId || !app.currentSlug) return;
@@ -303,15 +296,12 @@
       slug: app.currentSlug,
     });
 
+    await tick();
     const textarea = carta.input?.textarea;
     if (!textarea) return;
 
     const { offset } = resolveCursorPosition(textarea.value, saved);
-
-    await focusEditor();
-    textarea.setSelectionRange(offset, offset);
-    await tick();
-    textarea.scrollIntoView({ block: 'center' });
+    focusTextareaAtOffset(textarea, offset);
   }
 
   $effect(() => {
