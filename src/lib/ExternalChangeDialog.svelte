@@ -30,15 +30,22 @@
     function handleWindowKeydown(e: KeyboardEvent) {
       e.stopPropagation();
 
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
         e.preventDefault();
-        selectedIndex = selectedIndex === 0 ? 1 : 0;
+        selectedIndex = selectedIndex === 0 ? (previewMode ? 1 : 2) : selectedIndex - 1;
+      } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectedIndex = previewMode
+          ? (selectedIndex === 1 ? 0 : selectedIndex + 1)
+          : (selectedIndex === 2 ? 0 : selectedIndex + 1);
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        if (selectedIndex === 1) {
-          void onOverwrite();
-        } else {
+        if (!previewMode && selectedIndex === 0) {
+          void onPreview();
+        } else if (selectedIndex === 1) {
           void onLoad();
+        } else if (selectedIndex === 2) {
+          void onOverwrite();
         }
       } else if (!previewMode && e.key === 'p') {
         e.preventDefault();
@@ -101,14 +108,14 @@
 
       <div class="modal-actions">
         {#if !previewMode}
-          <button class="btn btn-ghost" onclick={() => void onPreview()}>
+          <button class="btn btn-ghost" class:selected={selectedIndex === 0} onclick={() => void onPreview()}>
             Preview diff
           </button>
         {/if}
-        <button class="btn btn-ghost" class:selected={selectedIndex === 0} onclick={() => void onLoad()}>
+        <button class="btn btn-ghost" class:selected={selectedIndex === (previewMode ? 0 : 1)} onclick={() => void onLoad()}>
           Load changes
         </button>
-        <button class="btn btn-danger" class:selected={selectedIndex === 1} onclick={() => void onOverwrite()}>
+        <button class="btn btn-danger" class:selected={selectedIndex === (previewMode ? 1 : 2)} onclick={() => void onOverwrite()}>
           Overwrite
         </button>
       </div>
@@ -129,8 +136,8 @@
   }
 
   .confirm-modal {
-    width: 100%;
-    max-width: 960px;
+    width: min(1200px, calc(100vw - 3rem));
+    max-width: 1200px;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg, 12px);
@@ -144,7 +151,7 @@
   .modal-content {
     display: flex;
     flex-direction: column;
-    padding: 1.5rem;
+    padding: 0;
     gap: 1.25rem;
   }
 
@@ -153,6 +160,7 @@
     align-items: flex-start;
     gap: 1rem;
     min-width: 0;
+    padding: 1.5rem 1.5rem 0;
   }
 
   .icon-wrap {
@@ -230,8 +238,11 @@
 
   .diff-wrap {
     background: var(--bg);
-    padding: 0 1.5rem 0.5rem;
+    margin: 0 1.5rem;
+    padding: 0;
     max-height: min(60vh, 560px);
     overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
   }
 </style>
