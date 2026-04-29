@@ -73,6 +73,16 @@ Rationale: the user should not have to re-learn the conflict decision once they 
 Alternatives considered:
 - Rename actions to `Approve` and `Reject`. Rejected for now because the current app already uses the existing wording.
 
+### 5. Keep the preview surface visually compact and opaque
+
+The expanded preview should keep the conflict icon and title on one horizontal row, use an opaque modal surface above the rest of the app, and avoid redundant refresh controls once the diff is visible.
+
+Rationale: the preview should read like the same conflict dialog in a larger presentation, not as a separate control panel.
+
+Alternatives considered:
+- Stack the title under the icon. Rejected because it makes the header taller than needed.
+- Keep a refresh button in the preview. Rejected because the preview is already generated on demand from live disk content.
+
 ## Risks / Trade-offs
 
 - Re-reading disk on preview → The preview can differ slightly from the original event if the file changes again. Mitigation: this is intentional and should be visible.

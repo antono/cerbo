@@ -14,6 +14,12 @@ When a page file changes on disk while the page is open, the system SHALL let th
 - **THEN** the system SHALL compare the disk content against the in-memory editor content
 - **THEN** the system SHALL display the comparison in an expanded diff preview view
 
+#### Scenario: Preview view presentation
+- **WHEN** the expanded diff preview is shown
+- **THEN** the system SHALL keep the conflict header compact with the icon and title on one row
+- **THEN** the system SHALL render an opaque modal surface above the rest of the app chrome
+- **THEN** the system SHALL NOT show a redundant refresh control in the preview view
+
 ### Requirement: Approve conflict from diff preview
 The diff preview view SHALL allow the user to resolve the conflict without returning to the prompt.
 

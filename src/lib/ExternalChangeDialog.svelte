@@ -1,20 +1,28 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { DiffModeEnum, DiffView } from '@git-diff-view/svelte';
+  import '@git-diff-view/svelte/styles/diff-view.css';
+  import type { PageDiffFile } from './page-sync';
 
   let {
     title = 'External changes detected',
     message = 'This page changed on disk. Load the updated version or overwrite it with your current draft.',
     onLoad,
     onOverwrite,
+    onPreview,
+    diffFile = null,
   }: {
     title?: string;
     message?: string;
     onLoad: () => void | Promise<void>;
     onOverwrite: () => void | Promise<void>;
+    onPreview: () => void | Promise<void>;
+    diffFile?: PageDiffFile | null;
   } = $props();
 
   let selectedIndex = $state(0); // 0 = Load, 1 = Overwrite
   let modalEl = $state<HTMLElement | null>(null);
+  let previewMode = $derived(diffFile !== null);
 
   onMount(() => {
     modalEl?.focus();
@@ -32,6 +40,9 @@
         } else {
           void onLoad();
         }
+      } else if (!previewMode && e.key === 'p') {
+        e.preventDefault();
+        void onPreview();
       } else if (e.key === 'Escape') {
         e.preventDefault();
         void onOverwrite();
@@ -49,6 +60,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div class="modal-backdrop" onclick={() => void onOverwrite()} role="presentation">
   <div
+    class:preview-mode={previewMode}
     class="confirm-modal"
     onclick={(e) => e.stopPropagation()}
     role="dialog"
@@ -57,36 +69,49 @@
     bind:this={modalEl}
   >
     <div class="modal-content">
-      <div class="icon-wrap">
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          width="32"
-          height="32"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="3"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <line x1="12" y1="8" x2="12" y2="12"></line>
-          <line x1="12" y1="16" x2="12.01" y2="16"></line>
-        </svg>
+      <div class="modal-header">
+        <div class="icon-wrap">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="32"
+            height="32"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="3"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <line x1="12" y1="8" x2="12" y2="12"></line>
+            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+          </svg>
+        </div>
+
+        <div class="text-wrap">
+          <h3>{title}</h3>
+          <p>{message}</p>
+        </div>
       </div>
 
-      <div class="text-wrap">
-        <h3>{title}</h3>
-        <p>{message}</p>
-      </div>
-    </div>
+      {#if previewMode && diffFile}
+        <div class="diff-wrap">
+          <DiffView diffFile={diffFile} diffViewMode={DiffModeEnum.Unified} />
+        </div>
+      {/if}
 
-    <div class="modal-actions">
-      <button class="btn btn-ghost" class:selected={selectedIndex === 0} onclick={() => void onLoad()}>
-        Load changes
-      </button>
-      <button class="btn btn-danger" class:selected={selectedIndex === 1} onclick={() => void onOverwrite()}>
-        Overwrite
-      </button>
+      <div class="modal-actions">
+        {#if !previewMode}
+          <button class="btn btn-ghost" onclick={() => void onPreview()}>
+            Preview diff
+          </button>
+        {/if}
+        <button class="btn btn-ghost" class:selected={selectedIndex === 0} onclick={() => void onLoad()}>
+          Load changes
+        </button>
+        <button class="btn btn-danger" class:selected={selectedIndex === 1} onclick={() => void onOverwrite()}>
+          Overwrite
+        </button>
+      </div>
     </div>
   </div>
 </div>
@@ -95,17 +120,17 @@
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: rgba(0, 0, 0, 0.42);
     backdrop-filter: blur(2px);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 1000;
+    z-index: 5000;
   }
 
   .confirm-modal {
     width: 100%;
-    max-width: 400px;
+    max-width: 960px;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg, 12px);
@@ -113,12 +138,21 @@
     display: flex;
     flex-direction: column;
     outline: none;
+    overflow: hidden;
   }
 
   .modal-content {
     display: flex;
+    flex-direction: column;
     padding: 1.5rem;
     gap: 1.25rem;
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    min-width: 0;
   }
 
   .icon-wrap {
@@ -137,6 +171,10 @@
     margin: 0 0 0.5rem;
     font-size: 1.25rem;
     font-weight: 700;
+  }
+
+  .text-wrap {
+    min-width: 0;
   }
 
   .text-wrap p {
@@ -188,5 +226,12 @@
 
   .btn-ghost.selected {
     background: var(--accent);
+  }
+
+  .diff-wrap {
+    background: var(--bg);
+    padding: 0 1.5rem 0.5rem;
+    max-height: min(60vh, 560px);
+    overflow: auto;
   }
 </style>

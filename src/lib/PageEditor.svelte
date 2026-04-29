@@ -15,7 +15,7 @@
   import { wikilinkPlugin, attachPreviewClickHandler } from './wikilink-plugin';
   import { getCursorPositionFromOffset, restoreCursorPosition as resolveCursorPosition } from './cursor-position';
   import { focusTextareaAtOffset } from './textarea-focus';
-  import { decideExternalPageChange, logPageContentDiff, pageChangeKey, pageMdPathToSlug, shouldIgnoreUnchangedPageChange, shouldSkipExternalPageChange } from './page-sync';
+  import { buildPageDiffFile, decideExternalPageChange, loadPageDiffFile, logPageContentDiff, pageChangeKey, pageMdPathToSlug, shouldIgnoreUnchangedPageChange, shouldSkipExternalPageChange } from './page-sync';
   import {
     app,
     activeVault,
@@ -48,6 +48,7 @@
   let saving = $state(false);
   let editorContainer = $state<HTMLElement | null>(null);
   let showConflictPrompt = $state(false);
+  let previewDiffFile = $state<ReturnType<typeof buildPageDiffFile> | null>(null);
   let lastConflictKey = '';
   let suppressedConflictKey: string | null = null;
 
@@ -121,6 +122,7 @@
         }
 
         showConflictPrompt = true;
+        previewDiffFile = null;
       })();
     }).then((stop) => {
       unlisten = stop;
@@ -361,7 +363,22 @@
     baselineContent = nextContent;
     content = nextContent;
     showConflictPrompt = false;
+    previewDiffFile = null;
     lastConflictKey = '';
+  }
+
+  async function previewCurrentPageDiff() {
+    const vault = activeVault();
+    if (!vault || !app.currentSlug) return;
+
+    previewDiffFile = await loadPageDiffFile(
+      () => invoke<string>('page_read', {
+        vaultId: vault.id,
+        slug: app.currentSlug!,
+      }),
+      content,
+      `${app.currentSlug}/page.md`,
+    );
   }
 
   function suppressNextOwnPageChange() {
@@ -373,6 +390,7 @@
   async function overwriteCurrentPage() {
     suppressNextOwnPageChange();
     showConflictPrompt = false;
+    previewDiffFile = null;
     lastConflictKey = '';
     await savePage(slug, content);
   }
@@ -406,6 +424,8 @@
     <ExternalChangeDialog
       onLoad={loadCurrentPageFromDisk}
       onOverwrite={overwriteCurrentPage}
+      onPreview={previewCurrentPageDiff}
+      diffFile={previewDiffFile}
     />
   {/if}
 </div>

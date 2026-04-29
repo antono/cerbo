@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPageContentDiff, decideExternalPageChange, logPageContentDiff, pageMdPathToSlug, pageChangeKey, shouldSkipExternalPageChange, shouldIgnoreUnchangedPageChange } from './page-sync';
+import { buildPageContentDiff, buildPageDiffData, buildPageDiffFile, decideExternalPageChange, loadPageDiffData, loadPageDiffFile, logPageContentDiff, pageMdPathToSlug, pageChangeKey, shouldSkipExternalPageChange, shouldIgnoreUnchangedPageChange } from './page-sync';
 
 describe('page-sync', () => {
   it('derives a page slug from a page.md path', () => {
@@ -50,10 +50,32 @@ describe('page-sync', () => {
 
   it('builds a simple diff for debug logging', () => {
     const diff = buildPageContentDiff('a\nb', 'a\nc');
-    expect(diff).toContain('--- current');
-    expect(diff).toContain('+++ disk');
+    expect(diff).toContain('--- a/page.md');
+    expect(diff).toContain('+++ b/page.md');
     expect(diff).toContain('-b');
     expect(diff).toContain('+c');
+  });
+
+  it('builds diff data for the preview view', () => {
+    const diffData = buildPageDiffData('a\nb', 'a\nc', 'notes/page.md');
+    expect(diffData?.oldFile.fileName).toBe('notes/page.md');
+    expect(diffData?.newFile.content).toBe('a\nc');
+    expect(diffData?.hunks[0]).toContain('--- a/notes/page.md');
+  });
+
+  it('loads diff data from the latest disk content', async () => {
+    const diffData = await loadPageDiffData(async () => 'latest disk', 'current draft', 'notes/page.md');
+    expect(diffData?.newFile.content).toBe('latest disk');
+    expect(diffData?.oldFile.content).toBe('current draft');
+  });
+
+  it('loads a diff file from the latest disk content', async () => {
+    const diffFile = await loadPageDiffFile(async () => 'latest disk', 'current draft', 'notes/page.md');
+    expect(diffFile).toBeTruthy();
+  });
+
+  it('builds a diff file for the preview view', () => {
+    expect(buildPageDiffFile('a\nb', 'a\nc', 'notes/page.md')).toBeTruthy();
   });
 
   it('emits a grouped console diff', () => {
@@ -72,8 +94,8 @@ describe('page-sync', () => {
     console.log = log;
 
     expect(String(calls[0][0])).toContain('label');
-    expect(calls.some((args) => String(args[0]).includes('--- current'))).toBe(true);
-    expect(calls.some((args) => String(args[0]).includes('+++ disk'))).toBe(true);
+    expect(calls.some((args) => String(args[0]).includes('--- a/page.md'))).toBe(true);
+    expect(calls.some((args) => String(args[0]).includes('+++ b/page.md'))).toBe(true);
     expect(calls.some((args) => String(args[0]).includes('-b'))).toBe(true);
     expect(calls.some((args) => String(args[0]).includes('+c'))).toBe(true);
   });

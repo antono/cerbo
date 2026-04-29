@@ -1,4 +1,22 @@
+import { DiffFile } from '@git-diff-view/core';
+
 export type ExternalPageChangeAction = 'reload' | 'prompt' | 'ignore';
+
+export type PageDiffData = {
+  oldFile: {
+    fileName: string;
+    fileLang: string;
+    content: string;
+  };
+  newFile: {
+    fileName: string;
+    fileLang: string;
+    content: string;
+  };
+  hunks: string[];
+};
+
+export type PageDiffFile = InstanceType<typeof DiffFile>;
 
 export function pageMdPathToSlug(vaultPath: string, changedPath: string): string | null {
   const normalizedVault = vaultPath.replace(/\\/g, '/').replace(/\/$/, '');
@@ -36,7 +54,7 @@ export function shouldIgnoreUnchangedPageChange(currentContent: string, diskCont
   return currentContent === diskContent;
 }
 
-export function buildPageContentDiff(currentContent: string, diskContent: string): string | null {
+export function buildPageContentDiff(currentContent: string, diskContent: string, fileName = 'page.md'): string | null {
   if (currentContent === diskContent) return null;
 
   const currentLines = currentContent.split('\n');
@@ -59,12 +77,73 @@ export function buildPageContentDiff(currentContent: string, diskContent: string
   const added = diskLines.slice(start, endDisk + 1);
 
   return [
-    '--- current',
-    '+++ disk',
+    `--- a/${fileName}`,
+    `+++ b/${fileName}`,
     `@@ -${start + 1},${removed.length} +${start + 1},${added.length} @@`,
     ...removed.map((line) => `-${line}`),
     ...added.map((line) => `+${line}`),
   ].join('\n');
+}
+
+export function buildPageDiffData(currentContent: string, diskContent: string, fileName = 'page.md'): PageDiffData | null {
+  const diff = buildPageContentDiff(currentContent, diskContent, fileName);
+  if (!diff) return null;
+
+  return {
+    oldFile: {
+      fileName,
+      fileLang: 'markdown',
+      content: currentContent,
+    },
+    newFile: {
+      fileName,
+      fileLang: 'markdown',
+      content: diskContent,
+    },
+    hunks: [diff],
+  };
+}
+
+export function buildPageDiffFile(currentContent: string, diskContent: string, fileName = 'page.md'): PageDiffFile | null {
+  const diff = buildPageContentDiff(currentContent, diskContent, fileName);
+  if (!diff) return null;
+
+  const diffFile = DiffFile.createInstance({
+    oldFile: {
+      fileName,
+      fileLang: 'markdown',
+      content: currentContent,
+    },
+    newFile: {
+      fileName,
+      fileLang: 'markdown',
+      content: diskContent,
+    },
+    hunks: [diff],
+  });
+
+  diffFile.initTheme('dark');
+  diffFile.init();
+  diffFile.buildUnifiedDiffLines();
+  return diffFile as PageDiffFile;
+}
+
+export async function loadPageDiffData(
+  readDiskContent: () => Promise<string>,
+  currentContent: string,
+  fileName = 'page.md',
+): Promise<PageDiffData | null> {
+  const diskContent = await readDiskContent();
+  return buildPageDiffData(currentContent, diskContent, fileName);
+}
+
+export async function loadPageDiffFile(
+  readDiskContent: () => Promise<string>,
+  currentContent: string,
+  fileName = 'page.md',
+): Promise<PageDiffFile | null> {
+  const diskContent = await readDiskContent();
+  return buildPageDiffFile(currentContent, diskContent, fileName);
 }
 
 export function logPageContentDiff(debugLabel: string, currentContent: string, diskContent: string) {
