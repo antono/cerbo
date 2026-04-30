@@ -14,7 +14,10 @@
   let itemsList = $state<HTMLUListElement | null>(null);
 
   function handleListKeydown(e: KeyboardEvent) {
-    const isJorK = e.key === 'j' || e.key === 'k';
+    // In preview mode, don't handle ANY navigation keys - let +layout.svelte handle them
+    if (app.editorTab === 'preview') return;
+
+    const isJorK = e.key === 'J' || e.key === 'K';
     const isArrow = e.key === 'ArrowDown' || e.key === 'ArrowUp';
     const isTab = e.key === 'Tab';
     const isR = e.key === 'r';

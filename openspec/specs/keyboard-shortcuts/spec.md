@@ -52,8 +52,8 @@ The system MUST provide a global keyboard shortcut to open the Shortcuts Help mo
 ### Requirement: Add Vault Shortcut
 The system MUST provide a global keyboard shortcut to trigger the "Add Vault" workflow.
 
-#### Scenario: Trigger Add Vault via Ctrl+O
-- **WHEN** the user presses `Ctrl+O` (Linux/Windows) or `Cmd+O` (Mac)
+#### Scenario: Trigger Add Vault via Ctrl+Shift+O
+- **WHEN** the user presses `Ctrl+Shift+O` (Linux/Windows) or `Cmd+Shift+O` (Mac)
 - **THEN** the native system directory picker SHALL be displayed for vault selection
 
 ### Requirement: Vault Selector Shortcut
@@ -72,17 +72,30 @@ The system MUST provide keyboard shortcuts for efficient navigation within the s
 #### Scenario: Sidebar shortcuts listed in help
 - **WHEN** the Shortcuts Help modal is opened
 - **THEN** it SHALL include a section for "Sidebar Navigation"
-- **AND** it SHALL list `ArrowUp/k` for "Previous page", `ArrowDown/j` for "Next page", and `Tab` for "Cycle pages"
+- **AND** it SHALL list `J` for "Next page", `K` for "Previous page", `j` for "Scroll down", `k` for "Scroll up", and `Tab` for "Cycle pages"
 
 ### Requirement: Preview Mode Page Operations
 The system MUST provide keyboard shortcuts for common page operations while in "Preview" mode.
 
-#### Scenario: Navigate pages in preview mode
+#### Scenario: Scroll page in preview mode
 - **WHEN** the user is in preview mode and not focusing an input
 - **AND** the user presses `j` or `ArrowDown`
-- **THEN** the system SHALL open the next page in the list
-- **WHEN** the user presses `k` or `ArrowUp`
-- **THEN** the system SHALL open the previous page in the list
+- **THEN** the system SHALL scroll the preview viewport down by 100 pixels
+
+#### Scenario: Scroll page up in preview mode
+- **WHEN** the user is in preview mode and not focusing an input
+- **AND** the user presses `k` or `ArrowUp`
+- **THEN** the system SHALL scroll the preview viewport up by 100 pixels
+
+#### Scenario: Navigate to next page with J
+- **WHEN** the user is in preview mode and not focusing an input
+- **AND** the user presses `J` (uppercase)
+- **THEN** the system SHALL open the next page in the sidebar list
+
+#### Scenario: Navigate to previous page with K
+- **WHEN** the user is in preview mode and not focusing an input
+- **AND** the user presses `K` (uppercase)
+- **THEN** the system SHALL open the previous page in the sidebar list
 
 #### Scenario: Trigger rename in preview mode
 - **WHEN** the user is in preview mode and not focusing an input

@@ -92,15 +92,28 @@
         return;
       }
 
-      // ── Preview Mode Shortcuts ──────────────────────────────────────────────────
+      // ── Preview Mode Shortcuts ──────────────────────────────────
       if (app.editorTab === 'preview' && !isInputFocused()) {
-        // Switch pages
+        // Default: j/ArrowDown = scroll down, k/ArrowUp = scroll up (vim-style)
         if (e.key === 'j' || e.key === 'ArrowDown') {
+          e.preventDefault();
+          const renderer = document.querySelector('.carta-renderer') as HTMLElement;
+          if (renderer) renderer.scrollBy({ top: 100, behavior: 'smooth' });
+          return;
+        }
+        if (e.key === 'k' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const renderer = document.querySelector('.carta-renderer') as HTMLElement;
+          if (renderer) renderer.scrollBy({ top: -100, behavior: 'smooth' });
+          return;
+        }
+        // J/K (uppercase) = navigate pages in sidebar
+        if (e.key === 'J') {
           e.preventDefault();
           openNextPage();
           return;
         }
-        if (e.key === 'k' || e.key === 'ArrowUp') {
+        if (e.key === 'K') {
           e.preventDefault();
           openPrevPage();
           return;
