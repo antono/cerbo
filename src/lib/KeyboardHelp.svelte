@@ -7,39 +7,39 @@
 
   const mod = isMac ? '⌘' : 'Ctrl';
 
-  const shortcutGroups = [
+   const shortcutGroups = [
     {
       title: 'App actions',
       shortcuts: [
         { keys: [mod, 'P'], desc: 'Open page search' },
         { keys: [mod, 'N'], desc: 'Create new page' },
         { keys: [mod, 'T'], desc: 'Toggle light/dark theme' },
-         { keys: [mod, 'O'], desc: 'Open vault selector' },
-         { keys: [mod, 'Shift', 'O'], desc: 'Add vault' },
+        { keys: [mod, 'O'], desc: 'Open vault selector' },
+        { keys: [mod, 'Shift', 'O'], desc: 'Add vault' },
         { keys: [mod, 'Q'], desc: 'Quit application' },
         { keys: ['F1'], desc: 'Show this help' },
         { keys: ['Esc'], desc: 'Close active dialog or modal' },
       ],
     },
     {
-       title: 'Navigation',
-       shortcuts: [
-         { keys: ['Alt', '←'], desc: 'Go back in history' },
-         { keys: ['Alt', '→'], desc: 'Go forward in history' },
-         { keys: ['J'], desc: 'Next page (Vim-style)' },
-         { keys: ['K'], desc: 'Previous page (Vim-style)' },
-         { keys: ['Tab'], desc: 'Cycle pages in sidebar' },
-       ],
-     },
-     {
-       title: 'Preview mode',
-       shortcuts: [
-         { keys: ['j', '↓'], desc: 'Scroll down' },
-         { keys: ['k', '↑'], desc: 'Scroll up' },
-         { keys: ['r'], desc: 'Rename current page' },
-         { keys: ['Del'], desc: 'Delete current page' },
-       ],
-     },
+      title: 'Navigation',
+      shortcuts: [
+        { keys: ['Alt', '←'], desc: 'Go back in history' },
+        { keys: ['Alt', '→'], desc: 'Go forward in history' },
+        { keys: ['J'], desc: 'Next page (Vim-style)' },
+        { keys: ['K'], desc: 'Previous page (Vim-style)' },
+        { keys: ['Tab'], desc: 'Cycle pages in sidebar' },
+      ],
+    },
+    {
+      title: 'Preview mode',
+      shortcuts: [
+        { keys: ['j', '↓'], sep: 'or', desc: 'Scroll down' },
+        { keys: ['k', '↑'], sep: 'or', desc: 'Scroll up' },
+        { keys: ['r'], desc: 'Rename current page' },
+        { keys: ['Del'], desc: 'Delete current page' },
+      ],
+    },
   ];
 </script>
 
@@ -67,12 +67,14 @@
         <section class="shortcut-group" aria-label={group.title}>
           <h3>{group.title}</h3>
           <div class="shortcuts-grid">
-            {#each group.shortcuts as { keys, desc } (desc)}
+             {#each group.shortcuts as { keys, desc, sep } (desc)}
               <div class="shortcut-row">
                 <div class="keys">
                   {#each keys as key, i (i)}
                     <kbd>{key}</kbd>
-                    {#if i < keys.length - 1}<span class="plus">+</span>{/if}
+                    {#if i < keys.length - 1}
+                      <span class="plus">{sep || '+'}</span>
+                    {/if}
                   {/each}
                 </div>
                 <div class="desc">{desc}</div>
