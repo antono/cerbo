@@ -12,7 +12,12 @@
   import { onMount, tick, untrack } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import ExternalChangeDialog from './ExternalChangeDialog.svelte';
-  import { wikilinkPlugin, attachPreviewClickHandler } from './wikilink-plugin';
+  import {
+    wikilinkPlugin,
+    attachPreviewClickHandler,
+    attachTaskListClickHandler,
+    previewTaskListPlugin,
+  } from './wikilink-plugin';
   import { getCursorPositionFromOffset, restoreCursorPosition as resolveCursorPosition } from './cursor-position';
   import { focusTextareaAtOffset } from './textarea-focus';
   import { buildPageDiffFile, decideExternalPageChange, loadPageDiffFile, logPageContentDiff, pageChangeKey, pageMdPathToSlug, shouldIgnoreUnchangedPageChange, shouldSkipExternalPageChange } from './page-sync';
@@ -27,6 +32,7 @@
     loadAttachments,
     extractTitle,
   } from './stores.svelte';
+  import { toggleTaskListItemAtIndex } from './task-list';
 
   // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -165,6 +171,7 @@
           });
         }
       }),
+      previewTaskListPlugin(),
       code({
         theme: {
           light: 'material-theme-lighter',
@@ -260,8 +267,17 @@
 
   // Attach link click handlers via event delegation on the container
   $effect(() => {
-    if (editorContainer) {
-      return attachPreviewClickHandler(editorContainer, {
+    if (app.editorTab !== 'preview' || !editorContainer) return;
+    {
+      const previewSurface = editorContainer.querySelector('.carta-renderer') as HTMLElement | null;
+      console.debug('[page-editor] attach preview handler', {
+        slug,
+        container: editorContainer,
+        previewSurface,
+      });
+      if (!previewSurface) return;
+
+      return attachPreviewClickHandler(previewSurface, {
         onNavigate: (s) => openPage(s),
         onCreate: (t) => createPage(t),
         onOpenAsset: (f) => invoke('attachment_open', {
@@ -269,6 +285,58 @@
           slug: slug,
           filename: f
         })
+      });
+    }
+  });
+
+  $effect(() => {
+    if (app.editorTab !== 'preview' || !editorContainer) return;
+    {
+      const previewSurface = editorContainer.querySelector('.carta-renderer') as HTMLElement | null;
+      console.debug('[page-editor] attach task-list handler', {
+        slug,
+        hasContainer: !!editorContainer,
+        previewSurface,
+      });
+      if (!previewSurface) return;
+
+      return attachTaskListClickHandler(previewSurface, {
+        onToggleTask: (index, checked) => {
+          console.debug('[page-editor] toggle request', {
+            slug,
+            index,
+            checked,
+            contentPreview: content.slice(0, 120),
+          });
+          const updated = toggleTaskListItemAtIndex(content, index, checked);
+          if (updated === null) return;
+          console.debug('[page-editor] toggle applied', {
+            slug,
+            index,
+            checked,
+            before: content,
+            after: updated,
+          });
+          if (saveTimer) clearTimeout(saveTimer);
+          saveTimer = null;
+          content = updated;
+          app.currentContent = updated;
+          void savePage(slug, updated).then((finalContent) => {
+            if (finalContent && finalContent !== updated) {
+              console.debug('[page-editor] toggle save normalized content', {
+                slug,
+                index,
+                checked,
+                finalContent,
+              });
+              content = finalContent;
+              app.currentContent = finalContent;
+            }
+          }).catch((e) => {
+            console.error('[page-editor] toggle save failed', e);
+            app.error = String(e);
+          });
+        },
       });
     }
   });
@@ -520,6 +588,21 @@
     height: 100%;
     overflow-y: auto;
     background: transparent;
+  }
+
+  .page-editor :global(.carta-renderer ul.contains-task-list),
+  .page-editor :global(.carta-renderer ul.task-list-item) {
+    list-style: none;
+    padding-left: 1.4em;
+  }
+
+  .page-editor :global(.carta-renderer input.task-list-checkbox) {
+    width: 1.1em;
+    height: 1.1em;
+    margin: 0 0.5em 0 0;
+    vertical-align: text-bottom;
+    flex: 0 0 auto;
+    transform: translateY(0.02em);
   }
 
   :global(.carta-renderer a.wikilink) {

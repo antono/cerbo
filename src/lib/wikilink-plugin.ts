@@ -206,6 +206,50 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
   };
 }
 
+export function previewTaskListPlugin(): Plugin {
+  return {
+    transformers: [
+      {
+        execution: 'sync',
+        type: 'rehype',
+        transform({ processor }) {
+          processor.use(() => (tree: HastRoot) => {
+            let taskIndex = 0;
+
+            visit(tree, 'element', (node: Element) => {
+              if (node.tagName !== 'li') return;
+
+              const className = node.properties?.class;
+              const classValue = Array.isArray(className) ? className.join(' ') : String(className ?? '');
+              const isTaskItem = classValue.includes('task-list-item') || classValue.includes('contains-task-list');
+              if (!isTaskItem) return;
+
+              node.properties['data-task-list-item'] = 'true';
+              node.properties['data-task-list-index'] = String(taskIndex);
+              taskIndex += 1;
+
+              visit(node, 'element', (child: Element) => {
+                if (child.tagName !== 'input') return;
+                const type = child.properties?.type;
+                if (type !== 'checkbox') return;
+
+                if ('disabled' in child.properties) {
+                  delete child.properties.disabled;
+                }
+                child.properties.tabIndex = 0;
+                child.properties.value = String(taskIndex);
+                child.properties['data-task-list-checkbox'] = 'true';
+                child.properties['data-task-list-index'] = node.properties['data-task-list-index'];
+                child.properties.class = 'task-list-checkbox';
+              });
+            });
+          });
+        },
+      },
+    ],
+  };
+}
+
 /** Attach a click listener to the preview container to handle wikilink clicks. */
 export function attachPreviewClickHandler(
   previewEl: HTMLElement,
@@ -249,4 +293,123 @@ export function attachPreviewClickHandler(
   }
   previewEl.addEventListener('click', handler);
   return () => previewEl.removeEventListener('click', handler);
+}
+
+export function attachTaskListClickHandler(
+  previewEl: HTMLElement,
+  options: { onToggleTask: (index: number, checked: boolean) => void },
+): () => void {
+  const itemHandlers = new Map<HTMLElement, (ev: MouseEvent) => void>();
+  const checkboxHandlers = new Map<HTMLInputElement, (ev: Event) => void>();
+
+  const syncHandlers = () => {
+    const items = Array.from(previewEl.querySelectorAll('.task-list-item')) as HTMLElement[];
+    const next = new Set(items);
+
+    console.debug('[task-list] syncing inputs', {
+      count: items.length,
+      previewEl,
+    });
+
+    for (const item of items) {
+      if (itemHandlers.has(item)) continue;
+
+      const input =
+        (item.querySelector(':scope > input[type="checkbox"]') as HTMLInputElement | null) ??
+        (item.querySelector('input[type="checkbox"]') as HTMLInputElement | null);
+      if (!input) continue;
+
+      if (input.disabled) {
+        console.debug('[task-list] enabling disabled input', { input });
+        input.disabled = false;
+        input.removeAttribute('disabled');
+      }
+
+      if (!checkboxHandlers.has(input)) {
+        const checkboxHandler = (ev: Event) => {
+          const index = Number(input.value);
+          if (Number.isNaN(index)) return;
+
+          ev.stopPropagation();
+          if ('stopImmediatePropagation' in ev) ev.stopImmediatePropagation();
+
+          console.debug('[task-list] checkbox change', {
+            type: ev.type,
+            index,
+            checked: input.checked,
+            value: input.value,
+            item,
+            input,
+          });
+
+          options.onToggleTask(index, input.checked);
+        };
+
+        checkboxHandlers.set(input, checkboxHandler);
+        input.addEventListener('change', checkboxHandler);
+        console.debug('[task-list] change handler attached to checkbox', input);
+      }
+
+      const handler = (ev: MouseEvent) => {
+        const index = Number(input.value);
+        if (Number.isNaN(index)) return;
+
+        console.debug('[task-list] item click', {
+          type: ev.type,
+          index,
+          checked: input.checked,
+          value: input.value,
+          item,
+          input,
+        });
+
+        ev.stopPropagation();
+        if ('stopImmediatePropagation' in ev) ev.stopImmediatePropagation();
+
+        if (ev.target !== input) {
+          console.debug('[task-list] forwarding click to checkbox', { index, input });
+          input.click();
+        }
+      };
+
+      itemHandlers.set(item, handler);
+      item.addEventListener('click', handler);
+      console.debug('[task-list] handler attached to item', item);
+    }
+
+    for (const [item, handler] of itemHandlers) {
+      if (next.has(item)) continue;
+
+      item.removeEventListener('click', handler);
+      itemHandlers.delete(item);
+      console.debug('[task-list] handler detached from item', item);
+    }
+
+    for (const [input, handler] of checkboxHandlers) {
+      const stillPresent = items.some((item) => item.contains(input));
+      if (stillPresent) continue;
+
+      input.removeEventListener('change', handler);
+      checkboxHandlers.delete(input);
+      console.debug('[task-list] change handler detached from checkbox', input);
+    }
+  };
+
+  const observer = new MutationObserver(() => syncHandlers());
+  observer.observe(previewEl, { childList: true, subtree: true });
+
+  syncHandlers();
+  console.debug('[task-list] handler attached to element', previewEl);
+  return () => {
+    observer.disconnect();
+    for (const [item, handler] of itemHandlers) {
+      item.removeEventListener('click', handler);
+    }
+    for (const [input, handler] of checkboxHandlers) {
+      input.removeEventListener('change', handler);
+    }
+    itemHandlers.clear();
+    checkboxHandlers.clear();
+    console.debug('[task-list] handler detached from element', previewEl);
+  };
 }

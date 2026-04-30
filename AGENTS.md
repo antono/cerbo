@@ -88,25 +88,6 @@ cargo run -p cerbo -- vault add 'My Vault' /path/to/vault
 nix develop --command bash -c "cargo run -p cerbo -- vault list"
 ```
 
-## Debugging with Chrome DevTools MCP
-
-To debug the Tauri app using AI-driven browser tools (Chrome DevTools MCP), use
-the specialized debug script:
-
-```bash
-# Start the app with remote debugging ports enabled (9222)
-nix develop --command bash -c "bun run dev-debug"
-```
-
-Once the app is running:
-
-1. Use `mcp_chrome-devtools_list_pages` to find the app's webview.
-2. Use `mcp_chrome-devtools_take_snapshot` or
-   `mcp_chrome-devtools_evaluate_script` to inspect the UI state.
-3. Note: On Windows (WebView2), this uses the standard Chrome DevTools Protocol
-   (CDP). On Linux (WebKitGTK), it enables the WebKit inspector server on
-   port 9222.
-
 ## Quick Reference
 
 ```bash
