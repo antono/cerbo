@@ -22,24 +22,24 @@
       ],
     },
     {
-      title: 'Navigation',
-      shortcuts: [
-        { keys: ['Alt', '←'], desc: 'Go back in history' },
-        { keys: ['Alt', '→'], desc: 'Go forward in history' },
-        { keys: ['↓'], desc: 'Next page in sidebar' },
-        { keys: ['j'], desc: 'Next page (Vim-style)' },
-        { keys: ['↑'], desc: 'Previous page in sidebar' },
-        { keys: ['k'], desc: 'Previous page (Vim-style)' },
-        { keys: ['Tab'], desc: 'Cycle pages in sidebar' },
-      ],
-    },
-    {
-      title: 'Preview mode',
-      shortcuts: [
-        { keys: ['r'], desc: 'Rename current page (Preview mode)' },
-        { keys: ['Del'], desc: 'Delete current page (Preview mode)' },
-      ],
-    },
+       title: 'Navigation',
+       shortcuts: [
+         { keys: ['Alt', '←'], desc: 'Go back in history' },
+         { keys: ['Alt', '→'], desc: 'Go forward in history' },
+         { keys: ['J'], desc: 'Next page (Vim-style)' },
+         { keys: ['K'], desc: 'Previous page (Vim-style)' },
+         { keys: ['Tab'], desc: 'Cycle pages in sidebar' },
+       ],
+     },
+     {
+       title: 'Preview mode',
+       shortcuts: [
+         { keys: ['j', '↓'], desc: 'Scroll down' },
+         { keys: ['k', '↑'], desc: 'Scroll up' },
+         { keys: ['r'], desc: 'Rename current page' },
+         { keys: ['Del'], desc: 'Delete current page' },
+       ],
+     },
   ];
 </script>
 

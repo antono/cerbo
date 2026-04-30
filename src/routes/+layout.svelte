@@ -141,20 +141,20 @@
         return;
       }
 
-      // 6. Add Vault (Ctrl+O)
+      // 6. Vault Selector (Ctrl+O)
       if (isModKey(e, 'o') && !e.shiftKey) {
-        e.preventDefault();
-        closeAllDialogs();
-        void quickAddVault();
-        return;
-      }
-
-      // 6. Vault Selector (Ctrl+Shift+O)
-      if (isModKey(e, 'o') && e.shiftKey) {
         e.preventDefault();
         const nextState = !app.showVaultSelector;
         closeAllDialogs();
         app.showVaultSelector = nextState;
+        return;
+      }
+
+      // 7. Add Vault (Ctrl+Shift+O)
+      if (isModKey(e, 'o') && e.shiftKey) {
+        e.preventDefault();
+        closeAllDialogs();
+        void quickAddVault();
         return;
       }
 
@@ -300,7 +300,7 @@
       <button
         class="vault-name-btn"
         onclick={toggleVaultSelector}
-        title={`Switch vault (${modKeyLabel}+Shift+O)`}
+        title={`Switch vault (${modKeyLabel}+O)`}
         disabled={app.showNewPageForm}
       >
         <Vault size={18} class="vault-icon" />
