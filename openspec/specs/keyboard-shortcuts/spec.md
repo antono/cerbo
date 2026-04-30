@@ -2,9 +2,7 @@
 
 ## Purpose
 Provide standard and efficient keyboard-driven navigation and control across the application.
-
 ## Requirements
-
 ### Requirement: Global Page Search Shortcut
 The system MUST provide a global keyboard shortcut to open the page autocomplete/search interface from anywhere in the application.
 
@@ -54,17 +52,21 @@ The system MUST provide a global keyboard shortcut to trigger the "Add Vault" wo
 
 #### Scenario: Trigger Add Vault via Ctrl+Shift+O
 - **WHEN** the user presses `Ctrl+Shift+O` (Linux/Windows) or `Cmd+Shift+O` (Mac)
-- **THEN** the native system directory picker SHALL be displayed for vault selection
+- **THEN** the native system directory picker SHALL be displayed for vault selection to add
 
 ### Requirement: Vault Selector Shortcut
 The system MUST provide a global keyboard shortcut to open the vault selector.
 
-#### Scenario: Open vault selector via Ctrl+Shift+O
-- **WHEN** the user presses `Ctrl+Shift+O` (Linux/Windows) or `Cmd+Shift+O` (Mac)
+#### Scenario: Open vault selector via Ctrl+O
+- **WHEN** the user presses `Ctrl+O` (Linux/Windows) or `Cmd+O` (Mac)
 - **THEN** the vault selector SHALL be displayed
 
 ### Requirement: Existing Shortcuts Preserved
 The keyboard shortcuts list MUST continue to document the existing page search, new page, theme toggle, help, and quit shortcuts.
+
+#### Scenario: Existing shortcuts in help
+- **WHEN** the Shortcuts Help modal is opened
+- **THEN** it SHALL include shortcuts for page search, new page, theme toggle, help, and quit
 
 ### Requirement: Sidebar Navigation Shortcuts
 The system MUST provide keyboard shortcuts for efficient navigation within the sidebar's page list.
@@ -122,3 +124,4 @@ The system MUST provide a global keyboard shortcut to navigate forward in the pa
 - **WHEN** the user presses `Alt+Right` (Linux/Windows) or `Option+Right` (Mac)
 - **THEN** the system SHALL navigate to the next page in history (if available)
 - **AND** the back history SHALL be preserved for back navigation
+
