@@ -32,6 +32,7 @@
         "@sveltejs/kit": "^2.58.0",
         "@sveltejs/vite-plugin-svelte": "^5.1.1",
         "@tauri-apps/cli": "^2.10.1",
+        "bun2nix": "^2.0.8",
         "svelte": "^5.55.5",
         "svelte-check": "^4.4.6",
         "typescript": "~5.6.3",
@@ -320,6 +321,8 @@
     "bezier-easing": ["bezier-easing@2.1.0", "", {}, "sha512-gbIqZ/eslnUFC1tjEvtz0sgx+xTK20wDnYMIA27VA04R7w6xxXQPZDbibjA9DTWZRA2CXtwHykkVzlCaAJAZig=="],
 
     "bits-ui": ["bits-ui@2.18.0", "", { "dependencies": { "@floating-ui/core": "^1.7.1", "@floating-ui/dom": "^1.7.1", "esm-env": "^1.1.2", "runed": "^0.35.1", "svelte-toolbelt": "^0.10.6", "tabbable": "^6.2.0" }, "peerDependencies": { "@internationalized/date": "^3.8.1", "svelte": "^5.33.0" } }, "sha512-GLOBZRVy3hxNHIQ2MpD/+5aK9KcBFZRhUJtZ1UDABXdlVR4K6zFpgt4T+Rwuhf2sQzlc6yK1q/DprHPjwT4Pjw=="],
+
+    "bun2nix": ["bun2nix@2.0.8", "", { "dependencies": { "sade": "^1.8.1" }, "bin": { "bun2nix": "index.ts" } }, "sha512-pwq35hA81X1Kjsi5Xo69Aii9aY3zZHhWXwqF1QRz/uB35KzKbwJZ16WrhadiG9/T6bjOsRrPZtzuAyqmlXopLw=="],
 
     "carta-md": ["carta-md@4.11.2", "", { "dependencies": { "diff": "^5.2.0", "esm-env": "^1.0.0", "rehype-stringify": "^10.0.0", "remark-gfm": "^4.0.0", "remark-parse": "^11.0.0", "remark-rehype": "^11.1.0", "shiki": "^3.4.0", "unified": "^11.0.5" }, "peerDependencies": { "svelte": "^5.0.0" } }, "sha512-oqx2wxuEK4xpT1dq23oYTPSdhWKFwGLYqwjeNXPda0q8rnmz+eOygx/oxApUuEhnOtjUNE4f3D23e0f83HSLEQ=="],
 

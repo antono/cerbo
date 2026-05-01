@@ -23,6 +23,7 @@ let
       src = ../.;
     };
     buildPhase = ''
+      bun install --no-save
       bun run build
     '';
     installPhase = ''
