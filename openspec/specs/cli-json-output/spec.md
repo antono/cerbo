@@ -1,5 +1,8 @@
-## ADDED Requirements
+# cli-json-output Specification
 
+## Purpose
+TBD - created by archiving change cli-json-flag. Update Purpose after archive.
+## Requirements
 ### Requirement: CLI SHALL support --json flag on all commands as per-component option
 The CLI SHALL accept a `--json` flag on each command and subcommand individually (not as a global flag). When present, the output SHALL be valid JSON format only, with no additional text, decorations, or log messages. The `--json` flag SHALL appear in the help text for each command that supports it.
 
@@ -125,3 +128,4 @@ The CLI SHALL accept a `--json` flag on each command and subcommand individually
 - **WHEN** a command with `--json` flag encounters an error
 - **THEN** the output SHALL be a valid JSON object with fields: error (boolean), message (string), code (optional integer)
 - **AND** the exit code SHALL be non-zero
+
