@@ -1,13 +1,78 @@
 use cerbo_core::CerboContext;
 use cerbo_core::context::CoreContext;
 use clap::{Parser, Subcommand};
+use serde::Serialize;
+use serde_json;
 use std::path::PathBuf;
+
+fn print_json<T: Serialize>(value: &T) {
+    println!("{}", serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()));
+}
+
+fn print_json_success(message: &str) {
+    println!("{}", serde_json::json!({"success": true, "message": message}));
+}
+
+fn print_json_error(message: &str) {
+    println!("{}", serde_json::json!({"error": true, "message": message}));
+}
+
+#[derive(Serialize)]
+struct VaultJson {
+    id: String,
+    name: String,
+    path: String,
+}
+
+#[derive(Serialize)]
+struct PageJson {
+    slug: String,
+    title: String,
+    path: String,
+}
+
+#[derive(Serialize)]
+struct AttachmentJson {
+    filename: String,
+    path: String,
+}
+
+#[derive(Serialize)]
+struct BacklinkJson {
+    slug: String,
+    title: String,
+}
+
+#[derive(Serialize)]
+struct InfoJson {
+    config_dir: String,
+    cache_dir: String,
+    vaults: Vec<VaultInfoJson>,
+}
+
+#[derive(Serialize)]
+struct VaultInfoJson {
+    id: String,
+    name: String,
+    path: String,
+    page_count: usize,
+}
+
+#[derive(Serialize)]
+struct WatchEventJson {
+    event: String,
+    vault_id: String,
+    message: String,
+}
 
 #[derive(Parser)]
 #[command(name = "cerbo")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "A local-first markdown wiki CLI", long_about = None)]
 struct Cli {
+    #[arg(long)]
+    json: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -118,63 +183,139 @@ fn get_context() -> Result<CerboContext, String> {
 async fn main() -> Result<(), String> {
     let cli = Cli::parse();
     let ctx = get_context()?;
+    let json = cli.json;
 
     match cli.command {
         Commands::Vault { action } => match action {
             VaultCommands::List => {
-                let vaults = cerbo_core::vault::vault_list(&ctx)?;
-                println!("{:#?}", vaults);
+                let vaults_file = cerbo_core::vault::vault_list(&ctx)?;
+                if json {
+                    let vaults_json: Vec<VaultJson> = vaults_file.vaults.into_iter().map(|v| VaultJson {
+                        id: v.id,
+                        name: v.name,
+                        path: v.path.to_string_lossy().to_string(),
+                    }).collect();
+                    print_json(&vaults_json);
+                } else {
+                    println!("{:#?}", vaults_file);
+                }
             }
             VaultCommands::Add { name, path } => {
                 let vault = cerbo_core::vault::vault_add(&ctx, name, path)?;
-                println!("Added vault: {:#?}", vault);
+                if json {
+                    let vault_json = VaultJson {
+                        id: vault.id,
+                        name: vault.name,
+                        path: vault.path.to_string_lossy().to_string(),
+                    };
+                    print_json(&vault_json);
+                } else {
+                    println!("Added vault: {:#?}", vault);
+                }
             }
             VaultCommands::Remove { id } => {
                 cerbo_core::vault::vault_remove(&ctx, id)?;
-                println!("Removed vault");
+                if json {
+                    print_json_success("Vault removed");
+                } else {
+                    println!("Removed vault");
+                }
             }
             VaultCommands::Active { id } => {
                 cerbo_core::vault::vault_set_active(&ctx, id)?;
-                println!("Set active vault");
+                if json {
+                    print_json_success("Active vault set");
+                } else {
+                    println!("Set active vault");
+                }
             }
         },
         Commands::Page { action } => match action {
             PageCommands::List { vault_id } => {
+                let vid = vault_id.clone();
                 let pages = cerbo_core::page::page_list(&ctx, vault_id)?;
-                println!("{:#?}", pages);
+                if json {
+                    let pages_json: Vec<PageJson> = pages.into_iter().map(|p| {
+                        let slug = p.slug.clone();
+                        PageJson {
+                            slug: p.slug,
+                            title: p.title,
+                            path: format!("{}/{}", vid, slug),
+                        }
+                    }).collect();
+                    print_json(&pages_json);
+                } else {
+                    println!("{:#?}", pages);
+                }
             }
             PageCommands::Create { vault_id, title } => {
                 let slug = cerbo_core::page::page_create(&ctx, vault_id, title)?;
-                println!("Created page with slug: {}", slug);
+                if json {
+                    print_json(&serde_json::json!({"slug": slug}));
+                } else {
+                    println!("Created page with slug: {}", slug);
+                }
             }
             PageCommands::Read { vault_id, slug } => {
                 let content = cerbo_core::page::page_read(&ctx, vault_id, slug)?;
-                println!("{}", content);
+                if json {
+                    print_json(&serde_json::json!({"content": content}));
+                } else {
+                    println!("{}", content);
+                }
             }
             PageCommands::Write { vault_id, slug, content } => {
                 let _ = cerbo_core::page::page_write(&ctx, vault_id, slug, content)?;
-                println!("Updated page");
+                if json {
+                    print_json_success("Page updated");
+                } else {
+                    println!("Updated page");
+                }
             }
             PageCommands::Delete { vault_id, slug } => {
                 cerbo_core::page::page_delete(&ctx, vault_id, slug)?;
-                println!("Deleted page");
+                if json {
+                    print_json_success("Page deleted");
+                } else {
+                    println!("Deleted page");
+                }
             }
             PageCommands::Rename { vault_id, slug, title } => {
                 let new_slug = cerbo_core::rename::page_rename(&ctx, vault_id, slug, title, None)?;
-                println!("Renamed page to slug: {}", new_slug);
+                if json {
+                    print_json(&serde_json::json!({"new_slug": new_slug}));
+                } else {
+                    println!("Renamed page to slug: {}", new_slug);
+                }
             }
             PageCommands::Attachment { action } => match action {
                 AttachmentCommands::List { vault_id, slug } => {
                     let files = cerbo_core::page::attachment_list(&ctx, vault_id, slug)?;
-                    println!("{:#?}", files);
+                    if json {
+                        let files_json: Vec<AttachmentJson> = files.into_iter().map(|f| AttachmentJson {
+                            filename: f.clone(),
+                            path: f,
+                        }).collect();
+                        print_json(&files_json);
+                    } else {
+                        println!("{:#?}", files);
+                    }
                 }
                 AttachmentCommands::Add { vault_id, slug, path } => {
                     let filename = cerbo_core::page::attachment_add(&ctx, vault_id, slug, path)?;
-                    println!("Added attachment: {}", filename);
+                    if json {
+                        print_json(&serde_json::json!({"filename": filename}));
+                    } else {
+                        println!("Added attachment: {}", filename);
+                    }
                 }
                 AttachmentCommands::Delete { vault_id, slug, filename } => {
                     cerbo_core::page::attachment_delete(&ctx, vault_id, slug, filename)?;
-                    println!("Deleted attachment");
+                    if json {
+                        print_json_success("Attachment deleted");
+                    } else {
+                        println!("Deleted attachment");
+                    }
                 }
             },
         },
@@ -184,23 +325,40 @@ async fn main() -> Result<(), String> {
                     .ok_or_else(|| format!("Vault not found: {}", vault_id))?;
                 let idx = cerbo_core::index::build_index(&vault_path)?;
                 cerbo_core::index::save_index(&ctx, &vault_id, &idx)?;
-                println!("Index rebuilt and saved");
+                if json {
+                    print_json_success("Index rebuilt and saved");
+                } else {
+                    println!("Index rebuilt and saved");
+                }
             }
             IndexCommands::Backlinks { vault_id, slug } => {
                 let index = cerbo_core::index::load_index(&ctx, &vault_id)
                     .ok_or_else(|| format!("No index for vault {}", vault_id))?;
                 let backlinks = cerbo_core::index::compute_backlinks(&index, &slug);
-                println!("{:#?}", backlinks);
+                if json {
+                    let backlinks_json: Vec<BacklinkJson> = backlinks.into_iter().map(|b| BacklinkJson {
+                        slug: b.slug,
+                        title: b.title,
+                    }).collect();
+                    print_json(&backlinks_json);
+                } else {
+                    println!("{:#?}", backlinks);
+                }
             }
         },
         Commands::Watch => {
-            println!("Watching vaults for changes...");
+            if json {
+                println!("{}", serde_json::json!({"event": "start", "vault_id": "", "message": "Watching vaults for changes..."}));
+            } else {
+                println!("Watching vaults for changes...");
+            }
             let reg = cerbo_core::vault::load_vaults(&ctx)?;
             let mut watchers = Vec::new();
 
             for vault in reg.vaults {
                 let ctx_clone = ctx.clone();
                 let vid = vault.id.clone();
+                let json_clone = json;
                 let handler = move |result: notify::Result<notify::Event>| {
                     if let Ok(event) = result {
                         let affects_page = event
@@ -214,7 +372,16 @@ async fn main() -> Result<(), String> {
                                 
                                 if let Ok(idx) = cerbo_core::index::build_index(&vpath) {
                                     let _ = cerbo_core::index::save_index(&ctx_clone, &vid, &idx);
-                                    println!("Index updated for vault: {}", vid);
+                                    if json_clone {
+                                        let event_json = WatchEventJson {
+                                            event: "index_updated".to_string(),
+                                            vault_id: vid.clone(),
+                                            message: "Index updated".to_string(),
+                                        };
+                                        println!("{}", serde_json::to_string(&event_json).unwrap());
+                                    } else {
+                                        println!("Index updated for vault: {}", vid);
+                                    }
                                 }
                             }
                         }
@@ -245,18 +412,37 @@ async fn main() -> Result<(), String> {
                 p.to_string_lossy().to_string()
             }
             
-            println!("Config:  {}", display_path(&ctx.config_dir));
-            println!("Cache:   {}", display_path(&ctx.cache_dir));
-            println!();
-            
-            let reg = vault::vault_list(&ctx)?;
-            if reg.vaults.is_empty() {
-                println!("No vaults registered");
-            } else {
-                println!("Vaults: {} registered", reg.vaults.len());
-                for v in &reg.vaults {
+            if json {
+                let reg = vault::vault_list(&ctx)?;
+                let vaults_json: Vec<VaultInfoJson> = reg.vaults.into_iter().map(|v| {
                     let count = vault::vault_page_count(&ctx, &v.id).unwrap_or(0);
-                    println!("├── {} ({}) - {} pages", v.name, display_path(&v.path), count);
+                    VaultInfoJson {
+                        id: v.id,
+                        name: v.name,
+                        path: display_path(&v.path),
+                        page_count: count,
+                    }
+                }).collect();
+                let info_json = InfoJson {
+                    config_dir: display_path(&ctx.config_dir),
+                    cache_dir: display_path(&ctx.cache_dir),
+                    vaults: vaults_json,
+                };
+                print_json(&info_json);
+            } else {
+                println!("Config:  {}", display_path(&ctx.config_dir));
+                println!("Cache:   {}", display_path(&ctx.cache_dir));
+                println!();
+                
+                let reg = vault::vault_list(&ctx)?;
+                if reg.vaults.is_empty() {
+                    println!("No vaults registered");
+                } else {
+                    println!("Vaults: {} registered", reg.vaults.len());
+                    for v in &reg.vaults {
+                        let count = vault::vault_page_count(&ctx, &v.id).unwrap_or(0);
+                        println!("├── {} ({}) - {} pages", v.name, display_path(&v.path), count);
+                    }
                 }
             }
         }
