@@ -6,7 +6,7 @@ use std::fs;
 
 /// Extract cerbo://<uuid> links from page content
 pub fn extract_cerbo_links(content: &str) -> Vec<String> {
-    let re = Regex::new(r"cerbo://([a-f0-9-]+)").unwrap();
+    let re = Regex::new(r"cerbo://([a-z0-9-]+)").unwrap();
     re.captures_iter(content)
         .map(|cap| cap[1].to_string())
         .collect()
@@ -146,6 +146,7 @@ mod tests {
     fn create_test_context() -> CerboContext {
         let dir = std::env::temp_dir().join("cerbo_test_links");
         let _ = fs::create_dir_all(&dir);
+        let _ = fs::create_dir_all(dir.join("objects"));
         CerboContext {
             config_dir: dir.clone(),
             cache_dir: dir.join("cache"),

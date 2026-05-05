@@ -30,6 +30,10 @@ pub fn index_load(ctx: &CerboContext) -> Result<IndexJson, String> {
     let content = fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read index.json: {}", e))?;
 
+    if content.trim().is_empty() {
+        return Ok(IndexJson::default());
+    }
+
     serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse index.json: {}", e))
 }

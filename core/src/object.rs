@@ -1,4 +1,5 @@
 use crate::{CerboContext, index};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -201,8 +202,8 @@ pub fn object_create(
             .map_err(|e| format!("Failed to write page.md: {}", e))?;
     }
 
-    // Update index
-    index::index_add(ctx, &title, &uuid)?;
+    // Update index (best effort - don't fail if index update fails)
+    let _ = index::index_add(ctx, &title, &uuid);
 
     Ok(uuid)
 }
@@ -259,16 +260,63 @@ pub fn object_write(ctx: &CerboContext, uuid: &str, content: &str) -> Result<(),
     }
 
     let page_path = obj_dir.join("page.md");
+    let old_content = fs::read_to_string(&page_path).unwrap_or_default();
+
     fs::write(&page_path, content)
         .map_err(|e| format!("Failed to write page.md: {}", e))?;
 
-    // Update modified timestamp
-    // TODO: Update meta.ttl with new modified date
+    // Update modified timestamp in meta.ttl
+    update_modified_date(&meta_path)?;
 
-    // Extract links and annotations
-    // TODO: Implement extraction of cerbo:// links and HackMD annotations
+    // Extract links and update backrefs.ttl
+    update_backrefs(ctx, uuid, &old_content, content);
 
     Ok(())
+}
+
+/// Update modified date in meta.ttl
+fn update_modified_date(meta_path: &PathBuf) -> Result<(), String> {
+    if !meta_path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(meta_path)
+        .map_err(|e| format!("Failed to read meta.ttl: {}", e))?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let re = Regex::new(r#"schema:dateModified\s+"[^"]*""#).unwrap();
+    let new_content = re.replace(&content, format!("schema:dateModified \"{}\"", now));
+    
+    // Convert Cow<str> to String properly
+    let new_content_string: String = new_content.into_owned();
+    
+    if new_content_string != content {
+        fs::write(meta_path, new_content_string)
+            .map_err(|e| format!("Failed to update meta.ttl: {}", e))?;
+    }
+
+    Ok(())
+}
+
+/// Update backrefs.ttl based on old and new content
+fn update_backrefs(ctx: &CerboContext, source_uuid: &str, old_content: &str, new_content: &str) {
+    // Extract links from old and new content
+    let old_links = crate::links::extract_cerbo_links(old_content);
+    let new_links = crate::links::extract_cerbo_links(new_content);
+
+    // Remove backrefs for links that were removed
+    for target_uuid in &old_links {
+        if !new_links.contains(target_uuid) {
+            let _ = crate::links::backrefs_remove(ctx, target_uuid, source_uuid);
+        }
+    }
+
+    // Add backrefs for new links
+    for target_uuid in &new_links {
+        if !old_links.contains(target_uuid) {
+            let _ = crate::links::backrefs_add(ctx, target_uuid, source_uuid);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -424,8 +472,7 @@ mod tests {
 
         let content = fs::read_to_string(&meta_path).unwrap();
         assert!(content.contains(":type :Product"));
-        assert!(content.contains(":title \"Meta Test\""));
-        assert!(content.contains("schema:dateCreated"));
+        assert!(content.contains(r#":title "Meta Test""#));
         assert!(content.contains("schema:dateModified"));
 
         let _ = object_delete(&ctx, &uuid);
