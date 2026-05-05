@@ -1,23 +1,18 @@
-use crate::{index, page, vault, CerboContext};
+use crate::{index::{self, IndexJson}, object, page, CerboContext};
 use std::path::Path;
 use tempfile::TempDir;
 
 pub struct FixtureVault {
     pub ctx: CerboContext,
     pub tmp_dir: TempDir,
-    pub vault_id: String,
-    pub vault_path: std::path::PathBuf,
+    pub config_dir: std::path::PathBuf,
 }
 
-/// Create a fixture vault with the following structure:
-/// - Page A: Links to "Page B"
-/// - Page B: Target of rename (Title: "Page B", Slug: "page-b")
-/// - Page C: Links to "page b" (case-insensitive)
-/// - Page D: No links to B
-/// - Page E: Links to "Page B" and "Page A"
+/// Create a fixture vault with UUID-based objects
+/// Creates several pages with links between them
 pub fn create_fixture_vault() -> Result<FixtureVault, String> {
     let tmp_dir = TempDir::new().map_err(|e| e.to_string())?;
-    let config_dir = tmp_dir.path().join("config");
+    let config_dir = tmp_dir.path().join(".cerbo");
     let cache_dir = tmp_dir.path().join("cache");
     let vault_path = tmp_dir.path().join("vault");
 
@@ -26,54 +21,45 @@ pub fn create_fixture_vault() -> Result<FixtureVault, String> {
     std::fs::create_dir_all(&vault_path).map_err(|e| e.to_string())?;
 
     let ctx = CerboContext {
-        config_dir,
+        config_dir: config_dir.clone(),
         cache_dir,
     };
 
-    let vault = vault::vault_add(&ctx, "Fixture".into(), vault_path.to_str().unwrap().into())?;
-    let vault_id = vault.id;
+    // Initialize vault structure
+    let objects_dir = config_dir.join("objects");
+    std::fs::create_dir_all(&objects_dir).map_err(|e| e.to_string())?;
 
-    // Create Page B (Target)
-    page::page_create(&ctx, vault_id.clone(), "Page B".into())?;
+    // Create index.json
+    let index = IndexJson::default();
+    index::index_save(&ctx, &index)?;
 
-    // Create Page A (Links to B)
-    let a_slug = page::page_create(&ctx, vault_id.clone(), "Page A".into())?;
-    page::page_write(
-        &ctx,
-        vault_id.clone(),
-        a_slug,
-        "# Page A\n\nLink to [[Page B]].".into(),
-    )?;
+    // Create Page A
+    let uuid_a = object::object_create(&ctx, None, object::ObjectType::Product, "Page A".into())?;
+    page::page_write(&ctx, uuid_a.clone(), "# Page A\n\nLink to [[Page B]].".into())?;
 
-    // Create Page C (Links to B case-insensitively)
-    let c_slug = page::page_create(&ctx, vault_id.clone(), "Page C".into())?;
-    page::page_write(
-        &ctx,
-        vault_id.clone(),
-        c_slug,
-        "# Page C\n\nLink to [[page b]].".into(),
-    )?;
+    // Create Page B (target of links)
+    let uuid_b = object::object_create(&ctx, None, object::ObjectType::Product, "Page B".into())?;
+    page::page_write(&ctx, uuid_b.clone(), "# Page B\n\nContent here.".into())?;
 
-    // Create Page D (No links to B)
-    page::page_create(&ctx, vault_id.clone(), "Page D".into())?;
+    // Create Page C (links to B case-insensitively)
+    let uuid_c = object::object_create(&ctx, None, object::ObjectType::Product, "Page C".into())?;
+    page::page_write(&ctx, uuid_c.clone(), "# Page C\n\nLink to [[page b]].".into())?;
 
-    // Create Page E (Links to B and A)
-    let e_slug = page::page_create(&ctx, vault_id.clone(), "Page E".into())?;
-    page::page_write(
-        &ctx,
-        vault_id.clone(),
-        e_slug,
-        "# Page E\n\nLinks to [[Page B]] and [[Page A]].".into(),
-    )?;
+    // Create Page D (no links to B)
+    let _uuid_d = object::object_create(&ctx, None, object::ObjectType::Product, "Page D".into())?;
 
-    // Build index initially
-    let idx = index::build_index(&vault_path)?;
-    index::save_index(&ctx, &vault_id, &idx)?;
+    // Create Page E (links to B and A)
+    let uuid_e = object::object_create(&ctx, None, object::ObjectType::Product, "Page E".into())?;
+    page::page_write(&ctx, uuid_e.clone(), "# Page E\n\nLinks to [[Page B]] and [[Page A]].".into())?;
+
+    // Update index with all pages
+    for (uuid, title) in &[(uuid_a.clone(), "Page A"), (uuid_b.clone(), "Page B"), (uuid_c.clone(), "Page C"), (uuid_e.clone(), "Page E")] {
+        index::index_add(&ctx, title, uuid)?;
+    }
 
     Ok(FixtureVault {
         ctx,
         tmp_dir,
-        vault_id,
-        vault_path,
+        config_dir,
     })
 }

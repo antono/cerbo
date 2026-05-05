@@ -13,3 +13,4 @@ tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]
 cerbo-core = { path = "../core", features = ["test-utils"] }
+tempfile = "3"

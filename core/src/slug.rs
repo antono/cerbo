@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn leading_trailing_punct() {
-        assert_eq!(derive_slug("My Tauri App!"), "my-tauri-app");
+        assert_eq!(derive_slug('My Tauri App!'), "my-tauri-app");
     }
 
     #[test]

@@ -22,12 +22,6 @@ struct PageJson {
     title: String,
 }
 
-#[derive(Serialize)]
-struct BacklinkJson {
-    uuid: String,
-    title: String,
-}
-
 #[derive(Parser)]
 #[command(name = "cerbo")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
@@ -53,6 +47,12 @@ enum Commands {
     Page {
         #[command(subcommand)]
         action: PageCommands,
+    },
+    /// Resolve object UUID to local filesystem path
+    Resolve {
+        uuid: String,
+        #[arg(long)]
+        json: bool,
     },
     /// Show configuration and vault info
     Info {
@@ -124,11 +124,29 @@ enum PageCommands {
 }
 
 fn get_context() -> Result<CerboContext, String> {
-    let core = CoreContext::new()?;
-    let ctx = CerboContext {
-        config_dir: core.config_dir.clone(),
-        cache_dir: core.cache_dir.clone(),
+    // Check for local .cerbo/ directory first (for init'd vaults)
+    let current_dir = std::env::current_dir()
+        .map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let local_cerbo = current_dir.join(".cerbo");
+
+    let (config_dir, cache_dir) = if local_cerbo.exists() {
+        (local_cerbo.clone(), current_dir.join(".cache"))
+    } else {
+        // Fall back to XDG directories
+        let core = CoreContext::new()?;
+        (core.config_dir.clone(), core.cache_dir.clone())
     };
+
+    let ctx = CerboContext {
+        config_dir: config_dir.clone(),
+        cache_dir: cache_dir.clone(),
+    };
+
+    if local_cerbo.exists() {
+        // For local vaults, skip migration and config creation
+        return Ok(ctx);
+    }
+
     let _ = cerbo_core::migration::migrate_if_needed(&ctx)?;
     if !ctx.config_dir.join("vaults.toml").exists() {
         cerbo_core::config::save_config(&ctx, &cerbo_core::config::Config::default())?;
@@ -283,6 +301,22 @@ async fn main() -> Result<(), String> {
                 } else {
                     println!("Deleted page");
                 }
+            }
+        },
+        Commands::Resolve { uuid, json } => {
+            let obj_path = cerbo_core::object::object_path(&ctx, &uuid);
+            if !obj_path.exists() {
+                if json {
+                    print_json_error(&format!("Object not found: {}", uuid));
+                } else {
+                    eprintln!("Error: Object not found: {}", uuid);
+                }
+                std::process::exit(1);
+            }
+            if json {
+                print_json(&serde_json::json!({"path": obj_path.to_string_lossy().to_string()}));
+            } else {
+                println!("{}", obj_path.to_string_lossy());
             }
         },
         Commands::Info { json } => {
