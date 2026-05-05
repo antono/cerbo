@@ -480,6 +480,7 @@ version = "0.0.19"
 dependencies = [
  "chrono",
  "notify",
+ "regex",
  "rio_turtle",
  "serde",
  "serde_json",

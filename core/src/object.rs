@@ -280,6 +280,7 @@ mod tests {
     fn create_test_context() -> CerboContext {
         let dir = std::env::temp_dir().join("cerbo_test");
         let _ = fs::create_dir_all(&dir);
+        let _ = fs::create_dir_all(dir.join("objects"));
         CerboContext {
             config_dir: dir.clone(),
             cache_dir: dir.join("cache"),

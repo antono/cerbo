@@ -9,6 +9,7 @@ pub struct CerboContext {
 pub mod config;
 pub mod context;
 pub mod index;
+pub mod links;
 pub mod migration;
 pub mod object;
 pub mod page;
