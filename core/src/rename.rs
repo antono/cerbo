@@ -1,8 +1,10 @@
-use crate::index;
-use crate::slug::derive_slug;
-use crate::vault;
-use crate::CerboContext;
-use std::path::Path;
+// TODO: Rewrite for UUID model (no slugs)
+// use crate::index;
+// use crate::slug::derive_slug;
+// use crate::vault;
+// use crate::CerboContext;
+// use std::fs;
+// use std::path::Path;
 
 // ---------------------------------------------------------------------------
 // Rename cascade

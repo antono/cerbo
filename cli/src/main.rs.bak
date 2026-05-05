@@ -3,6 +3,7 @@ use cerbo_core::context::CoreContext;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use serde_json;
+use std::path::PathBuf;
 
 fn print_json<T: Serialize>(value: &T) {
     println!("{}", serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()));
@@ -53,6 +54,11 @@ enum Commands {
     Page {
         #[command(subcommand)]
         action: PageCommands,
+    },
+    /// Watch vaults for changes
+    Watch {
+        #[arg(long)]
+        json: bool,
     },
     /// Show configuration and vault info
     Info {
@@ -121,6 +127,35 @@ enum PageCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Attachment management
+    Attachment {
+        #[command(subcommand)]
+        action: AttachmentCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum AttachmentCommands {
+    /// List attachments for a page
+    List {
+        uuid: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add an attachment to a page
+    Add {
+        page_uuid: String,
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete an attachment from a page
+    Delete {
+        uuid: String,
+        filename: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn get_context() -> Result<CerboContext, String> {
@@ -175,16 +210,15 @@ async fn main() -> Result<(), String> {
                     .map_err(|e| format!("Failed to create objects dir: {}", e))?;
 
                 // Create empty index.json
-                let index = cerbo_core::index::IndexJson::default();
                 let index_path = cerbo_dir.join("index.json");
-                let index_content = serde_json::to_string_pretty(&index)
+                let index_content = serde_json::to_string_pretty(&cerbo_core::index::IndexJson::default())
                     .map_err(|e| format!("Failed to serialize index: {}", e))?;
                 std::fs::write(&index_path, index_content)
                     .map_err(|e| format!("Failed to write index.json: {}", e))?;
 
                 // Create ontology-map.json with empty prefixes
-                let ontology_map = serde_json::json!({"prefixes": {}});
                 let map_path = cerbo_dir.join("ontology-map.json");
+                let ontology_map = serde_json::json!({ "prefixes": {} });
                 std::fs::write(&map_path, serde_json::to_string_pretty(&ontology_map).unwrap())
                     .map_err(|e| format!("Failed to write ontology-map.json: {}", e))?;
 
@@ -243,9 +277,19 @@ async fn main() -> Result<(), String> {
             PageCommands::List { json } => {
                 let pages = cerbo_core::page::page_list(&ctx)?;
                 if json {
-                    let pages_json: Vec<PageJson> = pages.into_iter().map(|p| PageJson {
-                        uuid: p.uuid,
-                        title: p.title,
+                    let pages_json: Vec<PageJson> = pages.into_iter().map(|p| {
+                        let u = p.uuid.clone();
+                        PageJson {
+                            uuid: u,
+                            title: p.title,
+                            path: p.uuid,
+                        }
+                    }).collect();
+                    print_json(&pages_json);
+                } else {
+                    println!("{:#?}", pages);
+                }
+            }
                     }).collect();
                     print_json(&pages_json);
                 } else {
@@ -284,7 +328,48 @@ async fn main() -> Result<(), String> {
                     println!("Deleted page");
                 }
             }
+            PageCommands::Attachment { action } => match action {
+                AttachmentCommands::List { uuid, json } => {
+                    let files = cerbo_core::page::attachment_list(&ctx, uuid)?;
+                    if json {
+                        let files_json: Vec<AttachmentJson> = files.into_iter().map(|f| AttachmentJson {
+                            filename: f.clone(),
+                            path: f,
+                        }).collect();
+                        print_json(&files_json);
+                    } else {
+                        println!("{:#?}", files);
+                    }
+                }
+                AttachmentCommands::Add { page_uuid, path, json } => {
+                    let filename = cerbo_core::page::attachment_add(&ctx, page_uuid, path)?;
+                    if json {
+                        print_json(&serde_json::json!({"filename": filename}));
+                    } else {
+                        println!("Added attachment: {}", filename);
+                    }
+                }
+                AttachmentCommands::Delete { uuid, filename, json } => {
+                    cerbo_core::page::attachment_delete(&ctx, uuid, filename)?;
+                    if json {
+                        print_json_success("Attachment deleted");
+                    } else {
+                        println!("Deleted attachment");
+                    }
+                }
+            },
         },
+        Commands::Watch { json } => {
+            if json {
+                println!("{}", serde_json::json!({"event": "start", "vault_id": "", "message": "Watching vaults for changes..."}));
+            } else {
+                println!("Watching vaults for changes...");
+            }
+            println!("Watch TBD for UUID model");
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            }
+        }
         Commands::Info { json } => {
             use cerbo_core::vault;
             use std::path::PathBuf;
@@ -341,6 +426,12 @@ async fn main() -> Result<(), String> {
 struct VaultJson {
     id: String,
     name: String,
+    path: String,
+}
+
+#[derive(Serialize)]
+struct AttachmentJson {
+    filename: String,
     path: String,
 }
 

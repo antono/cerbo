@@ -10,10 +10,11 @@ pub mod config;
 pub mod context;
 pub mod index;
 pub mod migration;
+pub mod object;
 pub mod page;
 pub mod paths;
-pub mod rename;
-pub mod slug;
+// pub mod rename; // TODO: Rewrite for UUID model (no slugs)
+// pub mod slug;    // TODO: Remove - UUID model doesn't use slugs
 pub mod state;
 pub mod ui_settings;
 pub mod vault;

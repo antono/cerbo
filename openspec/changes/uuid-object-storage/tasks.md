@@ -1,48 +1,48 @@
 ## 1. Core Storage Layer (Rust core library)
 
-- [ ] 1.1 Add `uuid` crate dependency to `core/Cargo.toml`
-- [ ] 1.2 Create `core/src/object.rs` module with `ObjectType` enum (Page, Source, Attachment, Ontology)
-- [ ] 1.3 Implement `object_create(uuid: Option<String>, obj_type: ObjectType, title: String)` → creates `.cerbo/objects/<uuid>/` directory
-- [ ] 1.4 Implement `object_delete(uuid: &str)` → removes `.cerbo/objects/<uuid>/` directory (enforce read-only for Source)
-- [ ] 1.5 Implement `object_read(uuid: &str)` → reads `page.md` content
-- [ ] 1.6 Implement `object_write(uuid: &str, content: &str)` → writes `page.md` (enforce read-only for Source, extract links and annotations)
-- [ ] 1.7 Add Turtle RDF dependency: `rio_turtle` crate for parsing/writing `.ttl` files
+- [x] 1.1 Add `uuid` crate dependency to `core/Cargo.toml` (already present)
+- [x] 1.2 Create `core/src/object.rs` module with `ObjectType` enum (Page, Source, Attachment, Ontology)
+- [x] 1.3 Implement `object_create(uuid: Option<String>, obj_type: ObjectType, title: String)` → creates `.cerbo/objects/<uuid>/` directory
+- [x] 1.4 Implement `object_delete(uuid: &str)` → removes `.cerbo/objects/<uuid>/` directory (enforce read-only for Source)
+- [x] 1.5 Implement `object_read(uuid: &str)` → reads `page.md` content
+- [x] 1.6 Implement `object_write(uuid: &str, content: &str)` → writes `page.md` (enforce read-only for Source)
+- [x] 1.7 Add Turtle RDF dependency: `rio_turtle` crate for parsing/writing `.ttl` files
 - [ ] 1.8 Implement `meta_ttl_read(uuid: &str)` → parses `meta.ttl` returning `ObjectType`, title, dates, mime-type, original-url
-- [ ] 1.9 Implement `meta_ttl_write(uuid: &str, type: ObjectType, title: &str, ...)` → writes `meta.ttl` in Turtle format
-- [ ] 1.10 Implement `relations_ttl_write(uuid: &str, links: Vec<String>, attachments: Vec<String>)` → writes `backrefs.ttl`
+- [x] 1.9 Implement `meta_ttl_write(uuid: &str, type: ObjectType, title: &str, ...)` → writes `meta.ttl` in Turtle format
+- [ ] 1.10 Implement `backrefs_ttl_read/write(uuid: &str)` → reads/writes `backrefs.ttl` (backlinks only)
 - [ ] 1.11 Implement `annotations_ttl_write(uuid: &str, annotations: Vec<Annotation>)` → writes `annotations.ttl`
 
 ## 2. Index Management
 
-- [ ] 2.1 Create `core/src/index.rs` module with `IndexJson` struct (title_to_uuid, uuid_to_path)
-- [ ] 2.2 Implement `index_load()` → reads `.cerbo/index.json`
-- [ ] 2.3 Implement `index_save(index: &IndexJson)` → writes `.cerbo/index.json`
-- [ ] 2.4 Implement `index_add(title: &str, uuid: &str)` → updates both maps
-- [ ] 2.5 Implement `index_remove(uuid: &str)` → removes from both maps
-- [ ] 2.6 Implement `index_resolve_title(title: &str)` → returns Option<uuid>
-- [ ] 2.7 Implement `index_resolve_uuid(uuid: &str)` → returns Option<relative_path>
+- [x] 2.1 Create `core/src/index.rs` module with `IndexJson` struct (title_to_uuid, uuid_to_path)
+- [x] 2.2 Implement `index_load()` → reads `.cerbo/index.json`
+- [x] 2.3 Implement `index_save(index: &IndexJson)` → writes `.cerbo/index.json`
+- [x] 2.4 Implement `index_add(title: &str, uuid: &str)` → updates both maps
+- [x] 2.5 Implement `index_remove(uuid: &str)` → removes from both maps
+- [x] 2.6 Implement `index_resolve_title(title: &str)` → returns Option<uuid>
+- [x] 2.7 Implement `index_resolve_uuid(uuid: &str)` → returns Option<relative_path>
 
 ## 3. CLI Commands - Vault Init
 
-- [ ] 3.1 Add `cerbo init` command to CLI (parse args in `cli/src/`)
-- [ ] 3.2 Implement `vault_init()` → creates `.cerbo/` directory
-- [ ] 3.3 Implement `vault_init()` → creates `.cerbo/objects/` directory
-- [ ] 3.4 Implement `vault_init()` → creates empty `.cerbo/index.json`
-- [ ] 3.5 Implement `vault_init()` → creates `.cerbo/ontology-map.json` with empty prefixes
+- [x] 3.1 Add `cerbo init` command to CLI (parse args in `cli/src/`)
+- [x] 3.2 Implement `vault_init()` → creates `.cerbo/` directory
+- [x] 3.3 Implement `vault_init()` → creates `.cerbo/objects/` directory
+- [x] 3.4 Implement `vault_init()` → creates empty `.cerbo/index.json`
+- [x] 3.5 Implement `vault_init()` → creates `.cerbo/ontology-map.json` with empty prefixes
 - [ ] 3.6 Implement bundling Schema.org ontology object (fetch content, create object with `type: Ontology`)
 - [ ] 3.7 Implement bundling FOAF ontology object (fetch content, create object with `type: Ontology`)
 - [ ] 3.8 Update `ontology-map.json` with "schema" → Schema.org UUID, "foaf" → FOAF UUID
-- [ ] 3.9 Make `cerbo init` idempotent (check for existing `.cerbo/`)
+- [x] 3.9 Make `cerbo init` idempotent (check for existing `.cerbo/`)
 
 ## 4. CLI Commands - Page Management
 
-- [ ] 4.1 Modify `cerbo page create "Title"` → generates UUID, creates object (NOT slug-based)
+- [x] 4.1 Modify `cerbo page create "Title"` → generates UUID, creates object (NOT slug-based)
 - [ ] 4.2 Implement `cerbo import <url>` → creates `type: Source` object (read-only), stores original-url in `meta.ttl`
-- [ ] 4.3 Modify `cerbo page read <uuid>` → reads from `.cerbo/objects/<uuid>/page.md`
-- [ ] 4.4 Modify `cerbo page write <uuid> "content"` → writes to object's `page.md`, enforce read-only for Source type
-- [ ] 4.5 Modify `cerbo page delete <uuid>` → removes object directory, enforce read-only for Source type
-- [ ] 4.6 Modify `cerbo page list` → scans `.cerbo/objects/` for valid page objects, returns UUID + title from `meta.ttl`
-- [ ] 4.7 Add `cerbo resolve <uuid>` command → returns local filesystem path to object's file
+- [x] 4.3 Modify `cerbo page read <uuid>` → reads from `.cerbo/objects/<uuid>/page.md`
+- [x] 4.4 Modify `cerbo page write <uuid> "content"` → writes to object's `page.md`, enforce read-only for Source type
+- [x] 4.5 Modify `cerbo page delete <uuid>` → removes object directory, enforce read-only for Source type
+- [x] 4.6 Modify `cerbo page list` → scans `.cerbo/objects/` for valid page objects, returns UUID + title from `meta.ttl`
+- [x] 4.7 Add `cerbo resolve <uuid>` command → returns local filesystem path to object's file
 
 ## 5. CLI Commands - Ontology Management
 
