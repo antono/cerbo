@@ -114,11 +114,14 @@ fn migrate_vault(vault_path: &Path, dry_run: bool, force: bool) -> Result<(), St
 
     println!("\nMigration complete: {} migrated, {} failed.", migrated, failed);
 
-    if !dry_run && migrated > 0 {
+    if !dry_run && migrated >0 {
         println!("\nNext steps:");
         println!("1. Run 'cerbo-migrate verify' to check the migration");
         println!("2. Run 'cerbo backlinks <uuid>' to regenerate backlinks");
         println!("3. Review the migrated content in .cerbo/objects/");
+        if failed == 0 {
+            println!("\n✓ All pages migrated and old directories removed.");
+        }
     }
 
     Ok(())
@@ -199,6 +202,13 @@ fn migrate_page(ctx: &CerboContext, _vault_path: &Path, slug_dir: &Path, dry_run
                 copy_dir_recursive(&path, &dest)?;
             }
         }
+    }
+
+    // Remove old slug directory after successful migration
+    if !dry_run {
+        fs::remove_dir_all(slug_dir)
+            .map_err(|e| format!("Failed to remove old directory: {}", e))?;
+        println!("  → Removed old directory");
     }
 
     Ok(uuid)
