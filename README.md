@@ -91,6 +91,35 @@ Cerbo supports HackMD-style semantic annotations:
 
 These are extracted to `annotations.ttl` in Turtle RDF format.
 
+## Migration from Slug-Based Storage
+
+Cerbo now uses UUID-based storage (`.cerbo/objects/<uuid>/`). This is a **breaking change** from the previous slug-based model.
+
+To migrate an existing vault:
+
+```bash
+# Dry run - see what would be migrated
+cargo run --package cerbo-migrate -- migrate --dry-run
+
+# Actual migration
+cargo run --package cerbo-migrate -- migrate
+
+# Verify migration
+cargo run --package cerbo-migrate -- verify
+```
+
+The migration tool will:
+- Copy `page.md` to `.cerbo/objects/<uuid>/page.md`
+- Copy `assets/` directory to `.cerbo/objects/<uuid>/assets/`
+- Copy any other files in the page directory
+- Generate new UUIDs for each page
+- Create `meta.ttl` with object metadata
+
+After migration, regenerate backlinks with:
+```bash
+cerbo backlinks <uuid>
+```
+
 ## License
 
 LGPL-3.0-or-later
