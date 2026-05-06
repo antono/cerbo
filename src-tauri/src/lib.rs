@@ -1,8 +1,6 @@
 mod index;
 mod page;
 mod paths;
-// mod rename;  // TODO: Remove - UUID model doesn't use renames
-// mod slug;    // TODO: Remove - UUID model doesn't use slugs
 mod vault;
 
 use cerbo_core::context::CoreContext;

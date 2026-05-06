@@ -6,7 +6,6 @@ pub struct CerboContext {
     pub cache_dir: PathBuf,
 }
 
-pub mod annotation;
 pub mod config;
 pub mod context;
 pub mod index;
