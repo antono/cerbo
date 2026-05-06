@@ -218,8 +218,46 @@ async fn main() -> Result<(), String> {
                 std::fs::write(&map_path, serde_json::to_string_pretty(&ontology_map).unwrap())
                     .map_err(|e| format!("Failed to write ontology-map.json: {}", e))?;
 
+                // Bundle Schema.org ontology
+                let schema_url = "https://schema.org/version/latest/schema.ttl";
+                match cerbo_core::object::object_import_ontology(&ctx, schema_url) {
+                    Ok(uuid) => {
+                        // Update ontology-map.json with "schema" prefix
+                        let mut map: serde_json::Value = serde_json::from_str(
+                            &std::fs::read_to_string(&map_path).unwrap_or_default()
+                        ).unwrap_or(serde_json::json!({"prefixes": {}}));
+                        if let Some(prefixes) = map.get_mut("prefixes") {
+                            prefixes["schema"] = serde_json::json!(uuid);
+                            std::fs::write(&map_path, serde_json::to_string_pretty(&map).unwrap()).ok();
+                        }
+                        if !json {
+                            println!("Bundled Schema.org ontology with UUID: {}", uuid);
+                        }
+                    },
+                    Err(e) => if !json { println!("Warning: Failed to bundle Schema.org: {}", e); },
+                }
+
+                // Bundle FOAF ontology
+                let foaf_url = "http://xmlns.com/foaf/spec/index.rdf";
+                match cerbo_core::object::object_import_ontology(&ctx, foaf_url) {
+                    Ok(uuid) => {
+                        // Update ontology-map.json with "foaf" prefix
+                        let mut map: serde_json::Value = serde_json::from_str(
+                            &std::fs::read_to_string(&map_path).unwrap_or_default()
+                        ).unwrap_or(serde_json::json!({"prefixes": {}}));
+                        if let Some(prefixes) = map.get_mut("prefixes") {
+                            prefixes["foaf"] = serde_json::json!(uuid);
+                            std::fs::write(&map_path, serde_json::to_string_pretty(&map).unwrap()).ok();
+                        }
+                        if !json {
+                            println!("Bundled FOAF ontology with UUID: {}", uuid);
+                        }
+                    },
+                    Err(e) => if !json { println!("Warning: Failed to bundle FOAF: {}", e); },
+                }
+
                 if json {
-                    print_json_success("Vault initialized");
+                    print_json_success("Vault initialized with bundled ontologies");
                 } else {
                     println!("Vault initialized in {}", cerbo_dir.display());
                 }

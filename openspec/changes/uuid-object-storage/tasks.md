@@ -29,9 +29,9 @@
 - [x] 3.3 Implement `vault_init()` → creates `.cerbo/objects/` directory
 - [x] 3.4 Implement `vault_init()` → creates empty `.cerbo/index.json`
 - [x] 3.5 Implement `vault_init()` → creates `.cerbo/ontology-map.json` with empty prefixes
-- [ ] 3.6 Implement bundling Schema.org ontology object (fetch content, create object with `type: Ontology`)
-- [ ] 3.7 Implement bundling FOAF ontology object (fetch content, create object with `type: Ontology`)
-- [ ] 3.8 Update `ontology-map.json` with "schema" → Schema.org UUID, "foaf" → FOAF UUID
+- [x] 3.6 Implement bundling Schema.org ontology object (fetch content, create object with `type: Ontology`)
+- [x] 3.7 Implement bundling FOAF ontology object (fetch content, create object with `type: Ontology`)
+- [x] 3.8 Update `ontology-map.json` with "schema" → Schema.org UUID, "foaf" → FOAF UUID
 - [x] 3.9 Make `cerbo init` idempotent (check for existing `.cerbo/`)
 
 ## 4. CLI Commands - Page Management
