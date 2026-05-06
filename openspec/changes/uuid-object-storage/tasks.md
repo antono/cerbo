@@ -95,14 +95,14 @@
 - [x] 11.2 Write unit tests for `index_resolve_title` / `index_resolve_uuid`
 - [x] 11.3 Write unit tests for link extraction (`cerbo://<uuid>`)
 - [x] 11.4 Write unit tests for HackMD annotation extraction (`[Text]{prefix:Type}`)
-- [ ] 11.5 Write integration test: `cerbo init` → verify `.cerbo/` structure
-- [ ] 11.6 Write integration test: `cerbo create` → verify UUID object created with `meta.ttl`
-- [ ] 11.7 Write integration test: `cerbo import` → verify `type: Source`, read-only enforcement
-- [ ] 11.8 Test migration path: verify old vaults are NOT compatible (breaking change by design)
+- [x] 11.5 Write integration test: `cerbo init` → verify `.cerbo/` structure
+- [x] 11.6 Write integration test: `cerbo create` → verify UUID object created with `meta.ttl`
+- [x] 11.7 Write integration test: `cerbo import` → verify `type: Source`, read-only enforcement
+- [x] 11.8 Test migration path: verify old vaults are NOT compatible (breaking change by design)
 
 ## 12. Documentation
 
-- [ ] 12.1 Update CLI help text to reflect new commands (`cerbo init`, `cerbo import`, `cerbo resolve`)
-- [ ] 12.2 Document storage layout in `README.md` or `docs/storage.md`
-- [ ] 12.3 Document HackMD annotation syntax for users
-- [ ] 12.4 Document `cerbo://<uuid>` link format
+- [x] 12.1 Update CLI help text to reflect new commands (`cerbo init`, `cerbo import`, `cerbo resolve`)
+- [x] 12.2 Document storage layout in `README.md` or `docs/storage.md`
+- [x] 12.3 Document HackMD annotation syntax for users
+- [x] 12.4 Document `cerbo://<uuid>` link format
