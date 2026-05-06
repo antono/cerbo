@@ -194,8 +194,8 @@ pub fn object_create(
     meta.write_to_file(&meta_path)
         .map_err(|e| format!("Failed to write meta.ttl: {}", e))?;
 
-    // Create page.md for Page/Source/Ontology types
-    if matches!(obj_type, ObjectType::Product | ObjectType::Source | ObjectType::Ontology) {
+    // Create page.md for Product/Source/Ontology types (not Attachment)
+    if !matches!(obj_type, ObjectType::Attachment) {
         let page_path = obj_dir.join("page.md");
         let content = format!("# {}\n", title);
         fs::write(&page_path, content)
@@ -632,5 +632,98 @@ mod tests {
 
         let _ = object_delete(&ctx, &uuid);
         cleanup(&ctx);
+    }
+}
+
+// ── Attachment Management ──────────────────────────────────────
+
+/// Add an attachment to a page.
+/// Creates a type: Attachment object, copies the file, returns UUID.
+pub fn attachment_add(ctx: &CerboContext, _page_uuid: &str, file_path: &std::path::Path) -> Result<String, String> {
+    // Create Attachment object
+    let uuid = Uuid::new_v4().to_string();
+    let obj_dir = object_path(ctx, &uuid);
+
+    fs::create_dir_all(&obj_dir).map_err(|e| format!("Failed to create object dir: {}", e))?;
+
+    // Copy file to object directory
+    let file_name = file_path
+        .file_name()
+        .ok_or("Invalid file path".to_string())?
+        .to_string_lossy()
+        .to_string();
+    let dest_path = obj_dir.join(&file_name);
+
+    fs::copy(file_path, &dest_path)
+        .map_err(|e| format!("Failed to copy file: {}", e))?;
+
+    // Detect MIME type from file extension
+    let mime_type = detect_mime_type(file_path);
+
+    // Create meta.ttl
+    let now = chrono::Utc::now().to_rfc3339();
+    let meta = ObjectMeta {
+        object_type: ObjectType::Attachment,
+        title: file_name.clone(),
+        created: now.clone(),
+        modified: now,
+        original_url: None,
+        mime_type: Some(mime_type),
+    };
+
+    let meta_path = obj_dir.join("meta.ttl");
+    meta.write_to_file(&meta_path)
+        .map_err(|e| format!("Failed to write meta.ttl: {}", e))?;
+
+    // No page.md for attachments
+
+    // Update index
+    let _ = index::index_add(ctx, &file_name, &uuid);
+
+    Ok(uuid)
+}
+
+/// Delete an attachment object.
+pub fn attachment_delete(ctx: &CerboContext, attachment_uuid: &str) -> Result<(), String> {
+    object_delete(ctx, attachment_uuid)
+}
+
+/// List attachments for a page (via backrefs.ttl :usesAttachment).
+pub fn attachment_list(ctx: &CerboContext, page_uuid: &str) -> Result<Vec<String>, String> {
+    // Read page's backrefs.ttl for :usesAttachment
+    let backrefs = crate::links::backrefs_read(ctx, page_uuid)?;
+
+    // Filter for attachments (objects of type Attachment)
+    let mut attachments = Vec::new();
+    for uuid in backrefs {
+        let obj_dir = object_path(ctx, &uuid);
+        let meta_path = obj_dir.join("meta.ttl");
+        if meta_path.exists() {
+            let meta = ObjectMeta::read_from_file(&meta_path)
+                .map_err(|e| format!("Failed to read meta.ttl: {}", e))?;
+            if matches!(meta.object_type, ObjectType::Attachment) {
+                attachments.push(uuid);
+            }
+        }
+    }
+
+    Ok(attachments)
+}
+
+/// Detect MIME type from file extension.
+fn detect_mime_type(file_path: &std::path::Path) -> String {
+    let ext = file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+
+    match ext {
+        "png" => "image/png".to_string(),
+        "jpg" | "jpeg" => "image/jpeg".to_string(),
+        "gif" => "image/gif".to_string(),
+        "pdf" => "application/pdf".to_string(),
+        "txt" => "text/plain".to_string(),
+        "md" => "text/markdown".to_string(),
+        _ => "application/octet-stream".to_string(),
     }
 }

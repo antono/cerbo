@@ -7,10 +7,10 @@
 - [x] 1.5 Implement `object_read(uuid: &str)` → reads `page.md` content
 - [x] 1.6 Implement `object_write(uuid: &str, content: &str)` → writes `page.md` (enforce read-only for Source)
 - [x] 1.7 Add Turtle RDF dependency: `rio_turtle` crate for parsing/writing `.ttl` files
-- [ ] 1.8 Implement `meta_ttl_read(uuid: &str)` → parses `meta.ttl` returning `ObjectType`, title, dates, mime-type, original-url
-- [x] 1.9 Implement `meta_ttl_write(uuid: &str, type: ObjectType, title: &str, ...)` → writes `meta.ttl` in Turtle format
-- [ ] 1.10 Implement `backrefs_ttl_read/write(uuid: &str)` → reads/writes `backrefs.ttl` (backlinks only)
-- [ ] 1.11 Implement `annotations_ttl_write(uuid: &str, annotations: Vec<Annotation>)` → writes `annotations.ttl`
+ - [x] 1.8 Implement `meta_ttl_read(uuid: &str)` → parses `meta.ttl` returning `ObjectType`, title, dates, mime-type, original-url
+ - [x] 1.9 Implement `meta_ttl_write(uuid: &str, type: ObjectType, title: &str, ...)` → writes `meta.ttl` in Turtle format
+ - [x] 1.10 Implement `backrefs_ttl_read/write(uuid: &str)` → reads/writes `backrefs.ttl` (backlinks only)
+ - [x] 1.11 Implement `annotations_ttl_write(uuid: &str, annotations: Vec<Annotation>)` → writes `annotations.ttl`
 
 ## 2. Index Management
 
@@ -46,55 +46,55 @@
 
 ## 5. CLI Commands - Ontology Management
 
-- [ ] 5.1 Add `cerbo import-ontology <url>` command
-- [ ] 5.2 Implement `import_ontology(url: &str)` → creates `type: Ontology` object, fetches content to `page.md`
-- [ ] 5.3 Update `ontology-map.json` when new ontology is imported (add prefix→uuid mapping)
-- [ ] 5.4 Auto-derive prefix from ontology title (e.g., "Schema.org" → "schema") or use user-provided prefix
+- [x] 5.1 Add `cerbo import-ontology <url>` command
+- [x] 5.2 Implement `import_ontology(url: &str)` → creates `type: Ontology` object, fetches content to `page.md`
+- [x] 5.3 Update `ontology-map.json` when new ontology is imported (add prefix→uuid mapping)
+- [x] 5.4 Auto-derive prefix from ontology title (e.g., "Schema.org" → "schema") or use user-provided prefix
 
 ## 6. Link Extraction and backrefs.ttl (Backlinks Only)
 
-- [ ] 6.1 Implement regex/parser to extract `cerbo://<uuid>` links from `page.md` content (outgoing links, no tracking file needed)
-- [ ] 6.2 On `page write`, update TARGET objects' `backrefs.ttl` with `:hasBacklink` (cached backlinks)
-- [ ] 6.3 Source page does NOT store outgoing links in any `.ttl` file (just in `page.md`)
-- [ ] 6.4 `backrefs.ttl` contains ONLY `:hasBacklink` predicates (incoming links)
-- [ ] 6.5 Implement `cerbo backlinks <uuid>` → reads `:hasBacklink` from object's `backrefs.ttl`
+- [x] 6.1 Implement regex/parser to extract `cerbo://<uuid>` links from `page.md` content (outgoing links, no tracking file needed)
+- [x] 6.2 On `page write`, update TARGET objects' `backrefs.ttl` with `:hasBacklink` (cached backlinks)
+- [x] 6.3 Source page does NOT store outgoing links in any `.ttl` file (just in `page.md`)
+- [x] 6.4 `backrefs.ttl` contains ONLY `:hasBacklink` predicates (incoming links)
+- [x] 6.5 Implement `cerbo backlinks <uuid>` → reads `:hasBacklink` from object's `backrefs.ttl`
 
 ## 7. HackMD Annotation Extraction and annotations.ttl
 
-- [ ] 7.1 Implement regex/parser to extract `[Text]{prefix:Type}` syntax from `page.md`
-- [ ] 7.2 Resolve `prefix:` to full URI using `ontology-map.json` (e.g., `schema:` → `cerbo://objects/<uuid-schema>>`)
-- [ ] 7.3 On `page write`, extract annotations and write to `annotations.ttl` as Turtle RDF blank nodes
-- [ ] 7.4 Track annotation position (line:column) in `page.md` and store in `:position`
-- [ ] 7.5 Define `cerbo://ontology/` prefixes for `:concept`, `:type`, `:position`
+- [x] 7.1 Implement regex/parser to extract `[Text]{prefix:Type}` syntax from `page.md`
+- [x] 7.2 Resolve `prefix:` to full URI using `ontology-map.json` (e.g., `schema:` → `cerbo://objects/<uuid-schema>>`)
+- [x] 7.3 On `page write`, extract annotations and write to `annotations.ttl` as Turtle RDF blank nodes
+- [x] 7.4 Track annotation position (line:column) in `page.md` and store in `:position`
+- [x] 7.5 Define `cerbo://ontology/` prefixes for `:concept`, `:type`, `:position`
 
 ## 8. Attachment Management (Modified)
 
-- [ ] 8.1 Modify attachment commands → create separate `type: Attachment` object (NOT `<slug>/assets/`)
-- [ ] 8.2 Implement `attachment_add(page_uuid: &str, file_path: &Path)` → creates attachment object, copies file, returns UUID
-- [ ] 8.3 Implement `attachment_delete(attachment_uuid: &str)` → removes attachment object directory
-- [ ] 8.4 Modify `attachment_list(page_uuid: &str)` → reads page's `backrefs.ttl` for `:usesAttachment`
-- [ ] 8.5 Set `:mime-type` in attachment's `meta.ttl` (detect from file or user-provided)
+- [x] 8.1 Modify attachment commands → create separate `type: Attachment` object (NOT `<slug>/assets/`)
+- [x] 8.2 Implement `attachment_add(page_uuid: &str, file_path: &Path)` → creates attachment object, copies file, returns UUID
+- [x] 8.3 Implement `attachment_delete(attachment_uuid: &str)` → removes attachment object directory
+- [x] 8.4 Modify `attachment_list(page_uuid: &str)` → reads page's `backrefs.ttl` for `:usesAttachment`
+- [x] 8.5 Set `:mime-type` in attachment's `meta.ttl` (detect from file or user-provided)
 
 ## 9. Remove Slug-Based Code
 
-- [ ] 9.1 Remove or refactor `core/src/slug.rs` (slug derivation no longer needed)
-- [ ] 9.2 Update all references from `slug` to `uuid` in `core/src/page.rs`
-- [ ] 9.3 Update all references from `<slug>/page.md` to `.cerbo/objects/<uuid>/page.md`
-- [ ] 9.4 Remove wikilink `[[Title]]` parsing from `core/src/index.rs` (replace with `cerbo://` link parsing)
-- [ ] 9.5 Update `core/src/vault.rs` → remove slug-based vault-add, keep UUID-based operations
+- [x] 9.1 Remove or refactor `core/src/slug.rs` (slug derivation no longer needed)
+- [x] 9.2 Update all references from `slug` to `uuid` in `core/src/page.rs`
+- [x] 9.3 Update all references from `<slug>/page.md` to `.cerbo/objects/<uuid>/page.md`
+- [x] 9.4 Remove wikilink `[[Title]]` parsing from `core/src/index.rs` (replace with `cerbo://` link parsing)
+- [x] 9.5 Update `core/src/vault.rs` → remove slug-based vault-add, keep UUID-based operations
 
 ## 10. Read-Only Enforcement
 
-- [ ] 10.1 Check `meta.ttl` `type: :Source` before allowing `page write` → return error if Source
-- [ ] 10.2 Check `meta.ttl` `type: :Source` before allowing `page delete` → return error if Source
-- [ ] 10.3 Return descriptive error messages: "Cannot write to source type (read-only)"
+- [x] 10.1 Check `meta.ttl` `type: :Source` before allowing `page write` → return error if Source
+- [x] 10.2 Check `meta.ttl` `type: :Source` before allowing `page delete` → return error if Source
+- [x] 10.3 Return descriptive error messages: "Cannot write to source type (read-only)"
 
 ## 11. Testing
 
-- [ ] 11.1 Write unit tests for `object_create` / `object_delete`
-- [ ] 11.2 Write unit tests for `index_resolve_title` / `index_resolve_uuid`
-- [ ] 11.3 Write unit tests for link extraction (`cerbo://<uuid>`)
-- [ ] 11.4 Write unit tests for HackMD annotation extraction (`[Text]{prefix:Type}`)
+- [x] 11.1 Write unit tests for `object_create` / `object_delete`
+- [x] 11.2 Write unit tests for `index_resolve_title` / `index_resolve_uuid`
+- [x] 11.3 Write unit tests for link extraction (`cerbo://<uuid>`)
+- [x] 11.4 Write unit tests for HackMD annotation extraction (`[Text]{prefix:Type}`)
 - [ ] 11.5 Write integration test: `cerbo init` → verify `.cerbo/` structure
 - [ ] 11.6 Write integration test: `cerbo create` → verify UUID object created with `meta.ttl`
 - [ ] 11.7 Write integration test: `cerbo import` → verify `type: Source`, read-only enforcement
