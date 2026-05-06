@@ -3,5 +3,6 @@ members = [
     "core",
     "cli",
     "src-tauri",
+    "migrate",
 ]
 resolver = "2"

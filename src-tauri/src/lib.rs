@@ -1,8 +1,8 @@
 mod index;
 mod page;
 mod paths;
-mod rename;
-mod slug;
+// mod rename;  // TODO: Remove - UUID model doesn't use renames
+// mod slug;    // TODO: Remove - UUID model doesn't use slugs
 mod vault;
 
 use cerbo_core::context::CoreContext;
@@ -101,10 +101,6 @@ pub fn run() {
             // index
             index::backlinks_get,
             vault_open,
-            // rename
-            rename::page_rename,
-            // slug
-            slug::slug_from_title,
             // page
             page::page_create,
             page::page_read,
@@ -149,12 +145,33 @@ fn vault_open(
 ) -> Result<(), String> {
     let ctx = get_context(&app)?;
     let vault_path = cerbo_core::vault::get_vault_path(&ctx, &vaultId)
-        .ok_or_else(|| format!("vault_open: vault not found: {vaultId}"))?;
+        .ok_or_else(|| format!("vault_open: vault not found: {}", vaultId))?;
 
-    // Build/refresh index if cache is missing
-    if cerbo_core::index::load_index(&ctx, &vaultId).is_none() {
-        let idx = cerbo_core::index::build_index(&vault_path)?;
-        cerbo_core::index::save_index(&ctx, &vaultId, &idx)?;
+    // Build/refresh index if needed
+    let index = cerbo_core::index::index_load(&ctx)?;
+    if index.title_to_uuid.is_empty() {
+        // Rebuild index from objects directory
+        let objects_dir = cerbo_core::object::objects_dir(&ctx);
+        if objects_dir.exists() {
+            let mut new_index = cerbo_core::index::IndexJson::default();
+            let entries = std::fs::read_dir(&objects_dir)
+                .map_err(|e| format!("Failed to read objects dir: {}", e))?;
+            
+            for entry in entries {
+                let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+                let uuid = entry.file_name().to_string_lossy().to_string();
+                let meta_path = entry.path().join("meta.ttl");
+                
+                if meta_path.exists() {
+                    let meta = cerbo_core::object::ObjectMeta::read_from_file(&meta_path)
+                        .map_err(|e| format!("Failed to read meta.ttl: {}", e))?;
+                    new_index.title_to_uuid.insert(meta.title.clone(), uuid.clone());
+                    new_index.uuid_to_path.insert(uuid, format!("objects/{}", entry.file_name().to_string_lossy()));
+                }
+            }
+            
+            cerbo_core::index::index_save(&ctx, &new_index)?;
+        }
     }
 
     // Start FS watcher
