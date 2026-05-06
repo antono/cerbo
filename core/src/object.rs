@@ -232,7 +232,61 @@ pub fn object_delete(ctx: &CerboContext, uuid: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Read page.md content for an object.
+/// Import a URL as a Source object (read-only)
+/// Fetches content from URL and creates type: Source object
+pub fn object_import(ctx: &CerboContext, url: &str) -> Result<String, String> {
+    // Fetch content (use reqwest blocking client)
+    let body = fetch_url_content(url)?;
+
+    // Create Source object
+    let uuid = Uuid::new_v4().to_string();
+    let obj_dir = object_path(ctx, &uuid);
+
+    fs::create_dir_all(&obj_dir).map_err(|e| format!("Failed to create object dir: {}", e))?;
+
+    // Create meta.ttl with original-url
+    let now = chrono::Utc::now().to_rfc3339();
+    let meta = ObjectMeta {
+        object_type: ObjectType::Source,
+        title: format!("Imported: {}", url),
+        created: now.clone(),
+        modified: now,
+        original_url: Some(url.to_string()),
+        mime_type: Some("text/markdown".to_string()),
+    };
+
+    let meta_path = obj_dir.join("meta.ttl");
+    meta.write_to_file(&meta_path)
+        .map_err(|e| format!("Failed to write meta.ttl: {}", e))?;
+
+    // Create page.md with imported content
+    let page_path = obj_dir.join("page.md");
+    fs::write(&page_path, body)
+        .map_err(|e| format!("Failed to write page.md: {}", e))?;
+
+    // Update index
+    let _ = index::index_add(ctx, &format!("Imported: {}", url), &uuid);
+
+    Ok(uuid)
+}
+
+/// Fetch URL content using curl (more compatible with tokio)
+fn fetch_url_content(url: &str) -> Result<String, String> {
+    let output = std::process::Command::new("curl")
+        .arg("-s")  // silent mode
+        .arg("-L")  // follow redirects
+        .arg(url)
+        .output()
+        .map_err(|e| format!("Failed to execute curl: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("curl error for {}: {}", url, stderr));
+    }
+
+    String::from_utf8(output.stdout)
+        .map_err(|e| format!("Invalid UTF-8 in response: {}", e))
+}
 pub fn object_read(ctx: &CerboContext, uuid: &str) -> Result<String, String> {
     let obj_dir = object_path(ctx, uuid);
     let page_path = obj_dir.join("page.md");
