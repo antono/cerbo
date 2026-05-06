@@ -65,6 +65,12 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Import ontology (creates type: Ontology object)
+    ImportOntology {
+        url: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -331,6 +337,14 @@ async fn main() -> Result<(), String> {
                 print_json(&serde_json::json!({"uuid": uuid, "url": url}));
             } else {
                 println!("Imported URL as Source object with UUID: {}", uuid);
+            }
+        },
+        Commands::ImportOntology { url, json } => {
+            let uuid = cerbo_core::object::object_import_ontology(&ctx, &url)?;
+            if json {
+                print_json(&serde_json::json!({"uuid": uuid, "url": url}));
+            } else {
+                println!("Imported ontology from {} with UUID: {}", url, uuid);
             }
         },
         Commands::Info { json } => {

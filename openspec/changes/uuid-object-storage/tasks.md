@@ -37,7 +37,7 @@
 ## 4. CLI Commands - Page Management
 
 - [x] 4.1 Modify `cerbo page create "Title"` → generates UUID, creates object (NOT slug-based)
-- [ ] 4.2 Implement `cerbo import <url>` → creates `type: Source` object (read-only), stores original-url in `meta.ttl`
+- [x] 4.2 Implement `cerbo import <url>` → creates `type: Source` object (read-only), stores original-url in `meta.ttl`
 - [x] 4.3 Modify `cerbo page read <uuid>` → reads from `.cerbo/objects/<uuid>/page.md`
 - [x] 4.4 Modify `cerbo page write <uuid> "content"` → writes to object's `page.md`, enforce read-only for Source type
 - [x] 4.5 Modify `cerbo page delete <uuid>` → removes object directory, enforce read-only for Source type

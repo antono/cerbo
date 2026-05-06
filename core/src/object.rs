@@ -270,6 +270,107 @@ pub fn object_import(ctx: &CerboContext, url: &str) -> Result<String, String> {
     Ok(uuid)
 }
 
+/// Import an ontology URL as an Ontology object
+/// Fetches content and creates type: Ontology object
+pub fn object_import_ontology(ctx: &CerboContext, url: &str) -> Result<String, String> {
+    // Fetch content
+    let body = fetch_url_content(url)?;
+
+    // Create Ontology object
+    let uuid = Uuid::new_v4().to_string();
+    let obj_dir = object_path(ctx, &uuid);
+
+    fs::create_dir_all(&obj_dir).map_err(|e| format!("Failed to create object dir: {}", e))?;
+
+    // Create meta.ttl
+    let now = chrono::Utc::now().to_rfc3339();
+    let meta = ObjectMeta {
+        object_type: ObjectType::Ontology,
+        title: format!("Ontology: {}", url),
+        created: now.clone(),
+        modified: now,
+        original_url: Some(url.to_string()),
+        mime_type: Some("text/markdown".to_string()),
+    };
+
+    let meta_path = obj_dir.join("meta.ttl");
+    meta.write_to_file(&meta_path)
+        .map_err(|e| format!("Failed to write meta.ttl: {}", e))?;
+
+    // Create page.md with ontology content
+    let page_path = obj_dir.join("page.md");
+    fs::write(&page_path, body)
+        .map_err(|e| format!("Failed to write page.md: {}", e))?;
+
+    // Update index
+    let _ = index::index_add(ctx, &format!("Ontology: {}", url), &uuid);
+
+    // Update ontology-map.json with prefix→uuid mapping
+    update_ontology_map(ctx, &uuid, url)?;
+
+    Ok(uuid)
+}
+
+/// Update ontology-map.json with new prefix→UUID mapping
+fn update_ontology_map(ctx: &CerboContext, uuid: &str, url: &str) -> Result<(), String> {
+    let map_path = ctx.config_dir.join("ontology-map.json");
+    
+    let mut map: std::collections::HashMap<String, String> = if map_path.exists() {
+        let content = fs::read_to_string(&map_path)
+            .map_err(|e| format!("Failed to read ontology-map.json: {}", e))?;
+        
+        // Handle both {"prefixes": {}} and actual map formats
+        if content.trim().starts_with("{") {
+            // Try to parse as a map directly
+            match serde_json::from_str::<std::collections::HashMap<String, String>>(&content) {
+                Ok(m) => m,
+                Err(_) => {
+                    // Try to parse as {"prefixes": {...}}
+                    #[derive(Serialize, Deserialize)]
+                    struct OntologyMap { prefixes: std::collections::HashMap<String, String> }
+                    match serde_json::from_str::<OntologyMap>(&content) {
+                        Ok(om) => om.prefixes,
+                        Err(e) => return Err(format!("Failed to parse ontology-map.json: {}", e)),
+                    }
+                }
+            }
+        } else {
+            std::collections::HashMap::new()
+        }
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    // Extract prefix from URL (e.g., "schema.org" → "schema")
+    let prefix = extract_prefix_from_url(url);
+    map.insert(prefix, uuid.to_string());
+
+    // Write back in {"prefixes": {...}} format
+    #[derive(Serialize)]
+    struct OntologyMap<'a> { prefixes: &'a std::collections::HashMap<String, String> }
+    let om = OntologyMap { prefixes: &map };
+    
+    let content = serde_json::to_string_pretty(&om)
+        .map_err(|e| format!("Failed to serialize ontology-map.json: {}", e))?;
+    
+    fs::write(&map_path, content)
+        .map_err(|e| format!("Failed to write ontology-map.json: {}", e))
+}
+
+/// Extract prefix from ontology URL
+fn extract_prefix_from_url(url: &str) -> String {
+    // Simple extraction: get last part of domain
+    // e.g., "https://schema.org/" → "schema"
+    // e.g., "https://xmlns.com/foaf/0.1/" → "foaf"
+    if let Some(domain) = url.split("://").nth(1) {
+        let domain = domain.split('/').next().unwrap_or(domain);
+        if let Some(name) = domain.split('.').nth(0) {
+            return name.to_lowercase();
+        }
+    }
+    "unknown".to_string()
+}
+
 /// Fetch URL content using curl (more compatible with tokio)
 fn fetch_url_content(url: &str) -> Result<String, String> {
     let output = std::process::Command::new("curl")
