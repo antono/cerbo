@@ -510,6 +510,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cerbo-migrate"
+version = "0.0.19"
+dependencies = [
+ "cerbo-core",
+ "chrono",
+ "clap",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "uuid",
+ "walkdir",
+]
+
+[[package]]
 name = "cesu8"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
