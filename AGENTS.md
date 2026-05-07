@@ -88,6 +88,12 @@ cargo run -p cerbo -- vault add 'My Vault' /path/to/vault
 nix develop --command bash -c "cargo run -p cerbo -- vault list"
 ```
 
+### CLI API Changes
+
+Any change to the CLI API **MUST** be reflected in the man page. When adding,
+removing, or modifying CLI commands or arguments, update the man page
+accordingly. The man page ships with the `cerbo` CLI tool.
+
 ## Quick Reference
 
 ```bash
