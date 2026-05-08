@@ -14,7 +14,20 @@ fn main() {
         Ok(output) if output.status.success() => {
             let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
             let output_path = PathBuf::from(&out_dir).join("cerbo.1");
-            fs::write(&output_path, output.stdout)
+
+            // Get troff output, add .nh (disable hyphenation)
+            let stdout_str = String::from_utf8_lossy(&output.stdout);
+            let mut troff = String::from(".nh\n");
+            troff.push_str(&stdout_str);
+
+            // Fix literal dots at start of lines in no-fill mode
+            // In troff, \& before . prevents macro interpretation
+            // We need to escape: .vault-path/, .cerbo/, and similar literal dots
+            let result = troff
+                .replace("\n.vault-path/", "\n\\&.vault-path/")
+                .replace("\n  .cerbo/", "\n  \\&.cerbo/");
+
+            fs::write(&output_path, result)
                 .unwrap_or_else(|e| panic!("Failed to write {}: {}", output_path.display(), e));
         }
         Ok(output) => {

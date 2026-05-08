@@ -114,18 +114,18 @@ Cerbo uses a **UUID-based storage model** where all content is stored locally in
 
 ```
 .vault-path/
-├── .cerbo/
-│   ├── objects/
-│   │   └── <uuid>/           # Each object is a directory named by UUID
-│   │       ├── page.md        # Markdown content (for pages)
-│   │       ├── meta.ttl       # RDF metadata (Turtle format)
-│   │       ├── backrefs.ttl   # Backlinks to this object
-│   │       └── annotations.ttl # HackMD-style annotations
-│   ├── index.json             # Object index
-│   ├── vaults.toml           # Vault registry
-│   ├── ontology-map.json      # Ontology prefix mappings
-│   ├── ui.toml               # UI settings
-│   └── state.toml            # Application state
+  .cerbo/
+    +-- objects/
+    |   +-- <uuid>/
+    |       +-- page.md        # Markdown content (for pages)
+    |       +-- meta.ttl       # RDF metadata (Turtle format)
+    |       +-- backrefs.ttl   # Backlinks to this object
+    |       +-- annotations.ttl # HackMD-style annotations
+    +-- index.json             # Object index
+    +-- vaults.toml           # Vault registry
+    +-- ontology-map.json      # Ontology prefix mappings
+    +-- ui.toml               # UI settings
+    +-- state.toml            # Application state
 ```
 
 ## Object Types

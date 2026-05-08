@@ -1,4 +1,5 @@
 .TH "cerbo" 1
+.nh
 
 .SH "NAME"
 .PP
@@ -192,8 +193,19 @@ Cerbo uses a \fBUUID\-based storage model\fP where all content is stored locally
 .RS
 .PP
 .nf
-\.vault\-path/
-+\-\- \.cerbo/|   +\-\- objects/|   |   +\-\- <uuid>/           # Each object is a directory named by UUID|   |       +\-\- page\.md        # Markdown content (for pages)|   |       +\-\- meta\.ttl       # RDF metadata (Turtle format)|   |       +\-\- backrefs\.ttl   # Backlinks to this object|   |       +\-\- annotations\.ttl # HackMD\-style annotations|   +\-\- index\.json             # Object index|   +\-\- vaults\.toml           # Vault registry|   +\-\- ontology\-map\.json      # Ontology prefix mappings|   +\-\- ui\.toml               # UI settings|   +\-\- state\.toml            # Application state
+\&.vault\-path/
+  \&.cerbo/
+      +\-\- objects/
+      |   +\-\- <uuid>/
+      |       +\-\- page\.md        # Markdown content (for pages)
+      |       +\-\- meta\.ttl       # RDF metadata (Turtle format)
+      |       +\-\- backrefs\.ttl   # Backlinks to this object
+      |       +\-\- annotations\.ttl # HackMD\-style annotations
+      +\-\- index\.json             # Object index
+      +\-\- vaults\.toml           # Vault registry
+      +\-\- ontology\-map\.json      # Ontology prefix mappings
+      +\-\- ui\.toml               # UI settings
+      +\-\- state\.toml            # Application state
 .fi
 .RE
 
