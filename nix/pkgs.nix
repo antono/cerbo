@@ -5,14 +5,22 @@ let
     version = "0.0.19";
     src = ../.;
     cargoLock.lockFile = ../Cargo.lock;
-    nativeBuildInputs = [ pkgs.pkg-config ];
+    nativeBuildInputs = [ pkgs.pkg-config pkgs.mandown ];
     buildInputs = tauri-deps;
     # Skip integration tests that require binary at hardcoded path
     doCheck = false;
 
-    # Install man page alongside the binary (pre-generated or build-time)
+    # Install man page: prefer generated (from build.rs + mandown), fall back to pre-generated
     postInstall = ''
       mkdir -p $out/share/man/man1
+      # Find generated man page from build.rs (if mandown was available)
+      for dir in target/release/build/cerbo-*/out; do
+        if [ -f "$dir/cerbo.1" ]; then
+          cp "$dir/cerbo.1" $out/share/man/man1/
+          exit 0
+        fi
+      done
+      # Fall back to pre-generated man page
       cp cli/man/cerbo.1 $out/share/man/man1/
     '';
   };
