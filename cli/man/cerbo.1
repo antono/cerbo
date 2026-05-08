@@ -1,0 +1,300 @@
+.TH "cerbo" 1
+
+.SH "NAME"
+.PP
+cerbo \- Semantic knowledge management tool for agents and humans
+
+.SH "SYNOPSIS"
+.PP
+`\f[CR]cerbo [OPTIONS] <COMMAND>\fP`
+
+.SH "DESCRIPTION"
+.PP
+Cerbo is a local\-first markdown wiki tool designed for both human and AI agent workflows\. It uses a UUID\-based storage model where all content objects are stored as directories named by UUID, making it easy to reference and link between objects\.
+.PP
+The tool supports managing multiple vaults (workspaces), creating and editing pages with markdown content, importing web content as source objects, and working with ontologies (Schema\.org, FOAF) for semantic markup using the HackMD annotation syntax `\f[CR][Text]{prefix:Type}\fP`\.
+
+.SH "COMMANDS"
+
+.SS "init"
+.PP
+Initialize a new vault in the current directory\. Creates a `\f[CR]\.cerbo/\fP` directory with the necessary structure and bundles standard ontologies (Schema\.org, FOAF)\.
+.PP
+Usage: `\f[CR]cerbo init [OPTIONS]\fP`
+.PP
+Options:
+.RS
+.Bl
+.IP \(bu 4
+`\f[CR]\-\-json\fP` \- Output result as JSON
+.El
+.RE
+
+.SS "vault"
+.PP
+Vault management commands for working with multiple workspaces\.
+.PP
+Usage: `\f[CR]cerbo vault <SUBCOMMAND>\fP`
+
+.SB "Subcommands:"
+.RS
+.Bl
+.IP \(bu 4
+`\f[CR]cerbo vault list [\-\-json]\fP` \- List all registered vaults
+.El
+.Bl
+.IP \(bu 4
+`\f[CR]cerbo vault add <NAME> <PATH> [\-\-json]\fP` \- Add a new vault with given name at specified path
+.El
+.Bl
+.IP \(bu 4
+`\f[CR]cerbo vault remove <ID> [\-\-json]\fP` \- Remove a vault by its ID
+.El
+.Bl
+.IP \(bu 4
+`\f[CR]cerbo vault active <ID> [\-\-json]\fP` \- Set the active vault
+.El
+.RE
+
+.SS "page"
+.PP
+Page management commands for creating, reading, and modifying wiki pages\.
+.PP
+Usage: `\f[CR]cerbo page <SUBCOMMAND>\fP`
+
+.SB "Subcommands:"
+.RS
+.Bl
+.IP \(bu 4
+`\f[CR]cerbo page list [\-\-json]\fP` \- List all pages in the current vault
+.El
+.Bl
+.IP \(bu 4
+`\f[CR]cerbo page create <TITLE> [\-\-json]\fP` \- Create a new page with the given title
+.El
+.Bl
+.IP \(bu 4
+`\f[CR]cerbo page read <UUID> [\-\-json]\fP` \- Read the content of a page by its UUID
+.El
+.Bl
+.IP \(bu 4
+`\f[CR]cerbo page write <UUID> <CONTENT> [\-\-json]\fP` \- Write content to a page
+.El
+.Bl
+.IP \(bu 4
+`\f[CR]cerbo page delete <UUID> [\-\-json]\fP` \- Delete a page by its UUID
+.El
+.RE
+
+.SS "resolve"
+.PP
+Resolve a UUID to its local filesystem path\.
+.PP
+Usage: `\f[CR]cerbo resolve <UUID> [\-\-json]\fP`
+.PP
+Arguments:
+.RS
+.Bl
+.IP \(bu 4
+`\f[CR]UUID\fP` \- The UUID of the object to resolve
+.El
+.RE
+.PP
+Options:
+.RS
+.Bl
+.IP \(bu 4
+`\f[CR]\-\-json\fP` \- Output result as JSON with path field
+.El
+.RE
+
+.SS "info"
+.PP
+Show configuration and vault information\.
+.PP
+Usage: `\f[CR]cerbo info [\-\-json]\fP`
+.PP
+Options:
+.RS
+.Bl
+.IP \(bu 4
+`\f[CR]\-\-json\fP` \- Output result as JSON with config_dir, cache_dir, and vaults
+.El
+.RE
+
+.SS "import"
+.PP
+Import a URL as a Source object (read\-only reference to external content)\.
+.PP
+Usage: `\f[CR]cerbo import <URL> [\-\-json]\fP`
+.PP
+Arguments:
+.RS
+.Bl
+.IP \(bu 4
+`\f[CR]URL\fP` \- The URL to import
+.El
+.RE
+.PP
+Options:
+.RS
+.Bl
+.IP \(bu 4
+`\f[CR]\-\-json\fP` \- Output result as JSON with uuid and url fields
+.El
+.RE
+
+.SS "import-ontology"
+.PP
+Import an ontology file and create a type:Ontology object\.
+.PP
+Usage: `\f[CR]cerbo import\-ontology <URL> [\-\-json]\fP`
+.PP
+Arguments:
+.RS
+.Bl
+.IP \(bu 4
+`\f[CR]URL\fP` \- The URL of the ontology file (e\.g\., Schema\.org or FOAF)
+.El
+.RE
+.PP
+Options:
+.RS
+.Bl
+.IP \(bu 4
+`\f[CR]\-\-json\fP` \- Output result as JSON with uuid and url fields
+.El
+.RE
+
+.SH "OPTIONS"
+.PP
+Global options available for all commands:
+.RS
+.Bl
+.IP \(bu 4
+`\f[CR]\-h, \-\-help\fP` \- Print help information
+.El
+.Bl
+.IP \(bu 4
+`\f[CR]\-V, \-\-version\fP` \- Print version information
+.El
+.RE
+.PP
+Command\-specific options are listed under each command in the COMMANDS section\.
+.PP
+JSON output mode (`\f[CR]\-\-json\fP`): Most commands support a `\f[CR]\-\-json\fP` flag that outputs results in JSON format instead of human\-readable text\. This is useful for scripting and integration with other tools\.
+
+.SH "STORAGE"
+.PP
+Cerbo uses a \fBUUID\-based storage model\fP where all content is stored locally in a `\f[CR]\.cerbo/\fP` directory\.
+
+.SS "Directory Structure"
+.RS
+.PP
+.nf
+\.vault\-path/
++\-\- \.cerbo/|   +\-\- objects/|   |   +\-\- <uuid>/           # Each object is a directory named by UUID|   |       +\-\- page\.md        # Markdown content (for pages)|   |       +\-\- meta\.ttl       # RDF metadata (Turtle format)|   |       +\-\- backrefs\.ttl   # Backlinks to this object|   |       +\-\- annotations\.ttl # HackMD\-style annotations|   +\-\- index\.json             # Object index|   +\-\- vaults\.toml           # Vault registry|   +\-\- ontology\-map\.json      # Ontology prefix mappings|   +\-\- ui\.toml               # UI settings|   +\-\- state\.toml            # Application state
+.fi
+.RE
+
+.SS "Object Types"
+.RS
+.Bl
+.IP \(bu 4
+\fBProduct\fP \- Default type for pages created by users
+.El
+.Bl
+.IP \(bu 4
+\fBSource\fP \- Imported URLs (read\-only references)
+.El
+.Bl
+.IP \(bu 4
+\fBAttachment\fP \- File attachments (future)
+.El
+.Bl
+.IP \(bu 4
+\fBOntology\fP \- Ontology definitions (Schema\.org, FOAF bundled by default)
+.El
+.RE
+
+.SS "Links and Annotations"
+.PP
+Links between objects use the format: `\f[CR]cerbo://<uuid>\fP`
+.PP
+Annotations use HackMD syntax: `\f[CR][Text]{prefix:Type}\fP` where prefix maps to an ontology UUID via `\f[CR]ontology\-map\.json\fP`\.
+.PP
+Example: `\f[CR][Alice]{foaf:Person}\fP` \- references the FOAF Person type
+
+.SH "EXAMPLES"
+.PP
+Initialize a new vault in the current directory:
+.RS
+.PP
+.nf
+cerbo init
+.fi
+.RE
+.PP
+List all registered vaults:
+.RS
+.PP
+.nf
+cerbo vault list
+.fi
+.RE
+.PP
+Create a new page:
+.RS
+.PP
+.nf
+cerbo page create "My First Page"
+.fi
+.RE
+.PP
+Read a page by UUID (output as JSON):
+.RS
+.PP
+.nf
+cerbo page read 550e8400\-e29b\-41d4\-a716\-446655440000 \-\-json
+.fi
+.RE
+.PP
+Import a webpage as a source:
+.RS
+.PP
+.nf
+cerbo import https://example\.com/article
+.fi
+.RE
+.PP
+Show configuration info:
+.RS
+.PP
+.nf
+cerbo info
+.fi
+.RE
+
+.SH "SEE ALSO"
+.RS
+.Bl
+.IP \(bu 4
+Project repository: https://github\.com/yourusername/cerbo
+.El
+.Bl
+.IP \(bu 4
+Tauri framework: https://tauri\.app/
+.El
+.Bl
+.IP \(bu 4
+Schema\.org: https://schema\.org/
+.El
+.Bl
+.IP \(bu 4
+FOAF ontology: http://xmlns\.com/foaf/spec/
+.El
+.Bl
+.IP \(bu 4
+HackMD annotation syntax: https://hackmd\.io/@docs/hackmd\-syntax
+.El
+.RE

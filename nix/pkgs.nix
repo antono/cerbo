@@ -9,6 +9,12 @@ let
     buildInputs = tauri-deps;
     # Skip integration tests that require binary at hardcoded path
     doCheck = false;
+
+    # Install man page alongside the binary (pre-generated or build-time)
+    postInstall = ''
+      mkdir -p $out/share/man/man1
+      cp cli/man/cerbo.1 $out/share/man/man1/
+    '';
   };
 
   cerbo-frontend = pkgs.stdenv.mkDerivation {
