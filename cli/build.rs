@@ -17,10 +17,9 @@ fn main() {
 
             // Get troff output and post-process
             let stdout_str = String::from_utf8_lossy(&output.stdout);
-            let mut troff = stdout_str;
 
             // Add .nh at start to disable hyphenation
-            troff = format!(".nh\n{}", troff);
+            let mut troff = format!(".nh\n{}", stdout_str);
 
             // Fix no-fill mode blocks: add .ll to prevent line wrapping
             // mandown generates .nf/.fi blocks - add .ll before .nf
