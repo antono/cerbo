@@ -15,15 +15,30 @@ fn main() {
             let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
             let output_path = PathBuf::from(&out_dir).join("cerbo.1");
 
-            // Get troff output, add .nh (disable hyphenation)
+            // Get troff output and post-process
             let stdout_str = String::from_utf8_lossy(&output.stdout);
-            let mut troff = String::from(".nh\n");
-            troff.push_str(&stdout_str);
+            let mut troff = stdout_str;
 
-            // Fix literal dots at start of lines in no-fill mode
+            // Add .nh at start to disable hyphenation
+            troff = format!(".nh\n{}", troff);
+
+            // Fix no-fill mode blocks: add .ll to prevent line wrapping
+            // mandown generates .nf/.fi blocks - add .ll before .nf
+            let mut result = String::new();
+            for line in troff.lines() {
+                if line == ".nf" {
+                    result.push_str(".ll 80n\n");
+                }
+                result.push_str(line);
+                result.push('\n');
+                if line == ".fi" {
+                    result.push_str(".ll\n");
+                }
+            }
+
+            // Escape literal dots at start of lines in no-fill mode
             // In troff, \& before . prevents macro interpretation
-            // We need to escape: .vault-path/, .cerbo/, and similar literal dots
-            let result = troff
+            let result = result
                 .replace("\n.vault-path/", "\n\\&.vault-path/")
                 .replace("\n  .cerbo/", "\n  \\&.cerbo/");
 
