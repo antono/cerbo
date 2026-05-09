@@ -44,7 +44,7 @@ Usage: `cerbo page <SUBCOMMAND>`
 
 ### Subcommands:
 
-- `cerbo page list [--json]` - List all pages in the current vault
+ - `cerbo page list [--json] [--vault <VAULT_ID>]` - List all pages in the specified vault or the current vault if omitted
 - `cerbo page create <TITLE> [--json]` - Create a new page with the given title
 - `cerbo page read <UUID> [--json]` - Read the content of a page by its UUID
 - `cerbo page write <UUID> <CONTENT> [--json]` - Write content to a page

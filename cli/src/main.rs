@@ -16,6 +16,56 @@ fn print_json_error(message: &str) {
     println!("{}", serde_json::json!({"error": true, "message": message}));
 }
 
+// Print pages in the template specified by the user:
+// Pages in "Vault Name" (<vault_uuid>):
+// <uuid>: Page Title
+fn print_pages_template(ctx: &CerboContext, pages: &[cerbo_core::page::PageMeta]) -> Result<(), String> {
+    use cerbo_core::vault;
+    use cerbo_core::state;
+
+    // Determine active vault id from state, or fall back to single registered vault
+    let st = state::load_state(ctx)?;
+    let reg = vault::vault_list(ctx)?;
+
+    let (vault_name, vault_id) = if let Some(active) = st.active_vault_id.as_deref() {
+        // Find matching vault
+        if let Some(v) = reg.vaults.iter().find(|v| v.id == active) {
+            (v.name.clone(), v.id.clone())
+        } else if reg.vaults.len() == 1 {
+            (reg.vaults[0].name.clone(), reg.vaults[0].id.clone())
+        } else {
+            ("(no active vault)".to_string(), "<none>".to_string())
+        }
+    } else if reg.vaults.len() == 1 {
+        (reg.vaults[0].name.clone(), reg.vaults[0].id.clone())
+    } else {
+        ("(no active vault)".to_string(), "<none>".to_string())
+    };
+
+    println!("Pages in \"{}\" ({}):", vault_name, vault_id);
+    for p in pages {
+        println!("{}: {}", p.uuid, p.title);
+    }
+
+    Ok(())
+}
+
+// Print vaults in a compact template similar to pages. Shows (current) next to the
+// vault name when it is the active vault.
+fn print_vaults_template(ctx: &CerboContext, vaults_file: &cerbo_core::vault::VaultsFile) -> Result<(), String> {
+    use cerbo_core::state;
+
+    let st = state::load_state(ctx)?;
+    let active = st.active_vault_id;
+
+    for v in &vaults_file.vaults {
+        let current_marker = if Some(v.id.clone()) == active { " (current)" } else { "" };
+        println!("{}: {}{}", v.id, v.name, current_marker);
+    }
+
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct PageJson {
     uuid: String,
@@ -107,6 +157,9 @@ enum PageCommands {
     List {
         #[arg(long)]
         json: bool,
+        /// Optional vault ID to list pages from. If omitted, uses the current active vault.
+        #[arg(long)]
+        vault: Option<String>,
     },
     /// Create a new page
     Create {
@@ -274,7 +327,8 @@ async fn main() -> Result<(), String> {
                     }).collect();
                     print_json(&vaults_json);
                 } else {
-                    println!("{:#?}", vaults_file);
+                    // Print compact human-readable vault list
+                    print_vaults_template(&ctx, &vaults_file)?;
                 }
             }
             VaultCommands::Add { name, path, json } => {
@@ -287,7 +341,13 @@ async fn main() -> Result<(), String> {
                     };
                     print_json(&vault_json);
                 } else {
-                    println!("Added vault: {:#?}", vault);
+                    // Indicate added vault in compact format
+                    let current_id = cerbo_core::state::load_state(&ctx)?.active_vault_id;
+                    let mut current_marker = "";
+                    if Some(vault.id.clone()) == current_id {
+                        current_marker = " (current)";
+                    }
+                    println!("{}: {}{}", vault.id, vault.name, current_marker);
                 }
             }
             VaultCommands::Remove { id, json } => {
@@ -308,8 +368,21 @@ async fn main() -> Result<(), String> {
             }
         },
         Commands::Page { action } => match action {
-            PageCommands::List { json } => {
-                let pages = cerbo_core::page::page_list(&ctx)?;
+            PageCommands::List { json, vault } => {
+                // Determine pages to list: if --vault provided, list pages from that
+                // vault; otherwise list from the current active vault (or single-vault fallback).
+                let pages = if let Some(v) = vault.clone() {
+                    let reg = cerbo_core::vault::vault_list(&ctx)?;
+                    let target = reg.vaults.iter().find(|x| x.id == v).ok_or_else(|| format!("vault not found: {}", v))?;
+                    let tmp_ctx = cerbo_core::CerboContext {
+                        config_dir: target.path.join(".cerbo"),
+                        cache_dir: ctx.cache_dir.clone(),
+                    };
+                    cerbo_core::page::page_list(&tmp_ctx)?
+                } else {
+                    cerbo_core::page::page_list(&ctx)?
+                };
+
                 if json {
                     let pages_json: Vec<PageJson> = pages.into_iter().map(|p| PageJson {
                         uuid: p.uuid,
@@ -317,7 +390,19 @@ async fn main() -> Result<(), String> {
                     }).collect();
                     print_json(&pages_json);
                 } else {
-                    println!("{:#?}", pages);
+                    // Print compact human-readable template. If we used an explicit
+                    // --vault, print the header using that vault's name; otherwise
+                    // rely on print_pages_template to select the active vault.
+                    if let Some(v) = vault {
+                        let reg = cerbo_core::vault::vault_list(&ctx)?;
+                        let target = reg.vaults.iter().find(|x| x.id == v).ok_or_else(|| format!("vault not found: {}", v))?;
+                        println!("Pages in \"{}\" ({}):", target.name, target.id);
+                        for p in &pages {
+                            println!("{}: {}", p.uuid, p.title);
+                        }
+                    } else {
+                        print_pages_template(&ctx, &pages)?;
+                    }
                 }
             }
             PageCommands::Create { title, json } => {
