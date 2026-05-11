@@ -121,6 +121,18 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Rebuild page metadata (backrefs.ttl and annotations.ttl)
+    Index {
+        /// Specific page UUID to index (incremental)
+        #[arg(long)]
+        page: Option<String>,
+        /// Explicit vault path (default: discover from CWD like Git)
+        #[arg(long)]
+        vault: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -468,6 +480,44 @@ async fn main() -> Result<(), String> {
                 print_json(&serde_json::json!({"uuid": uuid, "url": url}));
             } else {
                 println!("Imported ontology from {} with UUID: {}", url, uuid);
+            }
+        },
+        Commands::Index { page, vault, json } => {
+            use cerbo_core::VaultContext;
+            use cerbo_core::metadata_index;
+            
+            // Discover vault from CWD or use explicit path
+            let vault_ctx = if let Some(vault_path) = vault {
+                let path = std::path::PathBuf::from(&vault_path);
+                VaultContext::from_path(path)?
+            } else {
+                VaultContext::from_cwd()?
+            };
+            
+            let stats = if let Some(page_uuid) = page {
+                // Incremental: index single page
+                metadata_index::index_page(&vault_ctx, &page_uuid)?
+            } else {
+                // Full rebuild: index all pages in vault
+                metadata_index::index_vault(&vault_ctx)?
+            };
+            
+            if json {
+                print_json(&serde_json::json!({
+                    "pages_processed": stats.pages_processed,
+                    "links_found": stats.links_found,
+                    "annotations_found": stats.annotations_found,
+                    "errors": stats.errors.len()
+                }));
+            } else {
+                println!("Indexed {} pages", stats.pages_processed);
+                println!("Found {} links, {} annotations", stats.links_found, stats.annotations_found);
+                if !stats.errors.is_empty() {
+                    eprintln!("Errors: {}", stats.errors.len());
+                    for err in &stats.errors {
+                        eprintln!("  {}: {}", err.page_uuid, err.error_message);
+                    }
+                }
             }
         },
         Commands::Info { json } => {
