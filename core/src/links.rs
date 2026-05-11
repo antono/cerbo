@@ -1,6 +1,7 @@
-use crate::{CerboContext, object};
+use crate::{CerboContext, VaultContext, object};
 use regex::Regex;
 use std::fs;
+use std::path::PathBuf;
 
 // ── Link Extraction ─────────────────────────────────────
 
@@ -25,6 +26,16 @@ pub fn extract_wikilinks(content: &str) -> Vec<String> {
 /// Read backrefs.ttl for an object, returns list of UUIDs that link to this object
 pub fn backrefs_read(ctx: &CerboContext, uuid: &str) -> Result<Vec<String>, String> {
     let obj_dir = object::object_path(ctx, uuid);
+    backrefs_read_from_path(&obj_dir)
+}
+
+/// Read backrefs.ttl from a vault context
+pub fn backrefs_read_vault(vault_ctx: &VaultContext, uuid: &str) -> Result<Vec<String>, String> {
+    let obj_dir = vault_ctx.object_path(uuid);
+    backrefs_read_from_path(&obj_dir)
+}
+
+fn backrefs_read_from_path(obj_dir: &PathBuf) -> Result<Vec<String>, String> {
     let backrefs_path = obj_dir.join("backrefs.ttl");
 
     if !backrefs_path.exists() {
@@ -37,8 +48,7 @@ pub fn backrefs_read(ctx: &CerboContext, uuid: &str) -> Result<Vec<String>, Stri
     parse_backrefs(&content)
 }
 
-/// Add a backlink to an object's backrefs.ttl
-/// This is called when another page links to this object
+/// Add a backlink to an object's backrefs.ttl (legacy API)
 pub fn backrefs_add(ctx: &CerboContext, target_uuid: &str, source_uuid: &str) -> Result<(), String> {
     let mut backrefs = backrefs_read(ctx, target_uuid)?;
 
@@ -51,16 +61,55 @@ pub fn backrefs_add(ctx: &CerboContext, target_uuid: &str, source_uuid: &str) ->
     write_backrefs(ctx, target_uuid, &backrefs)
 }
 
-/// Remove a backlink from an object's backrefs.ttl
+/// Add a backlink (vault-aware)
+pub fn backrefs_add_vault(vault_ctx: &VaultContext, target_uuid: &str, source_uuid: &str) -> Result<(), String> {
+    let mut backrefs = backrefs_read_vault(vault_ctx, target_uuid)?;
+
+    if backrefs.contains(&source_uuid.to_string()) {
+        return Ok(());
+    }
+
+    backrefs.push(source_uuid.to_string());
+    write_backrefs_vault(vault_ctx, target_uuid, &backrefs)
+}
+
+/// Remove a backlink from an object's backrefs.ttl (legacy API)
 pub fn backrefs_remove(ctx: &CerboContext, target_uuid: &str, source_uuid: &str) -> Result<(), String> {
     let mut backrefs = backrefs_read(ctx, target_uuid)?;
     backrefs.retain(|u| u != source_uuid);
     write_backrefs(ctx, target_uuid, &backrefs)
 }
 
-/// Write backrefs.ttl for an object
+/// Remove a backlink (vault-aware)
+pub fn backrefs_remove_vault(vault_ctx: &VaultContext, target_uuid: &str, source_uuid: &str) -> Result<(), String> {
+    let mut backrefs = backrefs_read_vault(vault_ctx, target_uuid)?;
+    backrefs.retain(|u| u != source_uuid);
+    write_backrefs_vault(vault_ctx, target_uuid, &backrefs)
+}
+
+/// Clear all backlinks for an object (legacy API)
+pub fn backrefs_clear(ctx: &CerboContext, uuid: &str) -> Result<(), String> {
+    write_backrefs(ctx, uuid, &[])
+}
+
+/// Clear all backlinks (vault-aware)
+pub fn backrefs_clear_vault(vault_ctx: &VaultContext, uuid: &str) -> Result<(), String> {
+    write_backrefs_vault(vault_ctx, uuid, &[])
+}
+
+/// Write backrefs.ttl for an object (legacy API)
 fn write_backrefs(ctx: &CerboContext, uuid: &str, backrefs: &[String]) -> Result<(), String> {
     let obj_dir = object::object_path(ctx, uuid);
+    write_backrefs_to_path(&obj_dir, backrefs)
+}
+
+/// Write backrefs.ttl (vault-aware)
+fn write_backrefs_vault(vault_ctx: &VaultContext, uuid: &str, backrefs: &[String]) -> Result<(), String> {
+    let obj_dir = vault_ctx.object_path(uuid);
+    write_backrefs_to_path(&obj_dir, backrefs)
+}
+
+fn write_backrefs_to_path(obj_dir: &PathBuf, backrefs: &[String]) -> Result<(), String> {
     let backrefs_path = obj_dir.join("backrefs.ttl");
 
     let mut lines = vec![

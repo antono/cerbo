@@ -2,6 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::path::{PathBuf, Path};
 use crate::CerboContext;
 
+/// Get the full path to a page object directory within a vault
+pub fn get_page_path(vault_path: &Path, page_uuid: &str) -> PathBuf {
+    vault_path.join(".cerbo").join("objects").join(page_uuid)
+}
+
 #[derive(Debug, Serialize)]
 pub struct PageMeta {
     pub uuid: String,

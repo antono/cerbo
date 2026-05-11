@@ -1,19 +1,19 @@
 ## 1. Core Library Refactoring
 
-- [ ] 1.1 Make `extract_cerbo_links()` public in `core/src/links.rs`
-- [ ] 1.2 Make `extract_annotations()` public in `core/src/annotations.rs`
-- [ ] 1.3 Add `backrefs_clear()` function in `core/src/links.rs` to reset a vault's backrefs
-- [ ] 1.4 Add public API in `core/src/lib.rs` for indexing operations
+- [x] 1.1 Make `extract_cerbo_links()` public in `core/src/links.rs`
+- [x] 1.2 Make `extract_annotations()` public in `core/src/annotations.rs`
+- [x] 1.3 Add `backrefs_clear()` function in `core/src/links.rs` to reset a vault's backrefs
+- [x] 1.4 Add public API in `core/src/lib.rs` for indexing operations
 
 ## 2. Vault/Page Discovery
 
-- [ ] 2.1 Add `list_all_vaults()` function in `core/src/vault.rs` to enumerate all vaults
-- [ ] 2.2 Add `list_pages_in_vault(vault_uuid)` function to enumerate pages in a vault
-- [ ] 2.3 Add `get_page_path(page_uuid)` helper to resolve page object directory
+- [x] 2.1 Add `list_all_vaults()` function in `core/src/vault.rs` to enumerate all vaults
+- [x] 2.2 Add `list_pages_in_vault(vault_uuid)` function to enumerate pages in a vault
+- [x] 2.3 Add `get_page_path(page_uuid)` helper to resolve page object directory
 
 ## 3. Indexing Logic
 
-- [ ] 3.1 Create `core/src/index.rs` module for indexing operations
+- [x] 3.1 Create `core/src/index.rs` module for indexing operations
 - [ ] 3.2 Implement `index_all_pages(ctx)` - two-pass algorithm (clear all, rebuild all)
 - [ ] 3.3 Implement `index_vault(ctx, vault_uuid)` - two-pass within vault scope
 - [ ] 3.4 Implement `index_page(ctx, page_uuid)` - incremental single-page indexing

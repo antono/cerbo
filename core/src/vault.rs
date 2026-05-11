@@ -36,6 +36,41 @@ pub fn save_vaults(ctx: &CerboContext, registry: &VaultsFile) -> Result<(), Stri
     Ok(())
 }
 
+/// List all vaults (convenience wrapper around load_vaults)
+pub fn list_all_vaults(ctx: &CerboContext) -> Result<Vec<Vault>, String> {
+    Ok(load_vaults(ctx)?.vaults)
+}
+
+/// List all page UUIDs in a vault (scans vault_path/.cerbo/objects/)
+pub fn list_pages_in_vault(_ctx: &CerboContext, vault_path: &PathBuf) -> Result<Vec<String>, String> {
+    let objects_dir = vault_path.join(".cerbo").join("objects");
+    
+    if !objects_dir.exists() {
+        return Ok(Vec::new());
+    }
+    
+    let mut page_uuids = Vec::new();
+    
+    let entries = std::fs::read_dir(&objects_dir)
+        .map_err(|e| format!("list_pages_in_vault read_dir: {}", e))?;
+    
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("list_pages_in_vault entry: {}", e))?;
+        let path = entry.path();
+        
+        if !path.is_dir() {
+            continue;
+        }
+        
+        // Check if it's a page object (has page.md)
+        if path.join("page.md").exists() {
+            page_uuids.push(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    
+    Ok(page_uuids)
+}
+
 // ── Business Logic ────────────────────────────────────────────────────────────
 
 pub fn vault_add(ctx: &CerboContext, name: String, path: String) -> Result<Vault, String> {
