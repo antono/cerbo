@@ -360,3 +360,211 @@ fn test_old_vault_not_compatible() {
     // The old page.md is NOT in .cerbo/objects/
     // This demonstrates the breaking change
 }
+
+// ── Integration Tests for `cerbo index` Command ────────────────────────
+
+#[test]
+fn test_index_full_vault_rebuild() {
+    let ctx = setup();
+
+    // Init vault
+    Command::new(&ctx.bin_path)
+        .arg("init")
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // Create two pages
+    let output1 = Command::new(&ctx.bin_path)
+        .args(&["page", "create", "Page 1"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    let uuid1 = extract_uuid(&output1.stdout);
+
+    let output2 = Command::new(&ctx.bin_path)
+        .args(&["page", "create", "Page 2"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    let uuid2 = extract_uuid(&output2.stdout);
+
+    // Write content with link from page1 to page2
+    let content = format!("Link to [page2](cerbo://{})", uuid2);
+    let page1_path = ctx.config_dir.join("objects").join(&uuid1).join("page.md");
+    std::fs::write(&page1_path, content).unwrap();
+
+    // Run index
+    let output = Command::new(&ctx.bin_path)
+        .arg("index")
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let output_str = String::from_utf8(output.stdout).unwrap();
+    assert!(output_str.contains("Indexed 2 pages"));
+    assert!(output_str.contains("Found 1 links"));
+
+    // Verify backrefs.ttl was created for page2
+    let backrefs_path = ctx.config_dir.join("objects").join(&uuid2).join("backrefs.ttl");
+    assert!(backrefs_path.exists());
+    let backrefs = std::fs::read_to_string(&backrefs_path).unwrap();
+    assert!(backrefs.contains(&uuid1));
+}
+
+#[test]
+fn test_index_single_page_incremental() {
+    let ctx = setup();
+
+    // Init vault
+    Command::new(&ctx.bin_path)
+        .arg("init")
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // Create page with annotation
+    let output = Command::new(&ctx.bin_path)
+        .args(&["page", "create", "Test Page"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    let uuid = extract_uuid(&output.stdout);
+
+    // Write content with annotation
+    let page_path = ctx.config_dir.join("objects").join(&uuid).join("page.md");
+    std::fs::write(&page_path, "Some [knowledge]{schema:Thing} here").unwrap();
+
+    // Run incremental index on single page
+    let output = Command::new(&ctx.bin_path)
+        .args(&["index", "--page", &uuid])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let output_str = String::from_utf8(output.stdout).unwrap();
+    assert!(output_str.contains("Indexed 1 pages"));
+    assert!(output_str.contains("1 annotations"));
+
+    // Verify annotations.ttl was created
+    let annotations_path = ctx.config_dir.join("objects").join(&uuid).join("annotations.ttl");
+    assert!(annotations_path.exists());
+    let annotations = std::fs::read_to_string(&annotations_path).unwrap();
+    assert!(annotations.contains("knowledge"));
+}
+
+#[test]
+fn test_index_with_explicit_vault_path() {
+    let ctx = setup();
+
+    // Init vault
+    Command::new(&ctx.bin_path)
+        .arg("init")
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // Create page
+    let output = Command::new(&ctx.bin_path)
+        .args(&["page", "create", "Test Page"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // Run index from different directory with explicit --vault path
+    let output = Command::new(&ctx.bin_path)
+        .args(&["index", "--vault", ctx.tmp_dir.path().to_str().unwrap()])
+        .current_dir("/tmp")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let output_str = String::from_utf8(output.stdout).unwrap();
+    assert!(output_str.contains("Indexed 1 pages"));
+}
+
+#[test]
+fn test_index_git_style_discovery_from_subdirectory() {
+    let ctx = setup();
+
+    // Init vault
+    Command::new(&ctx.bin_path)
+        .arg("init")
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // Create page
+    let output = Command::new(&ctx.bin_path)
+        .args(&["page", "create", "Test Page"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // Create subdirectory
+    let subdir = ctx.tmp_dir.path().join("subdir");
+    std::fs::create_dir_all(&subdir).unwrap();
+
+    // Run index from subdirectory (should discover vault like Git)
+    let output = Command::new(&ctx.bin_path)
+        .arg("index")
+        .current_dir(&subdir)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let output_str = String::from_utf8(output.stdout).unwrap();
+    assert!(output_str.contains("Indexed 1 pages"));
+}
+
+#[test]
+fn test_index_json_output() {
+    let ctx = setup();
+
+    // Init vault
+    Command::new(&ctx.bin_path)
+        .arg("init")
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // Create page
+    Command::new(&ctx.bin_path)
+        .args(&["page", "create", "Test Page"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // Run index with --json
+    let output = Command::new(&ctx.bin_path)
+        .args(&["index", "--json"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let output_str = String::from_utf8(output.stdout).unwrap();
+    
+    // Parse JSON
+    let json: serde_json::Value = serde_json::from_str(&output_str).unwrap();
+    assert_eq!(json["pages_processed"], 1);
+    assert!(json.get("links_found").is_some());
+    assert!(json.get("annotations_found").is_some());
+    assert_eq!(json["errors"], 0);
+}
+
+// Helper to extract UUID from command output
+fn extract_uuid(stdout: &[u8]) -> String {
+    String::from_utf8(stdout.to_vec())
+        .unwrap()
+        .trim()
+        .split(": ")
+        .nth(1)
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
