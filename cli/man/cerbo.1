@@ -167,6 +167,70 @@ Options:
 .El
 .RE
 
+.SS "index"
+.PP
+Rebuild metadata (backrefs\.ttl, annotations\.ttl) from page content\. Used for recovery after manual edits, bulk imports, or vault migration\.
+.PP
+Usage: `\f[CR]cerbo index [OPTIONS]\fP`
+.PP
+The command discovers the vault using Git\-style directory traversal: it walks up from the current directory looking for a `\f[CR]\.cerbo/\fP` directory\. You can also specify an explicit vault path with `\f[CR]\-\-vault\fP`\.
+.PP
+Options:
+.RS
+.Bl
+.IP \(bu 4
+`\f[CR]\-\-vault <PATH>\fP` \- Explicit vault path (overrides Git\-style discovery)
+.El
+.Bl
+.IP \(bu 4
+`\f[CR]\-\-page <UUID>\fP` \- Index only a single page (incremental mode)
+.El
+.Bl
+.IP \(bu 4
+`\f[CR]\-\-json\fP` \- Output result as JSON with pages_processed, links_found, annotations_found, errors
+.El
+.RE
+.PP
+\fBBehavior:\fP
+.RS
+.Bl
+.IP \(bu 4
+Without `\f[CR]\-\-page\fP`: Performs full vault rebuild (two\-pass: clear all backrefs, then rebuild)
+.El
+.Bl
+.IP \(bu 4
+With `\f[CR]\-\-page <UUID>\fP`: Incremental indexing of a single page (faster, preserves other pages\' metadata)
+.El
+.Bl
+.IP \(bu 4
+Idempotent: Running twice produces identical results
+.El
+.Bl
+.IP \(bu 4
+Handles corrupted/missing files gracefully (logs errors, continues processing)
+.El
+.RE
+.PP
+\fBWhen to use:\fP
+.RS
+.Bl
+.IP \(bu 4
+After manually editing `\f[CR]page\.md\fP` files outside of Cerbo
+.El
+.Bl
+.IP \(bu 4
+After bulk imports or vault migrations
+.El
+.Bl
+.IP \(bu 4
+If backlinks or annotations appear stale or missing
+.El
+.Bl
+.IP \(bu 4
+To verify metadata integrity after crashes or interruptions
+.El
+.RE
+
 .SH "OPTIONS"
 .PP
 Global options available for all commands:

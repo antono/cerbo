@@ -95,6 +95,31 @@ Arguments:
 Options:
 - `--json` - Output result as JSON with uuid and url fields
 
+## index
+
+Rebuild metadata (backrefs.ttl, annotations.ttl) from page content. Used for recovery after manual edits, bulk imports, or vault migration.
+
+Usage: `cerbo index [OPTIONS]`
+
+The command discovers the vault using Git-style directory traversal: it walks up from the current directory looking for a `.cerbo/` directory. You can also specify an explicit vault path with `--vault`.
+
+Options:
+- `--vault <PATH>` - Explicit vault path (overrides Git-style discovery)
+- `--page <UUID>` - Index only a single page (incremental mode)
+- `--json` - Output result as JSON with pages_processed, links_found, annotations_found, errors
+
+**Behavior:**
+- Without `--page`: Performs full vault rebuild (two-pass: clear all backrefs, then rebuild)
+- With `--page <UUID>`: Incremental indexing of a single page (faster, preserves other pages' metadata)
+- Idempotent: Running twice produces identical results
+- Handles corrupted/missing files gracefully (logs errors, continues processing)
+
+**When to use:**
+- After manually editing `page.md` files outside of Cerbo
+- After bulk imports or vault migrations
+- If backlinks or annotations appear stale or missing
+- To verify metadata integrity after crashes or interruptions
+
 # OPTIONS
 
 Global options available for all commands:
@@ -173,6 +198,26 @@ cerbo import https://example.com/article
 Show configuration info:
 ```
 cerbo info
+```
+
+Rebuild metadata for all pages in current vault:
+```
+cerbo index
+```
+
+Rebuild metadata for a single page (incremental):
+```
+cerbo index --page 550e8400-e29b-41d4-a716-446655440000
+```
+
+Index a vault from outside its directory:
+```
+cerbo index --vault /path/to/my/vault
+```
+
+Get indexing statistics as JSON:
+```
+cerbo index --json
 ```
 
 # SEE ALSO
