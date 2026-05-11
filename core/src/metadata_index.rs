@@ -27,6 +27,9 @@ pub fn index_vault(vault_ctx: &VaultContext) -> Result<IndexStats, String> {
     
     // Phase 1: Get all pages in this vault
     let page_uuids = crate::vault::list_pages_in_vault(&vault_ctx.global, &vault_ctx.vault_path)?;
+    let total_pages = page_uuids.len();
+    
+    eprintln!("Indexing {} pages...", total_pages);
     
     // Phase 2: Clear all backrefs for pages in this vault
     for uuid in &page_uuids {
@@ -39,9 +42,15 @@ pub fn index_vault(vault_ctx: &VaultContext) -> Result<IndexStats, String> {
     }
     
     // Phase 3: Rebuild all metadata
-    for uuid in page_uuids {
-        let page_stats = index_page(vault_ctx, &uuid)?;
+    for (idx, uuid) in page_uuids.iter().enumerate() {
+        let page_stats = index_page(vault_ctx, uuid)?;
         stats.merge(page_stats);
+        
+        // Progress reporting every 10 pages or at milestones
+        let processed = idx + 1;
+        if processed % 10 == 0 || processed == total_pages || processed == 1 {
+            eprintln!("Processing {}/{} pages...", processed, total_pages);
+        }
     }
     
     Ok(stats)
@@ -72,6 +81,14 @@ pub fn index_page(vault_ctx: &VaultContext, page_uuid: &str) -> Result<IndexStat
     
     // Clear old backrefs for this source page, then re-add
     for target_uuid in &links {
+        // Check if target page exists
+        let target_path = vault_ctx.object_path(target_uuid);
+        if !target_path.exists() {
+            eprintln!("Warning: Broken link in page {}: target {} does not exist", 
+                     page_uuid, target_uuid);
+            continue;
+        }
+        
         // Remove old backref (if exists)
         let _ = crate::links::backrefs_remove_vault(vault_ctx, target_uuid, page_uuid);
         // Add new backref
