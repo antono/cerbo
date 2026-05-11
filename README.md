@@ -115,9 +115,101 @@ The migration tool will:
 - Generate new UUIDs for each page
 - Create `meta.ttl` with object metadata
 
-After migration, regenerate backlinks with:
+After migration, regenerate backlinks and annotations with:
 ```bash
-cerbo backlinks <uuid>
+cerbo index
+```
+
+## CLI Usage
+
+### Initialize a Vault
+
+Create a new vault in the current directory:
+
+```bash
+cerbo init
+```
+
+This creates a `.cerbo/` directory with the necessary structure and bundles standard ontologies (Schema.org, FOAF).
+
+### Manage Pages
+
+```bash
+# Create a new page
+cerbo page create "My First Page"
+# Output: Created page: 550e8400-e29b-41d4-a716-446655440000
+
+# List all pages
+cerbo page list
+
+# Read a page
+cerbo page read 550e8400-e29b-41d4-a716-446655440000
+
+# Write content to a page
+cerbo page write 550e8400-e29b-41d4-a716-446655440000 "New content"
+
+# Delete a page
+cerbo page delete 550e8400-e29b-41d4-a716-446655440000
+```
+
+### Rebuild Metadata
+
+The `cerbo index` command rebuilds metadata (backlinks and annotations) from page content. This is useful after:
+- Manually editing `page.md` files outside of Cerbo
+- Bulk imports or vault migrations
+- If backlinks or annotations appear stale or missing
+- To verify metadata integrity after crashes or interruptions
+
+```bash
+# Rebuild all metadata for the current vault
+cerbo index
+
+# Rebuild metadata for a single page (incremental)
+cerbo index --page 550e8400-e29b-41d4-a716-446655440000
+
+# Index a vault from outside its directory
+cerbo index --vault /path/to/my/vault
+
+# Get indexing statistics as JSON
+cerbo index --json
+```
+
+The index command uses Git-style vault discovery: it walks up from the current directory looking for a `.cerbo/` directory. You can run it from any subdirectory within a vault.
+
+### Import Content
+
+```bash
+# Import a webpage as a source object
+cerbo import https://example.com/article
+
+# Import an ontology
+cerbo import-ontology https://schema.org/version/latest/schemaorg-current-https.jsonld
+```
+
+### Vault Management
+
+```bash
+# List all registered vaults
+cerbo vault list
+
+# Add a vault
+cerbo vault add "Work Notes" /path/to/work/vault
+
+# Remove a vault
+cerbo vault remove <vault-id>
+
+# Set active vault
+cerbo vault active <vault-id>
+```
+
+### Utilities
+
+```bash
+# Resolve UUID to filesystem path
+cerbo resolve 550e8400-e29b-41d4-a716-446655440000
+
+# Show configuration
+cerbo info
 ```
 
 ## License

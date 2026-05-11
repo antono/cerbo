@@ -47,7 +47,7 @@
 
 ## 7. Documentation
 
-- [ ] 7.1 Update CLI help text for `cerbo index` command
-- [ ] 7.2 Add man page entry for `cerbo index` (if man pages exist)
+- [x] 7.1 Update CLI help text for `cerbo index` command
+- [x] 7.2 Add man page entry for `cerbo index` (if man pages exist)
 - [ ] 7.3 Add usage examples to README or docs (all scopes: all/vault/page)
 - [ ] 7.4 Document when to use `cerbo index` (recovery workflow after manual edits/imports)
