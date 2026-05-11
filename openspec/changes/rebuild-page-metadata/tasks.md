@@ -36,14 +36,14 @@
 
 ## 6. Testing
 
-- [ ] 6.1 Add unit test: `index_page()` with links updates target backrefs
-- [ ] 6.2 Add unit test: `index_page()` with annotations writes annotations.ttl
-- [ ] 6.3 Add unit test: `index_all_pages()` is idempotent (run twice, same result)
-- [ ] 6.4 Add integration test: `cerbo index` with no args indexes all pages
-- [ ] 6.5 Add integration test: `cerbo index --vault <uuid>` scopes to vault
+- [x] 6.1 Add unit test: `index_page()` with links updates target backrefs
+- [x] 6.2 Add unit test: `index_page()` with annotations writes annotations.ttl
+- [x] 6.3 Add unit test: `index_vault()` is idempotent (run twice, same result)
+- [x] 6.4 Add unit test: `index_page()` handles corrupted/missing files gracefully
+- [ ] 6.5 Add integration test: `cerbo index` with no args indexes all pages
 - [ ] 6.6 Add integration test: `cerbo index --page <uuid>` indexes single page
-- [ ] 6.7 Add integration test: `cerbo index --vault <uuid> --page <uuid>` exits with error
-- [ ] 6.8 Add integration test: corrupted page.md logs error but continues
+- [ ] 6.7 Add integration test: `cerbo index --vault <path>` uses explicit path
+- [ ] 6.8 Add integration test: Git-style vault discovery from subdirectory
 
 ## 7. Documentation
 
