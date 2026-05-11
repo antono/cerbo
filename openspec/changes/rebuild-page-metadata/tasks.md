@@ -13,27 +13,26 @@
 
 ## 3. Indexing Logic
 
-- [x] 3.1 Create `core/src/index.rs` module for indexing operations
-- [ ] 3.2 Implement `index_all_pages(ctx)` - two-pass algorithm (clear all, rebuild all)
-- [ ] 3.3 Implement `index_vault(ctx, vault_uuid)` - two-pass within vault scope
-- [ ] 3.4 Implement `index_page(ctx, page_uuid)` - incremental single-page indexing
-- [ ] 3.5 Add error handling for corrupted/missing page.md files (log and continue)
-- [ ] 3.6 Add warning logging for broken link references (nonexistent UUIDs)
+- [x] 3.1 Create `core/src/metadata_index.rs` module for indexing operations
+- [x] 3.2 Implement `index_vault(vault_ctx)` - two-pass within vault scope
+- [x] 3.3 Implement `index_page(vault_ctx, page_uuid)` - incremental single-page indexing
+- [x] 3.4 Add error handling for corrupted/missing page.md files (log and continue)
+- [ ] 3.5 Add warning logging for broken link references (nonexistent UUIDs)
 
 ## 4. Progress Feedback
 
-- [ ] 4.1 Create progress tracking struct (total pages, processed count, errors)
+- [x] 4.1 Create progress tracking struct (IndexStats: pages_processed, links_found, annotations_found, errors)
 - [ ] 4.2 Add periodic progress output to stderr ("Processing N/M pages...")
-- [ ] 4.3 Add summary statistics on completion (stdout: pages processed, links found, annotations extracted, errors)
-- [ ] 4.4 Ensure error details are logged to stderr (file path, error message)
+- [x] 4.3 Add summary statistics on completion (stdout: pages processed, links found, annotations extracted, errors)
+- [x] 4.4 Ensure error details are logged to stderr (file path, error message)
 
 ## 5. CLI Command Implementation
 
-- [ ] 5.1 Add `Index` variant to `Commands` enum in `cli/src/main.rs`
-- [ ] 5.2 Define CLI args struct with optional `--vault <uuid>` and `--page <uuid>` flags
-- [ ] 5.3 Add mutual exclusivity validation (error if both --vault and --page provided)
-- [ ] 5.4 Wire up `cerbo index` command to call appropriate core indexing function
-- [ ] 5.5 Handle exit codes (0 for success, non-zero if any errors encountered)
+- [x] 5.1 Add `Index` variant to `Commands` enum in `cli/src/main.rs`
+- [x] 5.2 Define CLI args with `--vault <path>` and `--page <uuid>` flags
+- [x] 5.3 Add vault discovery logic (Git-style from CWD or explicit --vault path)
+- [x] 5.4 Wire up `cerbo index` command to call appropriate core indexing function
+- [x] 5.5 Handle JSON output format and error reporting
 
 ## 6. Testing
 
