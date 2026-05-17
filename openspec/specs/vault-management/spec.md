@@ -1,31 +1,32 @@
 # Vault Management
 
 ## Purpose
-Manage vault registration, storage, and retrieval.
+Manage vault initialization and registration using `cerbo init` command.
 
 ## Requirements
 
-### Requirement: Add vault
-The system SHALL provide a simplified workflow for registering a new vault. Triggering the "Add Vault" action (via UI button or `Ctrl+O` / `Cmd+O` hotkey) SHALL immediately trigger a native system directory picker. Upon selection, the system SHALL automatically register the folder as a vault, deriving the initial vault name from the folder's name. A stable UUID SHALL be assigned to the vault at registration time.
+### Requirement: Initialize vault
+The system SHALL provide `cerbo init` command that initializes a new vault in the current directory. The command SHALL create `.cerbo/` directory with `objects/`, `index.json`, and `ontology-map.json`. The command SHALL create bundled ontology objects (Schema.org, FOAF).
 
-#### Scenario: Add a vault via native picker
-- **WHEN** the user triggers the "Add Vault" action
-- **THEN** the native system directory picker is displayed
-- **WHEN** the user selects a valid folder
-- **THEN** the system registers it as a vault with a generated UUID
-- **AND** the system SHALL use the folder's name as the vault name by default
-- **AND** the vault appears in the vault list
+#### Scenario: Initialize new vault
+- **WHEN** user runs `cerbo init` in an empty directory
+- **THEN** `.cerbo/` directory is created
+- **THEN** `.cerbo/objects/` directory is created
+- **THEN** `.cerbo/index.json` is created with empty title_to_uuid and uuid_to_path
+- **THEN** `.cerbo/ontology-map.json` is created
+- **THEN** Schema.org ontology object is created in `.cerbo/objects/<uuid>/`
+- **THEN** FOAF ontology object is created in `.cerbo/objects/<uuid>/`
 
-#### Scenario: Add a duplicate vault path
-- **WHEN** the user provides a path already registered as a vault
-- **THEN** the system SHALL reject the operation with a descriptive error
+#### Scenario: Re-run init on existing vault
+- **WHEN** user runs `cerbo init` on a directory with existing `.cerbo/`
+- **THEN** the command SHALL succeed without error
+- **THEN** existing objects SHALL NOT be deleted
+- **THEN** existing `ontology-map.json` SHALL NOT be overwritten
 
-### Requirement: Relocate vault
-The system SHALL allow the user to update the path of a registered vault without losing its ID or cache association.
+### Requirement: Vault is directory with .cerbo/
+The system SHALL treat any directory containing `.cerbo/` as a valid vault. The vault root is the parent directory of `.cerbo/`.
 
-#### Scenario: Update vault path after moving folder
-- **WHEN** the user updates the path of an existing vault to a new valid location
-- **THEN** the vault ID remains unchanged
-- **THEN** the existing cache at `$XDG_CACHE_HOME/cerbo/<vault-id>/` remains valid
-- **THEN** the new path is persisted in `vaults.json`
-
+#### Scenario: Detect vault
+- **WHEN** the system scans for vaults
+- **THEN** it looks for directories containing `.cerbo/` subdirectory
+- **THEN** the vault name is derived from the directory name (or from `meta.ttl` if available)
