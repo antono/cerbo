@@ -568,3 +568,162 @@ fn extract_uuid(stdout: &[u8]) -> String {
         .trim()
         .to_string()
 }
+
+/// Run the cerbo binary with isolated XDG dirs so tests don't touch the real user config.
+fn cerbo_cmd(bin: &std::path::Path, xdg_home: &std::path::Path) -> Command {
+    let mut cmd = Command::new(bin);
+    cmd.env("XDG_CONFIG_HOME", xdg_home.join("config"))
+        .env("XDG_CACHE_HOME", xdg_home.join("cache"));
+    cmd
+}
+
+// ── CWD vault auto-discovery tests ────────────────────────────────────────────
+
+#[test]
+fn test_cwd_vault_registered_auto_discovery() {
+    let ctx = setup();
+    let xdg = TempDir::new().unwrap();
+
+    // Init vault
+    cerbo_cmd(&ctx.bin_path, xdg.path())
+        .arg("init")
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // Register the vault
+    let add_out = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["vault", "add", "TestVault", ctx.tmp_dir.path().to_str().unwrap()])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    assert!(add_out.status.success(), "vault add failed: {}", String::from_utf8_lossy(&add_out.stderr));
+
+    // Create a page
+    let create_out = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["page", "create", "Discovery Page"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    assert!(create_out.status.success());
+
+    // List pages WITHOUT --vault — should auto-discover from CWD
+    let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["page", "list", "--json"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    assert!(list_out.status.success(), "page list failed: {}", String::from_utf8_lossy(&list_out.stderr));
+    let pages: serde_json::Value = serde_json::from_slice(&list_out.stdout).unwrap();
+    let titles: Vec<&str> = pages.as_array().unwrap()
+        .iter()
+        .filter_map(|p| p["title"].as_str())
+        .collect();
+    assert!(titles.contains(&"Discovery Page"), "expected page not found in: {:?}", titles);
+}
+
+#[test]
+fn test_explicit_vault_flag_overrides_cwd() {
+    let ctx = setup();
+    let xdg = TempDir::new().unwrap();
+
+    // Create two vaults
+    let vault_a = TempDir::new().unwrap();
+    let vault_b = TempDir::new().unwrap();
+
+    for v in &[vault_a.path(), vault_b.path()] {
+        cerbo_cmd(&ctx.bin_path, xdg.path())
+            .arg("init")
+            .current_dir(v)
+            .output()
+            .unwrap();
+    }
+
+    // Register vault-A
+    let add_a = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["vault", "add", "VaultA", vault_a.path().to_str().unwrap()])
+        .current_dir(vault_a.path())
+        .output()
+        .unwrap();
+    assert!(add_a.status.success());
+    let vault_a_id = String::from_utf8(add_a.stdout).unwrap()
+        .split(':').next().unwrap_or("").trim().to_string();
+    assert!(!vault_a_id.is_empty(), "could not extract vault-A id");
+
+    // Register vault-B
+    cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["vault", "add", "VaultB", vault_b.path().to_str().unwrap()])
+        .current_dir(vault_b.path())
+        .output()
+        .unwrap();
+
+    // Create a page in vault-A (from vault-A dir)
+    let create_out = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["page", "create", "VaultA Page", "--json"])
+        .current_dir(vault_a.path())
+        .output()
+        .unwrap();
+    assert!(create_out.status.success());
+
+    // List pages with --vault vault-A-id from vault-B dir → should show vault-A's page
+    let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["page", "list", "--vault", &vault_a_id, "--json"])
+        .current_dir(vault_b.path())
+        .output()
+        .unwrap();
+    assert!(list_out.status.success(), "page list --vault failed: {}", String::from_utf8_lossy(&list_out.stderr));
+    let pages: serde_json::Value = serde_json::from_slice(&list_out.stdout).unwrap();
+    let titles: Vec<&str> = pages.as_array().unwrap()
+        .iter()
+        .filter_map(|p| p["title"].as_str())
+        .collect();
+    assert!(titles.contains(&"VaultA Page"), "expected VaultA page in: {:?}", titles);
+}
+
+#[test]
+fn test_unregistered_cwd_vault_warns_and_falls_through() {
+    let ctx = setup();
+    let xdg = TempDir::new().unwrap();
+
+    // Init vault but do NOT register it
+    cerbo_cmd(&ctx.bin_path, xdg.path())
+        .arg("init")
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // page list should succeed (uses cwd_vault_root fallback) and warn on stderr
+    let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["page", "list", "--json"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    assert!(list_out.status.success(), "page list failed: {}", String::from_utf8_lossy(&list_out.stderr));
+    let stderr = String::from_utf8_lossy(&list_out.stderr);
+    assert!(
+        stderr.contains("not registered"),
+        "expected 'not registered' warning in stderr, got: {}", stderr
+    );
+}
+
+#[test]
+fn test_no_vault_no_active_returns_error() {
+    let ctx = setup();
+    let xdg = TempDir::new().unwrap();
+
+    // Use a plain dir with NO .cerbo/ and an empty global config
+    let plain_dir = TempDir::new().unwrap();
+
+    let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["page", "list"])
+        .current_dir(plain_dir.path())
+        .output()
+        .unwrap();
+    assert!(!list_out.status.success(), "expected non-zero exit when no vault available");
+    let stderr = String::from_utf8_lossy(&list_out.stderr);
+    let stdout = String::from_utf8_lossy(&list_out.stdout);
+    assert!(
+        stderr.contains("vault") || stdout.contains("vault"),
+        "expected vault-related error, got stderr={} stdout={}", stderr, stdout
+    );
+}

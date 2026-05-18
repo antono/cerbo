@@ -321,6 +321,19 @@ pub fn find_vault_root(start: &Path) -> Option<PathBuf> {
     }
 }
 
+// ── CWD vault resolution ──────────────────────────────────────────────────────
+
+/// Return the vault ID whose registered path canonicalizes to the same real
+/// path as `root`.  Returns `None` when no registered vault matches.
+pub fn vault_id_from_path(ctx: &CerboContext, root: &Path) -> Option<String> {
+    let canon_root = std::fs::canonicalize(root).ok()?;
+    let reg = load_vaults(ctx).ok()?;
+    reg.vaults.into_iter().find_map(|v| {
+        let canon_v = std::fs::canonicalize(&v.path).ok()?;
+        if canon_v == canon_root { Some(v.id) } else { None }
+    })
+}
+
 // ── Virtual path validation ───────────────────────────────────────────────────
 
 /// Error returned when a cerbo:virtualPath value is malformed.
@@ -429,5 +442,56 @@ mod path_tests {
     fn test_find_vault_root_not_found() {
         let temp = TempDir::new().unwrap();
         assert!(find_vault_root(temp.path()).is_none());
+    }
+
+    fn make_ctx_with_vault(config_dir: &std::path::Path, vault_path: &std::path::Path) -> CerboContext {
+        use crate::config::Config;
+        let ctx = CerboContext {
+            config_dir: config_dir.to_path_buf(),
+            cache_dir: config_dir.to_path_buf(),
+        };
+        let cfg = Config {
+            vaults: vec![crate::vault::Vault {
+                id: "test-id".into(),
+                name: "Test".into(),
+                path: vault_path.to_path_buf(),
+            }],
+        };
+        let toml = toml::to_string_pretty(&cfg).unwrap();
+        std::fs::create_dir_all(config_dir).unwrap();
+        std::fs::write(config_dir.join("vaults.toml"), toml).unwrap();
+        ctx
+    }
+
+    #[test]
+    fn vault_id_from_path_match() {
+        let tmp = TempDir::new().unwrap();
+        let vault_dir = tmp.path().join("vault");
+        std::fs::create_dir_all(&vault_dir).unwrap();
+        let ctx = make_ctx_with_vault(&tmp.path().join("cfg"), &vault_dir);
+        assert_eq!(vault_id_from_path(&ctx, &vault_dir), Some("test-id".into()));
+    }
+
+    #[test]
+    fn vault_id_from_path_no_match() {
+        let tmp = TempDir::new().unwrap();
+        let vault_dir = tmp.path().join("vault");
+        std::fs::create_dir_all(&vault_dir).unwrap();
+        let ctx = make_ctx_with_vault(&tmp.path().join("cfg"), &vault_dir);
+        let other = tmp.path().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        assert_eq!(vault_id_from_path(&ctx, &other), None);
+    }
+
+    #[test]
+    fn vault_id_from_path_via_symlink() {
+        let tmp = TempDir::new().unwrap();
+        let vault_dir = tmp.path().join("real_vault");
+        std::fs::create_dir_all(&vault_dir).unwrap();
+        let link = tmp.path().join("link_vault");
+        std::os::unix::fs::symlink(&vault_dir, &link).unwrap();
+        let ctx = make_ctx_with_vault(&tmp.path().join("cfg"), &vault_dir);
+        // accessing through symlink should still resolve to the same vault
+        assert_eq!(vault_id_from_path(&ctx, &link), Some("test-id".into()));
     }
 }

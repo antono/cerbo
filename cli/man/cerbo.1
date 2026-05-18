@@ -15,6 +15,36 @@ Cerbo is a local\-first markdown wiki tool designed for both human and AI agent 
 .PP
 The tool supports managing multiple vaults (workspaces), creating and editing pages with markdown content, importing web content as source objects, and working with ontologies (Schema\.org, FOAF) for semantic markup using the HackMD annotation syntax `\f[CR][Text]{prefix:Type}\fP`\.
 
+.SH "VAULT AUTO-DISCOVERY"
+.PP
+All cerbo commands automatically detect the active vault from the current working directory, without requiring a `\f[CR]\-\-vault\fP` flag\. At startup, cerbo walks up from the current directory looking for an ancestor directory containing `\f[CR]\.cerbo/\fP`\. If found, that vault is used for the invocation\.
+.PP
+Vault resolution priority (highest to lowest):
+.RS
+.Bl
+.IP "1." 4
+Explicit `\f[CR]\-\-vault\fP` flag (where available)
+.El
+.Bl
+.IP "2." 4
+Vault discovered from current working directory (walk\-up)
+.El
+.Bl
+.IP "3." 4
+Active vault set via `\f[CR]cerbo vault active <ID>\fP`
+.El
+.Bl
+.IP "4." 4
+Single registered vault fallback (when only one vault is registered)
+.El
+.Bl
+.IP "5." 4
+Error: not inside a cerbo vault
+.El
+.RE
+.PP
+If the current directory is inside a vault that has not been registered with `\f[CR]cerbo vault add\fP`, a warning is printed to stderr and the active vault from state is used as a fallback\.
+
 .SH "COMMANDS"
 
 .SS "init"
@@ -67,7 +97,7 @@ Usage: `\f[CR]cerbo page <SUBCOMMAND>\fP`
 .RS
 .Bl
 .IP \(bu 4
-`\f[CR]cerbo page list [\-\-json]\fP` \- List all pages in the current vault
+`\f[CR]cerbo page list [\-\-json] [\-\-vault <ID>]\fP` \- List all pages in the current vault (auto\-discovered from CWD, or override with \-\-vault)
 .El
 .Bl
 .IP \(bu 4

@@ -19,27 +19,30 @@ fn print_json_error(message: &str) {
 // Print pages in the template specified by the user:
 // Pages in "Vault Name" (<vault_uuid>):
 // <uuid>: Page Title
-fn print_pages_template(ctx: &CerboContext, pages: &[cerbo_core::page::PageMeta]) -> Result<(), String> {
+fn print_pages_template(
+    global_ctx: &CerboContext,
+    eff_ctx: &CerboContext,
+    pages: &[cerbo_core::page::PageMeta],
+) -> Result<(), String> {
     use cerbo_core::vault;
-    use cerbo_core::state;
 
-    // Determine active vault id from state, or fall back to single registered vault
-    let st = state::load_state(ctx)?;
-    let reg = vault::vault_list(ctx)?;
+    // Identify which vault we're displaying by matching eff_ctx.config_dir against registry.
+    let reg = vault::vault_list(global_ctx)?;
+    let vault_path = eff_ctx.config_dir.parent().unwrap_or(&eff_ctx.config_dir);
+    let matched = reg.vaults.iter().find(|v| {
+        std::fs::canonicalize(&v.path).ok()
+            == std::fs::canonicalize(vault_path).ok()
+    });
 
-    let (vault_name, vault_id) = if let Some(active) = st.active_vault_id.as_deref() {
-        // Find matching vault
-        if let Some(v) = reg.vaults.iter().find(|v| v.id == active) {
-            (v.name.clone(), v.id.clone())
-        } else if reg.vaults.len() == 1 {
-            (reg.vaults[0].name.clone(), reg.vaults[0].id.clone())
-        } else {
-            ("(no active vault)".to_string(), "<none>".to_string())
-        }
-    } else if reg.vaults.len() == 1 {
-        (reg.vaults[0].name.clone(), reg.vaults[0].id.clone())
+    let (vault_name, vault_id) = if let Some(v) = matched {
+        (v.name.clone(), v.id.clone())
     } else {
-        ("(no active vault)".to_string(), "<none>".to_string())
+        // Unregistered vault: use directory name as display name
+        let name = vault_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "(unknown)".to_string());
+        (name, "<unregistered>".to_string())
     };
 
     println!("Pages in \"{}\" ({}):", vault_name, vault_id);
@@ -232,31 +235,13 @@ fn ensure_gitignore(vault_root: &std::path::Path) -> Result<(), String> {
         .map_err(|e| format!("Failed to write .gitignore: {}", e))
 }
 
+/// Always returns the XDG global context used for vault registry operations.
 fn get_context() -> Result<CerboContext, String> {
-    let current_dir = std::env::current_dir()
-        .map_err(|e| format!("Failed to get current directory: {}", e))?;
-
-    // Walk up from CWD (like Git) to find the nearest .cerbo/ directory.
-    let vault_root = cerbo_core::vault::find_vault_root(&current_dir);
-
-    let (config_dir, cache_dir, is_local) = if let Some(root) = vault_root {
-        (root.join(".cerbo"), root.join(".cache"), true)
-    } else {
-        // Fall back to XDG directories (global vault registry mode)
-        let core = CoreContext::new()?;
-        (core.config_dir.clone(), core.cache_dir.clone(), false)
-    };
-
+    let core = CoreContext::new()?;
     let ctx = CerboContext {
-        config_dir: config_dir.clone(),
-        cache_dir: cache_dir.clone(),
+        config_dir: core.config_dir.clone(),
+        cache_dir: core.cache_dir.clone(),
     };
-
-    if is_local {
-        // For local vaults, skip migration and config creation
-        return Ok(ctx);
-    }
-
     let _ = cerbo_core::migration::migrate_if_needed(&ctx)?;
     if !ctx.config_dir.join("vaults.toml").exists() {
         cerbo_core::config::save_config(&ctx, &cerbo_core::config::Config::default())?;
@@ -273,16 +258,83 @@ fn get_context() -> Result<CerboContext, String> {
     let _ = cerbo_core::config::load_config(&ctx)?;
     let _ = cerbo_core::ui_settings::load_ui_settings(&ctx)?;
     let _ = cerbo_core::state::load_state(&ctx)?;
-    Ok(CerboContext {
-        config_dir: ctx.config_dir,
-        cache_dir: ctx.cache_dir,
-    })
+    Ok(ctx)
+}
+
+/// Resolve which vault context to use for content operations.
+///
+/// Priority (highest to lowest):
+///   1. Explicit `--vault <id>` flag
+///   2. CWD-discovered registered vault
+///   3. CWD vault root (unregistered — use directly)
+///   4. Active vault from persisted state
+///   5. Single registered vault fallback
+///   6. Error
+fn resolve_vault_ctx(
+    global_ctx: &CerboContext,
+    explicit_vault_id: Option<&str>,
+    cwd_vault_id: Option<&str>,
+    cwd_vault_root: Option<&std::path::Path>,
+) -> Result<CerboContext, String> {
+    use cerbo_core::vault;
+    use cerbo_core::state;
+
+    let make_ctx = |path: std::path::PathBuf| CerboContext {
+        config_dir: path.join(".cerbo"),
+        cache_dir: global_ctx.cache_dir.clone(),
+    };
+
+    // 1. Explicit --vault flag
+    if let Some(id) = explicit_vault_id {
+        let path = vault::get_vault_path(global_ctx, id)
+            .ok_or_else(|| format!("vault not found: {}", id))?;
+        return Ok(make_ctx(path));
+    }
+    // 2. CWD-discovered registered vault
+    if let Some(id) = cwd_vault_id {
+        let path = vault::get_vault_path(global_ctx, id)
+            .ok_or_else(|| format!("vault not found: {}", id))?;
+        return Ok(make_ctx(path));
+    }
+    // 3. CWD vault root even if not registered
+    if let Some(root) = cwd_vault_root {
+        return Ok(make_ctx(root.to_path_buf()));
+    }
+    // 4. Active vault from state
+    let st = state::load_state(global_ctx)?;
+    if let Some(id) = st.active_vault_id {
+        let path = vault::get_vault_path(global_ctx, &id)
+            .ok_or_else(|| format!("vault not found: {}", id))?;
+        return Ok(make_ctx(path));
+    }
+    // 5. Single registered vault
+    let reg = vault::vault_list(global_ctx)?;
+    if reg.vaults.len() == 1 {
+        return Ok(make_ctx(reg.vaults[0].path.clone()));
+    }
+    Err("not a cerbo vault (or any parent up to mount point); use --vault <id> or run from inside a vault".to_string())
 }
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let cli = Cli::parse();
     let ctx = get_context()?;
+
+    // CWD vault discovery — runs once, results propagated to all commands.
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let cwd_vault_root = cerbo_core::vault::find_vault_root(&cwd);
+    let cwd_vault_id = cwd_vault_root
+        .as_deref()
+        .and_then(|root| cerbo_core::vault::vault_id_from_path(&ctx, root));
+    if let (Some(ref root), None) = (cwd_vault_root.as_ref(), cwd_vault_id.as_ref()) {
+        if root.join(".cerbo").is_dir() {
+            eprintln!(
+                "warning: vault at {} is not registered; run 'cerbo vault add'",
+                root.display()
+            );
+        }
+    }
 
     match cli.command {
         Commands::Init { json } => {
@@ -423,19 +475,13 @@ async fn main() -> Result<(), String> {
         },
         Commands::Page { action } => match action {
             PageCommands::List { json, vault } => {
-                // Determine pages to list: if --vault provided, list pages from that
-                // vault; otherwise list from the current active vault (or single-vault fallback).
-                let pages = if let Some(v) = vault.clone() {
-                    let reg = cerbo_core::vault::vault_list(&ctx)?;
-                    let target = reg.vaults.iter().find(|x| x.id == v).ok_or_else(|| format!("vault not found: {}", v))?;
-                    let tmp_ctx = cerbo_core::CerboContext {
-                        config_dir: target.path.join(".cerbo"),
-                        cache_dir: ctx.cache_dir.clone(),
-                    };
-                    cerbo_core::page::page_list(&tmp_ctx)?
-                } else {
-                    cerbo_core::page::page_list(&ctx)?
-                };
+                let eff_ctx = resolve_vault_ctx(
+                    &ctx,
+                    vault.as_deref(),
+                    cwd_vault_id.as_deref(),
+                    cwd_vault_root.as_deref(),
+                )?;
+                let pages = cerbo_core::page::page_list(&eff_ctx)?;
 
                 if json {
                     let pages_json: Vec<PageJson> = pages.into_iter().map(|p| PageJson {
@@ -444,23 +490,17 @@ async fn main() -> Result<(), String> {
                     }).collect();
                     print_json(&pages_json);
                 } else {
-                    // Print compact human-readable template. If we used an explicit
-                    // --vault, print the header using that vault's name; otherwise
-                    // rely on print_pages_template to select the active vault.
-                    if let Some(v) = vault {
-                        let reg = cerbo_core::vault::vault_list(&ctx)?;
-                        let target = reg.vaults.iter().find(|x| x.id == v).ok_or_else(|| format!("vault not found: {}", v))?;
-                        println!("Pages in \"{}\" ({}):", target.name, target.id);
-                        for p in &pages {
-                            println!("{}: {}", p.uuid, p.title);
-                        }
-                    } else {
-                        print_pages_template(&ctx, &pages)?;
-                    }
+                    print_pages_template(&ctx, &eff_ctx, &pages)?;
                 }
             }
             PageCommands::Create { title, json } => {
-                let uuid = cerbo_core::object::object_create(&ctx, None, cerbo_core::object::ObjectType::Product, title)?;
+                let eff_ctx = resolve_vault_ctx(
+                    &ctx,
+                    None,
+                    cwd_vault_id.as_deref(),
+                    cwd_vault_root.as_deref(),
+                )?;
+                let uuid = cerbo_core::object::object_create(&eff_ctx, None, cerbo_core::object::ObjectType::Product, title)?;
                 if json {
                     print_json(&serde_json::json!({"uuid": uuid}));
                 } else {
@@ -468,7 +508,13 @@ async fn main() -> Result<(), String> {
                 }
             }
             PageCommands::Read { uuid, json } => {
-                let content = cerbo_core::page::page_read(&ctx, uuid)?;
+                let eff_ctx = resolve_vault_ctx(
+                    &ctx,
+                    None,
+                    cwd_vault_id.as_deref(),
+                    cwd_vault_root.as_deref(),
+                )?;
+                let content = cerbo_core::page::page_read(&eff_ctx, uuid)?;
                 if json {
                     print_json(&serde_json::json!({"content": content}));
                 } else {
@@ -476,7 +522,13 @@ async fn main() -> Result<(), String> {
                 }
             }
             PageCommands::Write { uuid, content, json } => {
-                let _ = cerbo_core::page::page_write(&ctx, uuid, content)?;
+                let eff_ctx = resolve_vault_ctx(
+                    &ctx,
+                    None,
+                    cwd_vault_id.as_deref(),
+                    cwd_vault_root.as_deref(),
+                )?;
+                let _ = cerbo_core::page::page_write(&eff_ctx, uuid, content)?;
                 if json {
                     print_json_success("Page updated");
                 } else {
@@ -484,7 +536,13 @@ async fn main() -> Result<(), String> {
                 }
             }
             PageCommands::Delete { uuid, json } => {
-                cerbo_core::page::page_delete(&ctx, uuid)?;
+                let eff_ctx = resolve_vault_ctx(
+                    &ctx,
+                    None,
+                    cwd_vault_id.as_deref(),
+                    cwd_vault_root.as_deref(),
+                )?;
+                cerbo_core::page::page_delete(&eff_ctx, uuid)?;
                 if json {
                     print_json_success("Page deleted");
                 } else {
@@ -493,7 +551,13 @@ async fn main() -> Result<(), String> {
             }
         },
         Commands::Resolve { uuid, json } => {
-            let obj_path = cerbo_core::object::object_path(&ctx, &uuid);
+            let eff_ctx = resolve_vault_ctx(
+                &ctx,
+                None,
+                cwd_vault_id.as_deref(),
+                cwd_vault_root.as_deref(),
+            )?;
+            let obj_path = cerbo_core::object::object_path(&eff_ctx, &uuid);
             if !obj_path.exists() {
                 if json {
                     print_json_error(&format!("Object not found: {}", uuid));
@@ -509,7 +573,13 @@ async fn main() -> Result<(), String> {
             }
         },
         Commands::Import { url, json } => {
-            let uuid = cerbo_core::object::object_import(&ctx, &url)?;
+            let eff_ctx = resolve_vault_ctx(
+                &ctx,
+                None,
+                cwd_vault_id.as_deref(),
+                cwd_vault_root.as_deref(),
+            )?;
+            let uuid = cerbo_core::object::object_import(&eff_ctx, &url)?;
             if json {
                 print_json(&serde_json::json!({"uuid": uuid, "url": url}));
             } else {
@@ -517,7 +587,13 @@ async fn main() -> Result<(), String> {
             }
         },
         Commands::ImportOntology { url, json } => {
-            let uuid = cerbo_core::object::object_import_ontology(&ctx, &url)?;
+            let eff_ctx = resolve_vault_ctx(
+                &ctx,
+                None,
+                cwd_vault_id.as_deref(),
+                cwd_vault_root.as_deref(),
+            )?;
+            let uuid = cerbo_core::object::object_import_ontology(&eff_ctx, &url)?;
             if json {
                 print_json(&serde_json::json!({"uuid": uuid, "url": url}));
             } else {
@@ -528,12 +604,13 @@ async fn main() -> Result<(), String> {
             use cerbo_core::VaultContext;
             use cerbo_core::metadata_index;
 
-            // Discover vault from CWD or use explicit path
+            // Explicit --vault path takes priority; otherwise use CWD-discovered root.
             let vault_ctx = if let Some(vault_path) = vault {
-                let path = std::path::PathBuf::from(&vault_path);
-                VaultContext::from_path(path)?
+                VaultContext::from_path(std::path::PathBuf::from(&vault_path))?
+            } else if let Some(ref root) = cwd_vault_root {
+                VaultContext::from_path(root.clone())?
             } else {
-                VaultContext::from_cwd()?
+                return Err("not inside a cerbo vault (or any parent up to mount point); use --vault <path>".to_string());
             };
 
             let stats = if let Some(page_uuid) = page {
@@ -592,10 +669,9 @@ async fn main() -> Result<(), String> {
             }
         },
         Commands::Symlink { vault, json } => {
-            use cerbo_core::vault::find_vault_root;
             use cerbo_core::vault_symlink;
 
-            // Determine the repo root: explicit --vault path or CWD discovery
+            // Explicit --vault path takes priority; otherwise use CWD-discovered root.
             let vault_root = if let Some(vault_path) = vault {
                 let p = std::path::PathBuf::from(&vault_path);
                 if !p.join(".cerbo").is_dir() {
@@ -608,9 +684,7 @@ async fn main() -> Result<(), String> {
                 }
                 p
             } else {
-                let cwd = std::env::current_dir()
-                    .map_err(|e| format!("Failed to get current directory: {}", e))?;
-                match find_vault_root(&cwd) {
+                match cwd_vault_root.clone() {
                     Some(root) => root,
                     None => {
                         if json {
@@ -723,7 +797,9 @@ async fn main() -> Result<(), String> {
                     println!("Vaults: {} registered", reg.vaults.len());
                     for v in &reg.vaults {
                         let count = vault::vault_page_count(&ctx, &v.id).unwrap_or(0);
-                        println!("├── {} ({}) - {} pages", v.name, display_path(&v.path), count);
+                        let current = cwd_vault_id.as_deref() == Some(v.id.as_str());
+                        let marker = if current { " (current)" } else { "" };
+                        println!("├── {}{} ({}) - {} pages", v.name, marker, display_path(&v.path), count);
                     }
                 }
             }
