@@ -26,8 +26,18 @@ pub fn index_all_pages(global_ctx: &crate::CerboContext) -> Result<IndexStats, S
 pub fn index_vault(vault_ctx: &VaultContext) -> Result<IndexStats, String> {
     let mut stats = IndexStats::default();
 
-    // Phase 1: Get all pages in this vault
-    let page_uuids = crate::vault::list_pages_in_vault(&vault_ctx.global, &vault_ctx.vault_path)?;
+    // Phase 1: Get all pages in this vault, excluding :Ontology objects.
+    // Ontologies contain raw RDF/TTL content — backlink and annotation indexing
+    // is not meaningful for them, and they are also excluded from cerbo symlink.
+    let page_uuids: Vec<String> = crate::vault::list_pages_in_vault(&vault_ctx.global, &vault_ctx.vault_path)?
+        .into_iter()
+        .filter(|uuid| {
+            let meta_path = vault_ctx.object_path(uuid).join("meta.ttl");
+            crate::object::ObjectMeta::read_from_file(&meta_path)
+                .map(|m| m.object_type != crate::object::ObjectType::Ontology)
+                .unwrap_or(true)
+        })
+        .collect();
     let total_pages = page_uuids.len();
 
     eprintln!("Indexing {} pages...", total_pages);
@@ -154,7 +164,7 @@ pub fn backfill_slugs(vault_ctx: &VaultContext) -> Result<usize, String> {
         }
         let mut meta = crate::object::ObjectMeta::read_from_file(&meta_path)
             .map_err(|e| format!("backfill_slugs read {}: {}", uuid, e))?;
-        if meta.slug.is_some() {
+        if meta.object_type == crate::object::ObjectType::Ontology || meta.slug.is_some() {
             continue;
         }
         let parsed_uuid = Uuid::parse_str(uuid).unwrap_or_else(|_| Uuid::new_v4());

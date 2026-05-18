@@ -178,7 +178,7 @@ The index command uses Git-style vault discovery: it walks up from the current d
 
 ### Build Symlink Tree
 
-The `cerbo symlink` command builds a human-readable directory tree at `<repo-root>/cerbo/` using symlinks into the UUID object store. This lets you browse and navigate your notes by slug name instead of raw UUIDs.
+The `cerbo symlink` command builds a human-readable directory tree at `<vault-root>/cerbo/` using symlinks into the UUID object store. This lets you browse and navigate your notes by slug name instead of raw UUIDs.
 
 ```bash
 # Build (or rebuild) the symlink tree from the current vault

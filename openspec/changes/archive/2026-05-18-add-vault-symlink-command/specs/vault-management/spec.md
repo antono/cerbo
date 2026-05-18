@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Initialize vault
-The system SHALL provide `cerbo init` command that initializes a new vault in the current directory. The command SHALL create `.cerbo/` directory with `objects/`, `index.json`, and `ontology-map.json`. The command SHALL create bundled ontology objects (Schema.org, FOAF). The command SHALL ensure that the repository root contains a `.gitignore` file with a line of exactly `/cerbo/`, so the materialised symlink tree (see the `vault-symlink` capability) is never committed.
+The system SHALL provide `cerbo init` command that initializes a new vault in the current directory. The command SHALL create `.cerbo/` directory with `objects/`, `index.json`, and `ontology-map.json`. The command SHALL create bundled ontology objects (Schema.org, FOAF). The command SHALL ensure that the vault root contains a `.gitignore` file with a line of exactly `/cerbo/`, so the materialised symlink tree (see the `vault-symlink` capability) is never committed.
 
 #### Scenario: Initialize new vault
 - **WHEN** user runs `cerbo init` in an empty directory
@@ -11,7 +11,7 @@ The system SHALL provide `cerbo init` command that initializes a new vault in th
 - **THEN** `.cerbo/ontology-map.json` is created
 - **THEN** Schema.org ontology object is created in `.cerbo/objects/<uuid>/`
 - **THEN** FOAF ontology object is created in `.cerbo/objects/<uuid>/`
-- **THEN** `.gitignore` is created at the repository root containing the line `/cerbo/`
+- **THEN** `.gitignore` is created at the vault root containing the line `/cerbo/`
 
 #### Scenario: Re-run init on existing vault
 - **WHEN** user runs `cerbo init` on a directory with existing `.cerbo/`
@@ -29,26 +29,26 @@ The system SHALL provide `cerbo init` command that initializes a new vault in th
 - **THEN** `.gitignore` SHALL NOT be modified
 
 ### Requirement: Vault is directory with .cerbo/
-The system SHALL treat any directory containing `.cerbo/` as a valid vault (synonymously, a **cerbo repository**). The repository root is the parent directory of `.cerbo/`.
+The system SHALL treat any directory containing `.cerbo/` as a valid vault (synonymously, a **cerbo vault**). The vault root is the parent directory of `.cerbo/`.
 
 #### Scenario: Detect vault
 - **WHEN** the system scans for vaults
 - **THEN** it looks for directories containing `.cerbo/` subdirectory
 - **THEN** the vault name is derived from the directory name (or from `meta.ttl` if available)
 
-#### Scenario: Vault and cerbo repository are synonyms
-- **WHEN** documentation or user-facing messages refer to a "cerbo repository"
+#### Scenario: Vault and cerbo vault are synonyms
+- **WHEN** documentation or user-facing messages refer to a "cerbo vault"
 - **THEN** the term refers to the same concept as "vault" — a directory containing `.cerbo/`
 
 ## ADDED Requirements
 
 ### Requirement: Repository discovery by walk-up
 
-The system SHALL provide a public helper that, given a starting directory, walks upward through ancestor directories until it finds one containing a `.cerbo/` subdirectory; the first such directory found SHALL be returned as the repository root. The walk SHALL stop at filesystem mount-point boundaries (detected via `stat::st_dev` changing between a directory and its parent) and at the filesystem root. If no `.cerbo/` is found, the helper SHALL return None, and callers SHALL surface a user-facing error of the form `not a cerbo repository (or any parent up to mount point)`. This helper SHALL be reusable across all cerbo commands that operate on the current repository.
+The system SHALL provide a public helper that, given a starting directory, walks upward through ancestor directories until it finds one containing a `.cerbo/` subdirectory; the first such directory found SHALL be returned as the vault root. The walk SHALL stop at filesystem mount-point boundaries (detected via `stat::st_dev` changing between a directory and its parent) and at the filesystem root. If no `.cerbo/` is found, the helper SHALL return None, and callers SHALL surface a user-facing error of the form `not a cerbo vault (or any parent up to mount point)`. This helper SHALL be reusable across all cerbo commands that operate on the current repository.
 
 #### Scenario: Repository at starting directory
 - **WHEN** the starting directory itself contains a `.cerbo/` subdirectory
-- **THEN** the helper returns that directory as the repository root
+- **THEN** the helper returns that directory as the vault root
 
 #### Scenario: Repository in an ancestor
 - **WHEN** the starting directory is several levels below a directory containing `.cerbo/`
@@ -57,7 +57,7 @@ The system SHALL provide a public helper that, given a starting directory, walks
 #### Scenario: No repository found
 - **WHEN** no `.cerbo/` exists in the starting directory or any ancestor up to the filesystem root or a mount-point boundary
 - **THEN** the helper returns None
-- **THEN** callers SHALL exit non-zero with `not a cerbo repository (or any parent up to mount point)` on stderr
+- **THEN** callers SHALL exit non-zero with `not a cerbo vault (or any parent up to mount point)` on stderr
 
 #### Scenario: Mount-point boundary stops the walk
 - **WHEN** the walk would cross a filesystem mount-point boundary before finding `.cerbo/`

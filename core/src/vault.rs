@@ -294,7 +294,7 @@ mod tests {
 
 /// Walk upward from `start` looking for a directory containing `.cerbo/`.
 /// Stops at filesystem mount-point boundaries (Unix: different `st_dev`).
-pub fn find_repository_root(start: &Path) -> Option<PathBuf> {
+pub fn find_vault_root(start: &Path) -> Option<PathBuf> {
     let mut current = start.to_path_buf();
 
     loop {
@@ -410,24 +410,24 @@ mod path_tests {
     }
 
     #[test]
-    fn test_find_repo_root_at_start() {
+    fn test_find_vault_root_at_start() {
         let temp = TempDir::new().unwrap();
         std::fs::create_dir_all(temp.path().join(".cerbo")).unwrap();
-        assert_eq!(find_repository_root(temp.path()), Some(temp.path().to_path_buf()));
+        assert_eq!(find_vault_root(temp.path()), Some(temp.path().to_path_buf()));
     }
 
     #[test]
-    fn test_find_repo_root_in_ancestor() {
+    fn test_find_vault_root_in_ancestor() {
         let temp = TempDir::new().unwrap();
         std::fs::create_dir_all(temp.path().join(".cerbo")).unwrap();
         let child = temp.path().join("a").join("b");
         std::fs::create_dir_all(&child).unwrap();
-        assert_eq!(find_repository_root(&child), Some(temp.path().to_path_buf()));
+        assert_eq!(find_vault_root(&child), Some(temp.path().to_path_buf()));
     }
 
     #[test]
-    fn test_find_repo_root_not_found() {
+    fn test_find_vault_root_not_found() {
         let temp = TempDir::new().unwrap();
-        assert!(find_repository_root(temp.path()).is_none());
+        assert!(find_vault_root(temp.path()).is_none());
     }
 }

@@ -2,7 +2,7 @@
 
 - [x] 1.1 Add `slug = "0.1"` and `pathdiff = "0.2"` to `core/Cargo.toml`; regenerate `nix/bun.nix` is NOT needed (Cargo-only deps), but run `cargo build -p cerbo-core` inside `nix develop` to update the lockfile and confirm both crates compile on the project's `edition = "2024"`
 - [x] 1.2 Add a `core::slug` module exposing `slugify(title: &str, uuid: Uuid) -> String` implementing the project slug algorithm: deunicode transliteration via the `slug` crate, force lowercase, cap at 80 chars (truncating on a `-` boundary when possible), trim trailing `-`, fall back to `untitled-<first-8-of-uuid>` when the result is empty. Include unit tests covering: plain English, Cyrillic, German umlauts, emoji-only, length > 80, length-cap-on-boundary, whitespace-only
-- [x] 1.3 Add `core::vault::find_repository_root(start: &Path) -> Option<PathBuf>` that walks upward looking for a directory containing a `.cerbo/` subdirectory, stopping at filesystem mount-point boundaries (detect via `std::fs::metadata().dev()` change) and at the filesystem root. Include unit tests using `tempfile`: repo at start, repo in ancestor, no repo, simulated mount boundary
+- [x] 1.3 Add `core::vault::find_vault_root(start: &Path) -> Option<PathBuf>` that walks upward looking for a directory containing a `.cerbo/` subdirectory, stopping at filesystem mount-point boundaries (detect via `std::fs::metadata().dev()` change) and at the filesystem root. Include unit tests using `tempfile`: repo at start, repo in ancestor, no repo, simulated mount boundary
 - [x] 1.4 Add `core::vault::validate_virtual_path(s: &str) -> Result<(), VirtualPathError>` enforcing: no leading/trailing `/`, no `.` or `..` segments, no empty segments, no NUL bytes. Empty string is valid (root). Unit tests for each rejection case and several valid cases
 
 ## 2. `meta.ttl` extensions: `cerbo:slug` and `cerbo:virtualPath`
@@ -29,18 +29,18 @@
 
 ## 5. `cerbo init`: `.gitignore` handling
 
-- [x] 5.1 In the `cerbo init` implementation, after creating `.cerbo/`, ensure a `.gitignore` exists at the repository root: if absent, create with `/cerbo/\n`; if present and contains a line exactly matching `/cerbo/`, no-op; if present and missing the line, append a section with a one-line comment `# Cerbo symlink tree (regenerate with: cerbo symlink)` and the `/cerbo/` line
+- [x] 5.1 In the `cerbo init` implementation, after creating `.cerbo/`, ensure a `.gitignore` exists at the vault root: if absent, create with `/cerbo/\n`; if present and contains a line exactly matching `/cerbo/`, no-op; if present and missing the line, append a section with a one-line comment `# Cerbo symlink tree (regenerate with: cerbo symlink)` and the `/cerbo/` line
 - [ ] 5.2 Integration tests: init in empty dir (creates .gitignore), init in dir with pre-existing matching .gitignore (no-op), init in dir with .gitignore missing the line (appends), re-init on existing cerbo repo (still idempotent for both `.cerbo/` and `.gitignore`)
 
 ## 6. `vault-symlink`: core algorithm in `core::vault::symlink`
 
-- [x] 6.1 New module `core/src/vault_symlink.rs` (or `core::vault::symlink`) exposing a public `materialize(repo_root: &Path) -> Result<MaterializeReport, SymlinkError>`. `MaterializeReport` carries counts (objects scanned, leaves created, directories created) for the CLI summary
-- [x] 6.2 Plan-building step: scan `<repo-root>/.cerbo/objects/*/meta.ttl`, skipping `:Ontology`. Produce a `Vec<PlanEntry { uuid, virtual_path: String, slug: String }>` using each page's explicit `cerbo:slug` or the derived fallback, and explicit `cerbo:virtualPath` or empty string
+- [x] 6.1 New module `core/src/vault_symlink.rs` (or `core::vault::symlink`) exposing a public `materialize(vault_root: &Path) -> Result<MaterializeReport, SymlinkError>`. `MaterializeReport` carries counts (objects scanned, leaves created, directories created) for the CLI summary
+- [x] 6.2 Plan-building step: scan `<vault-root>/.cerbo/objects/*/meta.ttl`, skipping `:Ontology`. Produce a `Vec<PlanEntry { uuid, virtual_path: String, slug: String }>` using each page's explicit `cerbo:slug` or the derived fallback, and explicit `cerbo:virtualPath` or empty string
 - [x] 6.3 Plan-validation step: build an in-memory representation of the projected tree (e.g. `BTreeMap<PathBuf, Node>` where `Node` is either `Symlink { uuid }` or `Directory`). Detect leaf-vs-leaf and dir-vs-leaf conflicts; on any conflict, return `SymlinkError::Conflict { collisions: Vec<Collision> }` listing each collision with its path and contributing UUIDs. Do NOT touch the filesystem when conflicts are present
-- [x] 6.4 Safe-wipe step: if `<repo-root>/cerbo/` exists, walk it recursively; verify every entry is either a directory (recurse) or a symlink whose `std::fs::canonicalize`-resolved target lives under `<repo-root>/.cerbo/objects/`. Any other entry → `SymlinkError::UnsafeWipe { offenders: Vec<PathBuf> }`. Existing tree must remain untouched on error
-- [x] 6.5 Stale-sibling cleanup step: at the start of a run, remove any leftover `<repo-root>/cerbo.tmp-*` and `<repo-root>/cerbo.gc-*` directories (they are unambiguously cerbo-owned by name pattern)
-- [x] 6.6 Materialization step: create `<repo-root>/cerbo.tmp-<pid>/`; for each plan entry, `mkdir -p` the `<virtualPath>` chain inside it, then create the leaf symlink with target computed by `pathdiff::diff_paths(<repo-root>/.cerbo/objects/<uuid>/, leaf_parent_dir)`. Use `std::os::unix::fs::symlink` on Unix; gate Windows behind `std::os::windows::fs::symlink_dir` with an explicit hint message on permission error
-- [x] 6.7 Two-phase swap step: if `<repo-root>/cerbo/` exists, `rename` it to `<repo-root>/cerbo.gc-<pid>/`; then `rename` `<repo-root>/cerbo.tmp-<pid>/` to `<repo-root>/cerbo/`; finally `remove_dir_all` `<repo-root>/cerbo.gc-<pid>/` if it exists
+- [x] 6.4 Safe-wipe step: if `<vault-root>/cerbo/` exists, walk it recursively; verify every entry is either a directory (recurse) or a symlink whose `std::fs::canonicalize`-resolved target lives under `<vault-root>/.cerbo/objects/`. Any other entry → `SymlinkError::UnsafeWipe { offenders: Vec<PathBuf> }`. Existing tree must remain untouched on error
+- [x] 6.5 Stale-sibling cleanup step: at the start of a run, remove any leftover `<vault-root>/cerbo.tmp-*` and `<vault-root>/cerbo.gc-*` directories (they are unambiguously cerbo-owned by name pattern)
+- [x] 6.6 Materialization step: create `<vault-root>/cerbo.tmp-<pid>/`; for each plan entry, `mkdir -p` the `<virtualPath>` chain inside it, then create the leaf symlink with target computed by `pathdiff::diff_paths(<vault-root>/.cerbo/objects/<uuid>/, leaf_parent_dir)`. Use `std::os::unix::fs::symlink` on Unix; gate Windows behind `std::os::windows::fs::symlink_dir` with an explicit hint message on permission error
+- [x] 6.7 Two-phase swap step: if `<vault-root>/cerbo/` exists, `rename` it to `<vault-root>/cerbo.gc-<pid>/`; then `rename` `<vault-root>/cerbo.tmp-<pid>/` to `<vault-root>/cerbo/`; finally `remove_dir_all` `<vault-root>/cerbo.gc-<pid>/` if it exists
 - [x] 6.8 Unit tests in `core/src/vault_symlink.rs`: each helper function (plan builder, validator, safe-wipe walker, relative-target computer) tested in isolation with `tempfile`-backed fixtures
 - [x] 6.9 Integration tests: build a fixture vault with several pages spanning multiple virtualPaths, including the empty path; run `materialize`; assert the resulting tree structure (`readlink` values, directory presence) matches expectation; run a second time; assert no `cerbo.tmp-*` or `cerbo.gc-*` siblings remain
 - [x] 6.10 Integration test for portability: `materialize` a fixture repo, move the whole repo dir to a new path via `fs::rename`, assert every leaf symlink still resolves to a valid object directory
@@ -48,7 +48,7 @@
 ## 7. `cerbo symlink` CLI subcommand
 
 - [x] 7.1 Add a `Symlink` variant to the top-level clap `Command` enum in `cli/src/main.rs`. The variant takes no positional arguments and no flags for v1
-- [x] 7.2 Handler: call `find_repository_root(&std::env::current_dir()?)`; on `None`, print `not a cerbo repository (or any parent up to mount point)` to stderr and exit 1
+- [x] 7.2 Handler: call `find_vault_root(&std::env::current_dir()?)`; on `None`, print `not a cerbo vault (or any parent up to mount point)` to stderr and exit 1
 - [x] 7.3 On Some(root), call `core::vault_symlink::materialize(&root)`; on success, print a one-line stdout summary using `MaterializeReport` (e.g. `Symlinked N pages, M directories under <root>/cerbo/`)
 - [x] 7.4 On `SymlinkError::Conflict`, print each collision (path + UUIDs) to stderr and exit 1. On `SymlinkError::UnsafeWipe`, print offending paths to stderr and exit 1. On other errors, print error and exit 1
 - [ ] 7.5 CLI integration tests using `assert_cmd`: success path, run-outside-repo path, conflict path, unsafe-wipe path. Use `tempfile` to construct fixture repos
@@ -56,7 +56,7 @@
 
 ## 8. Documentation
 
-- [x] 8.1 Update the man page (`cli/man/cerbo.1` or wherever it lives) to add a `cerbo symlink` SYNOPSIS, DESCRIPTION, EXIT STATUS, and EXAMPLES section. Document repository discovery, `<repo-root>/cerbo/` output, always-relative symlinks, and full-rebuild semantics
+- [x] 8.1 Update the man page (`cli/man/cerbo.1` or wherever it lives) to add a `cerbo symlink` SYNOPSIS, DESCRIPTION, EXIT STATUS, and EXAMPLES section. Document repository discovery, `<vault-root>/cerbo/` output, always-relative symlinks, and full-rebuild semantics
 - [x] 8.2 Update the man page entry for `cerbo init` to mention the `.gitignore` behavior
 - [x] 8.3 Update the man page entry for `cerbo index` to document `--no-backfill-slug` and the new validation/collision behaviors
 - [x] 8.4 Update the README CLI section with a brief `cerbo symlink` usage example and the cerbo-repository definition

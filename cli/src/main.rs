@@ -213,8 +213,8 @@ enum PageCommands {
 }
 
 /// Ensure `/cerbo/` is present in `.gitignore` at the given repo root.
-fn ensure_gitignore(repo_root: &std::path::Path) -> Result<(), String> {
-    let gitignore_path = repo_root.join(".gitignore");
+fn ensure_gitignore(vault_root: &std::path::Path) -> Result<(), String> {
+    let gitignore_path = vault_root.join(".gitignore");
     let entry = "/cerbo/\n";
 
     let existing = std::fs::read_to_string(&gitignore_path).unwrap_or_default();
@@ -233,17 +233,18 @@ fn ensure_gitignore(repo_root: &std::path::Path) -> Result<(), String> {
 }
 
 fn get_context() -> Result<CerboContext, String> {
-    // Check for local .cerbo/ directory first (for init'd vaults)
     let current_dir = std::env::current_dir()
         .map_err(|e| format!("Failed to get current directory: {}", e))?;
-    let local_cerbo = current_dir.join(".cerbo");
 
-    let (config_dir, cache_dir) = if local_cerbo.exists() {
-        (local_cerbo.clone(), current_dir.join(".cache"))
+    // Walk up from CWD (like Git) to find the nearest .cerbo/ directory.
+    let vault_root = cerbo_core::vault::find_vault_root(&current_dir);
+
+    let (config_dir, cache_dir, is_local) = if let Some(root) = vault_root {
+        (root.join(".cerbo"), root.join(".cache"), true)
     } else {
-        // Fall back to XDG directories
+        // Fall back to XDG directories (global vault registry mode)
         let core = CoreContext::new()?;
-        (core.config_dir.clone(), core.cache_dir.clone())
+        (core.config_dir.clone(), core.cache_dir.clone(), false)
     };
 
     let ctx = CerboContext {
@@ -251,7 +252,7 @@ fn get_context() -> Result<CerboContext, String> {
         cache_dir: cache_dir.clone(),
     };
 
-    if local_cerbo.exists() {
+    if is_local {
         // For local vaults, skip migration and config creation
         return Ok(ctx);
     }
@@ -315,9 +316,16 @@ async fn main() -> Result<(), String> {
                 std::fs::write(&map_path, serde_json::to_string_pretty(&ontology_map).unwrap())
                     .map_err(|e| format!("Failed to write ontology-map.json: {}", e))?;
 
+                // Use a context rooted at the new local vault, not the global XDG ctx.
+                // get_context() falls back to XDG when .cerbo/ didn't exist at startup.
+                let local_ctx = CerboContext {
+                    config_dir: cerbo_dir.clone(),
+                    cache_dir: current_dir.join(".cache"),
+                };
+
                 // Bundle Schema.org ontology
                 let schema_url = "https://schema.org/version/latest/schema.ttl";
-                match cerbo_core::object::object_import_ontology(&ctx, schema_url) {
+                match cerbo_core::object::object_import_ontology(&local_ctx, schema_url) {
                     Ok(uuid) => {
                         // Update ontology-map.json with "schema" prefix
                         let mut map: serde_json::Value = serde_json::from_str(
@@ -336,7 +344,7 @@ async fn main() -> Result<(), String> {
 
                 // Bundle FOAF ontology
                 let foaf_url = "http://xmlns.com/foaf/spec/index.rdf";
-                match cerbo_core::object::object_import_ontology(&ctx, foaf_url) {
+                match cerbo_core::object::object_import_ontology(&local_ctx, foaf_url) {
                     Ok(uuid) => {
                         // Update ontology-map.json with "foaf" prefix
                         let mut map: serde_json::Value = serde_json::from_str(
@@ -584,11 +592,11 @@ async fn main() -> Result<(), String> {
             }
         },
         Commands::Symlink { vault, json } => {
-            use cerbo_core::vault::find_repository_root;
+            use cerbo_core::vault::find_vault_root;
             use cerbo_core::vault_symlink;
 
             // Determine the repo root: explicit --vault path or CWD discovery
-            let repo_root = if let Some(vault_path) = vault {
+            let vault_root = if let Some(vault_path) = vault {
                 let p = std::path::PathBuf::from(&vault_path);
                 if !p.join(".cerbo").is_dir() {
                     if json {
@@ -602,7 +610,7 @@ async fn main() -> Result<(), String> {
             } else {
                 let cwd = std::env::current_dir()
                     .map_err(|e| format!("Failed to get current directory: {}", e))?;
-                match find_repository_root(&cwd) {
+                match find_vault_root(&cwd) {
                     Some(root) => root,
                     None => {
                         if json {
@@ -615,7 +623,7 @@ async fn main() -> Result<(), String> {
                 }
             };
 
-            match vault_symlink::materialize(&repo_root) {
+            match vault_symlink::materialize(&vault_root) {
                 Ok(report) => {
                     if json {
                         print_json(&serde_json::json!({

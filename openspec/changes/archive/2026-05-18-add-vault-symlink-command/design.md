@@ -1,6 +1,6 @@
 ## Context
 
-The proposal formalises the **cerbo repository** concept — any directory containing `.cerbo/`, discovered git-style by walking up from cwd — and defines `cerbo symlink` as a derivation that runs strictly inside such a repository. It takes the object store at `<repo-root>/.cerbo/objects/<uuid>/` and projects it into a human-readable directory tree at the fixed path `<repo-root>/cerbo/`, using each page's `:virtualPath` (real directories) and `:slug` (leaf symlink). Because both source and destination always live inside the same repository, every leaf symlink is a relative path; the entire repository directory remains self-contained and portable.
+The proposal formalises the **cerbo vault** concept — any directory containing `.cerbo/`, discovered git-style by walking up from cwd — and defines `cerbo symlink` as a derivation that runs strictly inside such a repository. It takes the object store at `<vault-root>/.cerbo/objects/<uuid>/` and projects it into a human-readable directory tree at the fixed path `<vault-root>/cerbo/`, using each page's `:virtualPath` (real directories) and `:slug` (leaf symlink). Because both source and destination always live inside the same repository, every leaf symlink is a relative path; the entire repository directory remains self-contained and portable.
 
 The conceptual model is borrowed from Nix's `pkgs.buildEnv`: the symlink tree is a throwaway view rebuilt from scratch, and switching it into place is an atomic rename. The analogy is **loose, not literal** — unlike Nix store paths, cerbo's object directories are NOT immutable (their `page.md` and `meta.ttl` change as the user edits). What we borrow from Nix is the *projection algorithm* (real dirs for merge points, symlinks at leaves, build-temp-then-swap), not the content-addressed immutability story.
 
@@ -9,7 +9,7 @@ This design pins down the algorithm, the metadata representation, the slug gener
 Current state to build on:
 - `core/src/object.rs` already parses/serializes `meta.ttl` via `rio_turtle`.
 - `core/src/metadata_index.rs` already implements repository-wide scans (the `cerbo index` backend).
-- `core/src/vault.rs` already implements vault registration and lookup; **repository discovery by walking up from cwd does NOT yet exist** and must be added as a public helper (`find_repository_root(cwd) -> Option<PathBuf>`), reusable across commands.
+- `core/src/vault.rs` already implements vault registration and lookup; **repository discovery by walking up from cwd does NOT yet exist** and must be added as a public helper (`find_vault_root(cwd) -> Option<PathBuf>`), reusable across commands.
 - The CLI uses `clap` derive in `cli/src/main.rs`.
 - No slugification dependency exists; `unicode-normalization` is already in the tree.
 
@@ -36,22 +36,22 @@ Current state to build on:
 ```mermaid
 flowchart TD
     A["Discover repository: walk up from cwd for .cerbo dir"] --> A2{"Found?"}
-    A2 -- no --> X0["Abort: 'not a cerbo repository (or any parent up to mount point)'"]
-    A2 -- yes --> B["Scan repo-root/.cerbo/objects/*/meta.ttl"]
+    A2 -- no --> X0["Abort: 'not a cerbo vault (or any parent up to mount point)'"]
+    A2 -- yes --> B["Scan vault-root/.cerbo/objects/*/meta.ttl"]
     B --> C["Build plan: (virtualPath, slug, uuid) tuples"]
     C --> D{"Validate plan"}
     D -- conflict --> X["Abort: print conflicting UUIDs to stderr, exit non-zero"]
-    D -- ok --> E{"repo-root/cerbo exists?"}
-    E -- no --> G["Build temp dir repo-root/cerbo.tmp-PID"]
-    E -- yes --> F["Safe-wipe check on repo-root/cerbo: every entry must be a symlink resolving inside repo-root/.cerbo/objects"]
+    D -- ok --> E{"vault-root/cerbo exists?"}
+    E -- no --> G["Build temp dir vault-root/cerbo.tmp-PID"]
+    E -- yes --> F["Safe-wipe check on vault-root/cerbo: every entry must be a symlink resolving inside vault-root/.cerbo/objects"]
     F -- foreign entries --> X
     F -- ok --> G
     G --> H["Materialize: mkdir -p for every virtualPath prefix, relative symlink leaves"]
-    H --> I{"repo-root/cerbo exists?"}
-    I -- yes --> J["rename repo-root/cerbo to repo-root/cerbo.gc-PID"]
-    I -- no --> K["rename repo-root/cerbo.tmp-PID to repo-root/cerbo"]
+    H --> I{"vault-root/cerbo exists?"}
+    I -- yes --> J["rename vault-root/cerbo to vault-root/cerbo.gc-PID"]
+    I -- no --> K["rename vault-root/cerbo.tmp-PID to vault-root/cerbo"]
     J --> K
-    K --> L["rm -rf repo-root/cerbo.gc-PID"]
+    K --> L["rm -rf vault-root/cerbo.gc-PID"]
     L --> M["Print summary to stdout"]
 ```
 
@@ -59,23 +59,23 @@ ASCII fallback:
 
 ```
 0. Discover repo: walk-up from cwd for .cerbo/. Abort if none.
-1. Output dir is always: <repo-root>/cerbo/
-2. Scan <repo-root>/.cerbo/objects/*/meta.ttl, collect (uuid, slug, virtualPath)
+1. Output dir is always: <vault-root>/cerbo/
+2. Scan <vault-root>/.cerbo/objects/*/meta.ttl, collect (uuid, slug, virtualPath)
 3. Build plan; validate (see Decision 6)
-4. If <repo-root>/cerbo/ exists: safe-wipe check (Decision 5)
-5. Build full tree in <repo-root>/cerbo.tmp-<pid>/ with relative symlinks
-6. rename <repo-root>/cerbo/ -> <repo-root>/cerbo.gc-<pid>/   (if it existed)
-7. rename <repo-root>/cerbo.tmp-<pid>/ -> <repo-root>/cerbo/
-8. rm -rf <repo-root>/cerbo.gc-<pid>/
+4. If <vault-root>/cerbo/ exists: safe-wipe check (Decision 5)
+5. Build full tree in <vault-root>/cerbo.tmp-<pid>/ with relative symlinks
+6. rename <vault-root>/cerbo/ -> <vault-root>/cerbo.gc-<pid>/   (if it existed)
+7. rename <vault-root>/cerbo.tmp-<pid>/ -> <vault-root>/cerbo/
+8. rm -rf <vault-root>/cerbo.gc-<pid>/
 ```
 
-**Why two renames instead of one:** POSIX `rename(2)` only atomically replaces an EXISTING target if both are the same type AND the target is empty (for directories on some kernels) or if `renameat2(RENAME_EXCHANGE)` is used (Linux-only). To stay portable we use the well-known temp+gc pattern: window of inconsistency is ~milliseconds, and a crash leaves either the old tree or `<repo-root>/cerbo.gc-<pid>/` for a follow-up GC sweep. Nix uses the same trick at the profile-symlink level [Perplexity §4 — sandervanderburg, edolstra/atomic-hotswup].
+**Why two renames instead of one:** POSIX `rename(2)` only atomically replaces an EXISTING target if both are the same type AND the target is empty (for directories on some kernels) or if `renameat2(RENAME_EXCHANGE)` is used (Linux-only). To stay portable we use the well-known temp+gc pattern: window of inconsistency is ~milliseconds, and a crash leaves either the old tree or `<vault-root>/cerbo.gc-<pid>/` for a follow-up GC sweep. Nix uses the same trick at the profile-symlink level [Perplexity §4 — sandervanderburg, edolstra/atomic-hotswup].
 
 **Alternative considered:** Build in place. Rejected — any failure mid-rebuild would leave a half-materialized tree that the next run might not recognise as "ours" (since some symlinks may already exist while others are missing or stale).
 
 ### 2. Symlink target form: always relative
 
-Every leaf symlink uses a **relative** path of the form `../../<...>/.cerbo/objects/<uuid>/`, with the exact number of `..` segments determined by the leaf's depth under `<repo-root>/cerbo/`. Specifically: from a leaf at `<repo-root>/cerbo/<virtualPath>/<slug>`, the target climbs `1 + depth(virtualPath) + 1` levels to reach `<repo-root>/`, then descends into `.cerbo/objects/<uuid>/`.
+Every leaf symlink uses a **relative** path of the form `../../<...>/.cerbo/objects/<uuid>/`, with the exact number of `..` segments determined by the leaf's depth under `<vault-root>/cerbo/`. Specifically: from a leaf at `<vault-root>/cerbo/<virtualPath>/<slug>`, the target climbs `1 + depth(virtualPath) + 1` levels to reach `<vault-root>/`, then descends into `.cerbo/objects/<uuid>/`.
 
 The leaf symlink points at the OBJECT DIRECTORY (not `page.md`).
 
@@ -89,7 +89,7 @@ This is a simplification over an earlier draft that considered an absolute-path 
 
 **Trade-off:** double-clicking a slug in a file manager opens the directory, not the markdown file. Acceptable; users who want one-click open can run their editor on `<slug>/page.md` or alias it.
 
-**Safe-wipe interaction:** the safe-wipe check (Decision 5) `readlink`s and canonicalises each entry before verifying its target lives under `<repo-root>/.cerbo/objects/`. Canonicalisation handles relative symlinks naturally — no additional logic required.
+**Safe-wipe interaction:** the safe-wipe check (Decision 5) `readlink`s and canonicalises each entry before verifying its target lives under `<vault-root>/.cerbo/objects/`. Canonicalisation handles relative symlinks naturally — no additional logic required.
 
 ### 3. Slug generator: the `slug` crate (transliteration via `deunicode`) + project-local length cap
 
@@ -125,15 +125,15 @@ We add the [`slug`](https://crates.io/crates/slug) crate to `core`. It is small,
 
 ### 5. Safe-wipe rule
 
-Before we touch `<repo-root>/cerbo/`, we walk it and verify EVERY entry is one of:
+Before we touch `<vault-root>/cerbo/`, we walk it and verify EVERY entry is one of:
 - a directory containing only safe entries (recursive), OR
-- a symlink whose `readlink` target, canonicalised, starts with `<repo-root>/.cerbo/objects/`.
+- a symlink whose `readlink` target, canonicalised, starts with `<vault-root>/.cerbo/objects/`.
 
 If we encounter a regular file, a symlink pointing anywhere else (including into a *different* repository's `.cerbo/`), a device node, etc., we abort with an error listing the offending path(s). We **never** rely on a marker file (e.g. `.cerbo-symlink-tree`) — it could be deleted, leaving the tool unsure. Origin-of-target is the authoritative signal.
 
 **Alternative considered:** Marker file at root of the symlink tree. Rejected for the reason above; users delete things and we shouldn't have a footgun.
 
-**Trade-off:** if the user has a symlink to a different cerbo repository's `.cerbo/objects/` inside the tree, we'd refuse to wipe. Acceptable — that's almost certainly user data we shouldn't touch.
+**Trade-off:** if the user has a symlink to a different cerbo vault's `.cerbo/objects/` inside the tree, we'd refuse to wipe. Acceptable — that's almost certainly user data we shouldn't touch.
 
 ### 6. Conflict policy: hard abort, no auto-suffix
 
@@ -149,13 +149,13 @@ On conflict, abort the rebuild, print a report listing the colliding paths and t
 
 ### 7. Repository discovery: mandatory walk-up for `.cerbo/`
 
-`cerbo symlink` takes no positional arguments. It always runs against the cerbo repository that contains cwd:
+`cerbo symlink` takes no positional arguments. It always runs against the cerbo vault that contains cwd:
 
-1. Walk from cwd toward `/` looking for a directory that contains a `.cerbo/` subdirectory. Stop at the first match — that's the repository root.
+1. Walk from cwd toward `/` looking for a directory that contains a `.cerbo/` subdirectory. Stop at the first match — that's the vault root.
 2. Stop early at mount-point boundaries to avoid walking out of the user's filesystem (matches git behavior; controlled by `stat::st_dev` change between cwd and parent).
-3. If no `.cerbo/` is found before reaching `/` or a mount point, abort with: `not a cerbo repository (or any parent up to mount point)`. The wording deliberately mirrors `git`'s `fatal: not a git repository (or any parent up to mount point /)`.
+3. If no `.cerbo/` is found before reaching `/` or a mount point, abort with: `not a cerbo vault (or any parent up to mount point)`. The wording deliberately mirrors `git`'s `fatal: not a git repository (or any parent up to mount point /)`.
 
-The discovery helper is `core::vault::find_repository_root(cwd: &Path) -> Option<PathBuf>`, designed to be reused by future commands (`cerbo create`, `cerbo index` with no `--vault`, etc.). Existing vault registration in `core::vault` is **not** consulted by `cerbo symlink` — the repository concept is cwd-relative and self-evident from `.cerbo/` presence, not from a global registry.
+The discovery helper is `core::vault::find_vault_root(cwd: &Path) -> Option<PathBuf>`, designed to be reused by future commands (`cerbo create`, `cerbo index` with no `--vault`, etc.). Existing vault registration in `core::vault` is **not** consulted by `cerbo symlink` — the repository concept is cwd-relative and self-evident from `.cerbo/` presence, not from a global registry.
 
 **Output directory name** is the fixed string `cerbo` (e.g. repo at `/home/anton/my-notes` → tree at `/home/anton/my-notes/cerbo/`). Rationale: predictable across all repositories (muscle memory: `cd cerbo`), no redundant nesting like `my-notes/my-notes/`, trivial to `.gitignore` (`/cerbo/`), and `cerbo` is a project-specific name unlikely to collide with unrelated user content. If a user happens to have an unrelated `cerbo/` directory at the repo root, the safe-wipe check (Decision 5) will refuse to touch it — they get a clear error, not data loss.
 
@@ -163,7 +163,7 @@ The discovery helper is `core::vault::find_repository_root(cwd: &Path) -> Option
 
 ### 8. `cerbo init` writes a `.gitignore` entry for `/cerbo/`
 
-`cerbo init` SHALL ensure that a `.gitignore` file exists at the repository root and contains a line `/cerbo/` (rooted to the repo, so it never matches a nested `cerbo/` deeper in the tree). Behavior:
+`cerbo init` SHALL ensure that a `.gitignore` file exists at the vault root and contains a line `/cerbo/` (rooted to the repo, so it never matches a nested `cerbo/` deeper in the tree). Behavior:
 
 - If no `.gitignore` exists: create one containing `/cerbo/\n`.
 - If `.gitignore` exists and already contains `/cerbo/` (exact match on a line): no-op.

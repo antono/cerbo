@@ -72,7 +72,7 @@ struct PlanEntry {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/// Build (or rebuild) the symlink tree at `<repo_root>/cerbo/`.
+/// Build (or rebuild) the symlink tree at `<vault_root>/cerbo/`.
 ///
 /// Algorithm:
 /// 1. Clean stale `cerbo.tmp-*` / `cerbo.gc-*` siblings from prior crashes
@@ -81,17 +81,17 @@ struct PlanEntry {
 /// 4. Safe-wipe check on existing `cerbo/`
 /// 5. Materialize into `cerbo.tmp-<pid>/` with relative symlinks
 /// 6. Atomic two-rename swap into place
-pub fn materialize(repo_root: &Path) -> Result<MaterializeReport, SymlinkError> {
-    cleanup_stale_siblings(repo_root)?;
+pub fn materialize(vault_root: &Path) -> Result<MaterializeReport, SymlinkError> {
+    cleanup_stale_siblings(vault_root)?;
 
-    let plan = build_plan(repo_root)?;
+    let plan = build_plan(vault_root)?;
     let objects_scanned = plan.len();
 
     validate_plan(&plan)?;
 
-    let cerbo_out = repo_root.join("cerbo");
+    let cerbo_out = vault_root.join("cerbo");
     if cerbo_out.exists() {
-        safe_wipe_check(&cerbo_out, repo_root)?;
+        safe_wipe_check(&cerbo_out, vault_root)?;
     }
 
     // Count unique directories that will be created
@@ -111,7 +111,7 @@ pub fn materialize(repo_root: &Path) -> Result<MaterializeReport, SymlinkError> 
     let dirs_created = unique_dirs.len();
 
     let pid = std::process::id();
-    let tmp_dir = repo_root.join(format!("cerbo.tmp-{}", pid));
+    let tmp_dir = vault_root.join(format!("cerbo.tmp-{}", pid));
     std::fs::create_dir(&tmp_dir).map_err(SymlinkError::Io)?;
 
     let mut leaves_created = 0usize;
@@ -125,7 +125,7 @@ pub fn materialize(repo_root: &Path) -> Result<MaterializeReport, SymlinkError> 
         };
 
         let leaf_path = leaf_parent.join(&entry.slug);
-        let object_dir = repo_root.join(".cerbo").join("objects").join(&entry.uuid);
+        let object_dir = vault_root.join(".cerbo").join("objects").join(&entry.uuid);
 
         let rel_target = pathdiff::diff_paths(&object_dir, &leaf_parent)
             .ok_or_else(|| SymlinkError::Other(format!(
@@ -139,7 +139,7 @@ pub fn materialize(repo_root: &Path) -> Result<MaterializeReport, SymlinkError> 
     }
 
     // Atomic swap
-    let gc_dir = repo_root.join(format!("cerbo.gc-{}", pid));
+    let gc_dir = vault_root.join(format!("cerbo.gc-{}", pid));
     if cerbo_out.exists() {
         std::fs::rename(&cerbo_out, &gc_dir).map_err(SymlinkError::Io)?;
     }
@@ -153,8 +153,8 @@ pub fn materialize(repo_root: &Path) -> Result<MaterializeReport, SymlinkError> 
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn cleanup_stale_siblings(repo_root: &Path) -> Result<(), SymlinkError> {
-    let entries = std::fs::read_dir(repo_root).map_err(SymlinkError::Io)?;
+fn cleanup_stale_siblings(vault_root: &Path) -> Result<(), SymlinkError> {
+    let entries = std::fs::read_dir(vault_root).map_err(SymlinkError::Io)?;
     for entry in entries.flatten() {
         let name = entry.file_name();
         let n = name.to_string_lossy();
@@ -168,8 +168,8 @@ fn cleanup_stale_siblings(repo_root: &Path) -> Result<(), SymlinkError> {
     Ok(())
 }
 
-fn build_plan(repo_root: &Path) -> Result<Vec<PlanEntry>, SymlinkError> {
-    let objects_dir = repo_root.join(".cerbo").join("objects");
+fn build_plan(vault_root: &Path) -> Result<Vec<PlanEntry>, SymlinkError> {
+    let objects_dir = vault_root.join(".cerbo").join("objects");
     if !objects_dir.exists() {
         return Ok(Vec::new());
     }
@@ -274,8 +274,8 @@ fn validate_plan(plan: &[PlanEntry]) -> Result<(), SymlinkError> {
     Ok(())
 }
 
-fn safe_wipe_check(cerbo_dir: &Path, repo_root: &Path) -> Result<(), SymlinkError> {
-    let objects_root = repo_root.join(".cerbo").join("objects");
+fn safe_wipe_check(cerbo_dir: &Path, vault_root: &Path) -> Result<(), SymlinkError> {
+    let objects_root = vault_root.join(".cerbo").join("objects");
     let mut offenders = Vec::new();
     collect_unsafe_entries(cerbo_dir, &objects_root, &mut offenders);
     if !offenders.is_empty() {

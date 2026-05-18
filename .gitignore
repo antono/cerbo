@@ -28,3 +28,4 @@ result/
 *.log
 result
 .gitnexus
+/cerbo/
