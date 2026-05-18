@@ -12,11 +12,25 @@ Cerbo is a local-first markdown wiki tool designed for both human and AI agent w
 
 The tool supports managing multiple vaults (workspaces), creating and editing pages with markdown content, importing web content as source objects, and working with ontologies (Schema.org, FOAF) for semantic markup using the HackMD annotation syntax `[Text]{prefix:Type}`.
 
+# VAULT AUTO-DISCOVERY
+
+All cerbo commands automatically detect the active vault from the current working directory, without requiring a `--vault` flag. At startup, cerbo walks up from the current directory looking for an ancestor directory containing `.cerbo/`. If found, that vault is used for the invocation.
+
+Vault resolution priority (highest to lowest):
+
+1. Explicit `--vault` flag (where available)
+2. Vault discovered from current working directory (walk-up)
+3. Active vault set via `cerbo vault active <ID>`
+4. Single registered vault fallback (when only one vault is registered)
+5. Error: not inside a cerbo vault
+
+If the current directory is inside a vault that has not been registered with `cerbo vault add`, it is automatically recorded in `vaults.auto.toml` (silently, no output) and immediately used for the current invocation. Auto-registered vaults appear in `cerbo vault list` with an `(auto)` marker.
+
 # COMMANDS
 
 ## init
 
-Initialize a new vault in the current directory. Creates a `.cerbo/` directory with the necessary structure and bundles standard ontologies (Schema.org, FOAF).
+Initialize a new vault in the current directory. Creates a `.cerbo/` directory with the necessary structure, bundles standard ontologies (Schema.org, FOAF), and adds `/cerbo/` to `.gitignore`.
 
 Usage: `cerbo init [OPTIONS]`
 
@@ -31,10 +45,11 @@ Usage: `cerbo vault <SUBCOMMAND>`
 
 ### Subcommands:
 
-- `cerbo vault list [--json]` - List all registered vaults
+- `cerbo vault list [--json]` - List all registered vaults. Auto-registered vaults are shown with an `(auto)` marker. JSON output includes an `is_auto` boolean field per vault.
 - `cerbo vault add <NAME> <PATH> [--json]` - Add a new vault with given name at specified path
-- `cerbo vault remove <ID> [--json]` - Remove a vault by its ID
+- `cerbo vault remove <ID> [--json]` - Remove a vault by its ID (works on both manually and auto-registered vaults)
 - `cerbo vault active <ID> [--json]` - Set the active vault
+- `cerbo vault approve <ID> [--json]` - Promote an auto-registered vault to the manual registry. Moves the entry from `vaults.auto.toml` to `vaults.toml`. Errors if the ID is not in the auto registry or the path is already manually registered.
 
 ## page
 
@@ -44,7 +59,7 @@ Usage: `cerbo page <SUBCOMMAND>`
 
 ### Subcommands:
 
- - `cerbo page list [--json] [--vault <VAULT_ID>]` - List all pages in the specified vault or the current vault if omitted
+- `cerbo page list [--json] [--vault <ID>]` - List all pages in the current vault (auto-discovered from CWD, or override with --vault)
 - `cerbo page create <TITLE> [--json]` - Create a new page with the given title
 - `cerbo page read <UUID> [--json]` - Read the content of a page by its UUID
 - `cerbo page write <UUID> <CONTENT> [--json]` - Write content to a page
@@ -106,7 +121,8 @@ The command discovers the vault using Git-style directory traversal: it walks up
 Options:
 - `--vault <PATH>` - Explicit vault path (overrides Git-style discovery)
 - `--page <UUID>` - Index only a single page (incremental mode)
-- `--json` - Output result as JSON with pages_processed, links_found, annotations_found, errors
+- `--no-backfill-slug` - Skip backfilling missing `cerbo:slug` values into `meta.ttl`
+- `--json` - Output result as JSON with pages_processed, links_found, annotations_found, slugs_backfilled, path_errors, collisions, errors
 
 **Behavior:**
 - Without `--page`: Performs full vault rebuild (two-pass: clear all backrefs, then rebuild)
@@ -119,6 +135,30 @@ Options:
 - After bulk imports or vault migrations
 - If backlinks or annotations appear stale or missing
 - To verify metadata integrity after crashes or interruptions
+
+## symlink
+
+Build (or rebuild) a human-readable symlink tree at `<repo-root>/cerbo/`. Each page with a `cerbo:slug` value is exposed as a relative symlink named after its slug. Pages that declare a `cerbo:virtualPath` are nested inside corresponding subdirectories. The tree is rebuilt atomically: a new staging directory is written and then swapped into place so readers always see a consistent state.
+
+Usage: `cerbo symlink [OPTIONS]`
+
+The command discovers the vault using Git-style directory traversal: it walks up from the current directory looking for a `.cerbo/` directory. You can also specify an explicit vault path with `--vault`.
+
+Options:
+- `--vault <PATH>` - Explicit vault path (overrides Git-style discovery)
+- `--json` - Output result as JSON with objects_scanned, leaves_created, dirs_created
+
+**Behavior:**
+- Symlinks are always relative (portable when the vault is moved or mounted elsewhere)
+- Pages without a `cerbo:slug` are skipped (run `cerbo index` first to backfill slugs)
+- Detects leaf-vs-leaf and dir-vs-leaf collisions and aborts with an error listing all conflicts
+- Refuses to wipe `cerbo/` if it contains entries that were not created by cerbo (safe-wipe guard)
+- `cerbo init` adds `/cerbo/` to `.gitignore` automatically
+
+**When to use:**
+- After `cerbo init` to create the initial symlink tree
+- After creating or renaming pages (to refresh the tree)
+- After moving the vault to a new location (symlinks are relative, so re-running fixes any stale links)
 
 # OPTIONS
 
@@ -147,7 +187,8 @@ Cerbo uses a **UUID-based storage model** where all content is stored locally in
     |       +-- backrefs.ttl   # Backlinks to this object
     |       +-- annotations.ttl # HackMD-style annotations
     +-- index.json             # Object index
-    +-- vaults.toml           # Vault registry
+    +-- vaults.toml           # Vault registry (manually registered)
+    +-- vaults.auto.toml      # Auto-registered vaults (CWD discovery)
     +-- ontology-map.json      # Ontology prefix mappings
     +-- ui.toml               # UI settings
     +-- state.toml            # Application state
@@ -178,6 +219,11 @@ cerbo init
 List all registered vaults:
 ```
 cerbo vault list
+```
+
+Promote an auto-registered vault to the manual registry:
+```
+cerbo vault approve <ID>
 ```
 
 Create a new page:
@@ -218,6 +264,11 @@ cerbo index --vault /path/to/my/vault
 Get indexing statistics as JSON:
 ```
 cerbo index --json
+```
+
+Build symlink tree:
+```
+cerbo symlink
 ```
 
 # SEE ALSO

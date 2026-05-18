@@ -94,6 +94,11 @@ Any change to the CLI API **MUST** be reflected in the man page. When adding,
 removing, or modifying CLI commands or arguments, update the man page
 accordingly. The man page ships with the `cerbo` CLI tool.
 
+**Primary source: `cli/man/cerbo.md`** — edit this Markdown file only.
+`cli/man/cerbo.1` is generated at build time by `build.rs` using `mandown`
+and is **not committed to git** (listed in `.gitignore`). Never edit `cerbo.1`
+directly; changes will be lost on the next build.
+
 ## Quick Reference
 
 ```bash
