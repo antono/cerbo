@@ -681,18 +681,18 @@ fn test_explicit_vault_flag_overrides_cwd() {
 }
 
 #[test]
-fn test_unregistered_cwd_vault_warns_and_falls_through() {
+fn test_unregistered_cwd_vault_auto_registers_silently() {
     let ctx = setup();
     let xdg = TempDir::new().unwrap();
 
-    // Init vault but do NOT register it
+    // Init vault but do NOT register it manually
     cerbo_cmd(&ctx.bin_path, xdg.path())
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
 
-    // page list should succeed (uses cwd_vault_root fallback) and warn on stderr
+    // page list should succeed and produce NO warning on stderr (auto-registered silently)
     let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
         .args(&["page", "list", "--json"])
         .current_dir(ctx.tmp_dir.path())
@@ -701,9 +701,162 @@ fn test_unregistered_cwd_vault_warns_and_falls_through() {
     assert!(list_out.status.success(), "page list failed: {}", String::from_utf8_lossy(&list_out.stderr));
     let stderr = String::from_utf8_lossy(&list_out.stderr);
     assert!(
-        stderr.contains("not registered"),
-        "expected 'not registered' warning in stderr, got: {}", stderr
+        !stderr.contains("not registered"),
+        "unexpected 'not registered' warning; auto-registration should be silent: {}", stderr
     );
+}
+
+#[test]
+fn test_auto_registration_appears_in_vault_list() {
+    let ctx = setup();
+    let xdg = TempDir::new().unwrap();
+
+    // Init vault without manually registering it
+    cerbo_cmd(&ctx.bin_path, xdg.path())
+        .arg("init")
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // Run any command from inside the vault to trigger auto-registration
+    cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["page", "list", "--json"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // vault list --json should now show the vault with is_auto: true
+    let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["vault", "list", "--json"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    assert!(list_out.status.success(), "vault list failed: {}", String::from_utf8_lossy(&list_out.stderr));
+    let vaults: serde_json::Value = serde_json::from_slice(&list_out.stdout).unwrap();
+    let vaults_arr = vaults.as_array().unwrap();
+    assert_eq!(vaults_arr.len(), 1, "expected 1 vault in list");
+    assert_eq!(vaults_arr[0]["is_auto"], serde_json::Value::Bool(true));
+}
+
+#[test]
+fn test_auto_registration_is_idempotent() {
+    let ctx = setup();
+    let xdg = TempDir::new().unwrap();
+
+    cerbo_cmd(&ctx.bin_path, xdg.path())
+        .arg("init")
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // Run twice from the same vault
+    for _ in 0..2 {
+        cerbo_cmd(&ctx.bin_path, xdg.path())
+            .args(&["page", "list", "--json"])
+            .current_dir(ctx.tmp_dir.path())
+            .output()
+            .unwrap();
+    }
+
+    let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["vault", "list", "--json"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    let vaults: serde_json::Value = serde_json::from_slice(&list_out.stdout).unwrap();
+    assert_eq!(vaults.as_array().unwrap().len(), 1, "duplicate entry on second invocation");
+}
+
+#[test]
+fn test_vault_approve_promotes_auto_to_manual() {
+    let ctx = setup();
+    let xdg = TempDir::new().unwrap();
+
+    cerbo_cmd(&ctx.bin_path, xdg.path())
+        .arg("init")
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // Trigger auto-registration
+    cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["page", "list", "--json"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // Get the auto-registered vault ID
+    let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["vault", "list", "--json"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    let vaults: serde_json::Value = serde_json::from_slice(&list_out.stdout).unwrap();
+    let id = vaults[0]["id"].as_str().unwrap().to_string();
+
+    // Approve it
+    let approve_out = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["vault", "approve", &id, "--json"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    assert!(approve_out.status.success(), "vault approve failed: {}", String::from_utf8_lossy(&approve_out.stderr));
+
+    // Subsequent vault list should show is_auto: false
+    let list_out2 = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["vault", "list", "--json"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    let vaults2: serde_json::Value = serde_json::from_slice(&list_out2.stdout).unwrap();
+    assert_eq!(vaults2.as_array().unwrap().len(), 1);
+    assert_eq!(vaults2[0]["is_auto"], serde_json::Value::Bool(false));
+}
+
+#[test]
+fn test_vault_remove_works_on_auto_vault() {
+    let ctx = setup();
+    let xdg = TempDir::new().unwrap();
+
+    cerbo_cmd(&ctx.bin_path, xdg.path())
+        .arg("init")
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // Trigger auto-registration
+    cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["page", "list", "--json"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    // Get ID
+    let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["vault", "list", "--json"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    let vaults: serde_json::Value = serde_json::from_slice(&list_out.stdout).unwrap();
+    let id = vaults[0]["id"].as_str().unwrap().to_string();
+
+    // Remove it — run from a plain dir so it doesn't re-register during the command
+    let plain = TempDir::new().unwrap();
+    let remove_out = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["vault", "remove", &id, "--json"])
+        .current_dir(plain.path())
+        .output()
+        .unwrap();
+    assert!(remove_out.status.success(), "vault remove failed: {}", String::from_utf8_lossy(&remove_out.stderr));
+
+    // vault list should now be empty (running from plain dir)
+    let list_out2 = cerbo_cmd(&ctx.bin_path, xdg.path())
+        .args(&["vault", "list", "--json"])
+        .current_dir(plain.path())
+        .output()
+        .unwrap();
+    let vaults2: serde_json::Value = serde_json::from_slice(&list_out2.stdout).unwrap();
+    assert_eq!(vaults2.as_array().unwrap().len(), 0, "vault should be gone after remove");
 }
 
 #[test]

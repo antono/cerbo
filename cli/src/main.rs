@@ -54,7 +54,7 @@ fn print_pages_template(
 }
 
 // Print vaults in a compact template similar to pages. Shows (current) next to the
-// vault name when it is the active vault.
+// vault name when it is the active vault, and (auto) for auto-registered vaults.
 fn print_vaults_template(ctx: &CerboContext, vaults_file: &cerbo_core::vault::VaultsFile) -> Result<(), String> {
     use cerbo_core::state;
 
@@ -62,8 +62,9 @@ fn print_vaults_template(ctx: &CerboContext, vaults_file: &cerbo_core::vault::Va
     let active = st.active_vault_id;
 
     for v in &vaults_file.vaults {
+        let auto_marker = if v.is_auto { " (auto)" } else { "" };
         let current_marker = if Some(v.id.clone()) == active { " (current)" } else { "" };
-        println!("{}: {}{}", v.id, v.name, current_marker);
+        println!("{}: {}{}{}", v.id, v.name, auto_marker, current_marker);
     }
 
     Ok(())
@@ -172,6 +173,12 @@ enum VaultCommands {
     },
     /// Set the active vault
     Active {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Promote an auto-registered vault to the manual registry
+    Approve {
         id: String,
         #[arg(long)]
         json: bool,
@@ -324,16 +331,12 @@ async fn main() -> Result<(), String> {
     let cwd = std::env::current_dir()
         .map_err(|e| format!("Failed to get current directory: {}", e))?;
     let cwd_vault_root = cerbo_core::vault::find_vault_root(&cwd);
-    let cwd_vault_id = cwd_vault_root
+    let mut cwd_vault_id = cwd_vault_root
         .as_deref()
         .and_then(|root| cerbo_core::vault::vault_id_from_path(&ctx, root));
     if let (Some(ref root), None) = (cwd_vault_root.as_ref(), cwd_vault_id.as_ref()) {
-        if root.join(".cerbo").is_dir() {
-            eprintln!(
-                "warning: vault at {} is not registered; run 'cerbo vault add'",
-                root.display()
-            );
-        }
+        let _ = cerbo_core::vault::auto_vault_register(&ctx, root);
+        cwd_vault_id = cerbo_core::vault::vault_id_from_path(&ctx, root);
     }
 
     match cli.command {
@@ -430,6 +433,7 @@ async fn main() -> Result<(), String> {
                         id: v.id,
                         name: v.name,
                         path: v.path.to_string_lossy().to_string(),
+                        is_auto: v.is_auto,
                     }).collect();
                     print_json(&vaults_json);
                 } else {
@@ -444,6 +448,7 @@ async fn main() -> Result<(), String> {
                         id: vault.id,
                         name: vault.name,
                         path: vault.path.to_string_lossy().to_string(),
+                        is_auto: vault.is_auto,
                     };
                     print_json(&vault_json);
                 } else {
@@ -470,6 +475,20 @@ async fn main() -> Result<(), String> {
                     print_json_success("Active vault set");
                 } else {
                     println!("Set active vault");
+                }
+            }
+            VaultCommands::Approve { id, json } => {
+                let vault = cerbo_core::vault::auto_vault_approve(&ctx, &id)?;
+                if json {
+                    let vault_json = VaultJson {
+                        id: vault.id,
+                        name: vault.name,
+                        path: vault.path.to_string_lossy().to_string(),
+                        is_auto: vault.is_auto,
+                    };
+                    print_json(&vault_json);
+                } else {
+                    println!("Approved vault: {} ({})", vault.name, vault.id);
                 }
             }
         },
@@ -777,6 +796,7 @@ async fn main() -> Result<(), String> {
                         name: v.name,
                         path: display_path(&v.path),
                         page_count: count,
+                        is_auto: v.is_auto,
                     }
                 }).collect();
                 let info_json = InfoJson {
@@ -814,6 +834,7 @@ struct VaultJson {
     id: String,
     name: String,
     path: String,
+    is_auto: bool,
 }
 
 #[derive(Serialize)]
@@ -822,6 +843,7 @@ struct VaultInfoJson {
     name: String,
     path: String,
     page_count: usize,
+    is_auto: bool,
 }
 
 #[derive(Serialize)]
