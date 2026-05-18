@@ -176,6 +176,38 @@ cerbo index --json
 
 The index command uses Git-style vault discovery: it walks up from the current directory looking for a `.cerbo/` directory. You can run it from any subdirectory within a vault.
 
+### Build Symlink Tree
+
+The `cerbo symlink` command builds a human-readable directory tree at `<repo-root>/cerbo/` using symlinks into the UUID object store. This lets you browse and navigate your notes by slug name instead of raw UUIDs.
+
+```bash
+# Build (or rebuild) the symlink tree from the current vault
+cerbo symlink
+
+# Build from an explicit vault path
+cerbo symlink --vault /path/to/my/vault
+
+# Get a JSON report of what was created
+cerbo symlink --json
+```
+
+- Symlinks are always **relative** (portable when the vault is moved)
+- Pages without a `cerbo:slug` are skipped — run `cerbo index` first to backfill slugs
+- The tree is rebuilt atomically, so reads always see a consistent state
+- `cerbo init` adds `/cerbo/` to `.gitignore` automatically
+
+Pages can be nested via the `cerbo:virtualPath` metadata field:
+
+```
+cerbo/
+├── my-notes          → .cerbo/objects/<uuid>/
+├── research/
+│   ├── rust-ownership → .cerbo/objects/<uuid>/
+│   └── async-patterns → .cerbo/objects/<uuid>/
+└── projects/
+    └── cerbo          → .cerbo/objects/<uuid>/
+```
+
 ### Import Content
 
 ```bash

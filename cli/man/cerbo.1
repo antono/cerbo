@@ -19,7 +19,7 @@ The tool supports managing multiple vaults (workspaces), creating and editing pa
 
 .SS "init"
 .PP
-Initialize a new vault in the current directory\. Creates a `\f[CR]\.cerbo/\fP` directory with the necessary structure and bundles standard ontologies (Schema\.org, FOAF)\.
+Initialize a new vault in the current directory\. Creates a `\f[CR]\.cerbo/\fP` directory with the necessary structure, bundles standard ontologies (Schema\.org, FOAF), and adds `\f[CR]/cerbo/\fP` to `\f[CR]\.gitignore\fP`\.
 .PP
 Usage: `\f[CR]cerbo init [OPTIONS]\fP`
 .PP
@@ -187,7 +187,11 @@ Options:
 .El
 .Bl
 .IP \(bu 4
-`\f[CR]\-\-json\fP` \- Output result as JSON with pages_processed, links_found, annotations_found, errors
+`\f[CR]\-\-no\-backfill\-slug\fP` \- Skip backfilling missing `\f[CR]cerbo:slug\fP` values into `\f[CR]meta\.ttl\fP`
+.El
+.Bl
+.IP \(bu 4
+`\f[CR]\-\-json\fP` \- Output result as JSON with pages_processed, links_found, annotations_found, slugs_backfilled, path_errors, collisions, errors
 .El
 .RE
 .PP
@@ -228,6 +232,66 @@ If backlinks or annotations appear stale or missing
 .Bl
 .IP \(bu 4
 To verify metadata integrity after crashes or interruptions
+.El
+.RE
+
+.SS "symlink"
+.PP
+Build (or rebuild) a human\-readable symlink tree at `\f[CR]<repo\-root>/cerbo/\fP`\. Each page with a `\f[CR]cerbo:slug\fP` value is exposed as a relative symlink named after its slug\. Pages that declare a `\f[CR]cerbo:virtualPath\fP` are nested inside corresponding subdirectories\. The tree is rebuilt atomically: a new staging directory is written and then swapped into place so readers always see a consistent state\.
+.PP
+Usage: `\f[CR]cerbo symlink [OPTIONS]\fP`
+.PP
+The command discovers the vault using Git\-style directory traversal: it walks up from the current directory looking for a `\f[CR]\.cerbo/\fP` directory\. You can also specify an explicit vault path with `\f[CR]\-\-vault\fP`\.
+.PP
+Options:
+.RS
+.Bl
+.IP \(bu 4
+`\f[CR]\-\-vault <PATH>\fP` \- Explicit vault path (overrides Git\-style discovery)
+.El
+.Bl
+.IP \(bu 4
+`\f[CR]\-\-json\fP` \- Output result as JSON with objects_scanned, leaves_created, dirs_created
+.El
+.RE
+.PP
+\fBBehavior:\fP
+.RS
+.Bl
+.IP \(bu 4
+Symlinks are always relative (portable when the vault is moved or mounted elsewhere)
+.El
+.Bl
+.IP \(bu 4
+Pages without a `\f[CR]cerbo:slug\fP` are skipped (run `\f[CR]cerbo index\fP` first to backfill slugs)
+.El
+.Bl
+.IP \(bu 4
+Detects leaf\-vs\-leaf and dir\-vs\-leaf collisions and aborts with an error listing all conflicts
+.El
+.Bl
+.IP \(bu 4
+Refuses to wipe `\f[CR]cerbo/\fP` if it contains entries that were not created by cerbo (safe\-wipe guard)
+.El
+.Bl
+.IP \(bu 4
+`\f[CR]cerbo init\fP` adds `\f[CR]/cerbo/\fP` to `\f[CR]\.gitignore\fP` automatically
+.El
+.RE
+.PP
+\fBWhen to use:\fP
+.RS
+.Bl
+.IP \(bu 4
+After `\f[CR]cerbo init\fP` to create the initial symlink tree
+.El
+.Bl
+.IP \(bu 4
+After creating or renaming pages (to refresh the tree)
+.El
+.Bl
+.IP \(bu 4
+After moving the vault to a new location (symlinks are relative, so re\-running fixes any stale links)
 .El
 .RE
 

@@ -4,6 +4,7 @@
 /// from page content. Used by the `cerbo index` CLI command.
 
 use crate::VaultContext;
+use uuid::Uuid;
 
 /// Index all pages across all vaults (two-pass: clear all, rebuild all)
 pub fn index_all_pages(global_ctx: &crate::CerboContext) -> Result<IndexStats, String> {
@@ -138,6 +139,93 @@ impl IndexStats {
 pub struct IndexError {
     pub page_uuid: String,
     pub error_message: String,
+}
+
+/// Backfill `cerbo:slug` into meta.ttl for every page that lacks one.
+/// Returns the count of pages updated.
+pub fn backfill_slugs(vault_ctx: &VaultContext) -> Result<usize, String> {
+    let page_uuids = crate::vault::list_pages_in_vault(&vault_ctx.global, &vault_ctx.vault_path)?;
+    let mut updated = 0;
+
+    for uuid in &page_uuids {
+        let meta_path = vault_ctx.object_path(uuid).join("meta.ttl");
+        if !meta_path.exists() {
+            continue;
+        }
+        let mut meta = crate::object::ObjectMeta::read_from_file(&meta_path)
+            .map_err(|e| format!("backfill_slugs read {}: {}", uuid, e))?;
+        if meta.slug.is_some() {
+            continue;
+        }
+        let parsed_uuid = Uuid::parse_str(uuid).unwrap_or_else(|_| Uuid::new_v4());
+        meta.slug = Some(crate::slug::slugify(&meta.title, parsed_uuid));
+        meta.write_to_file(&meta_path)
+            .map_err(|e| format!("backfill_slugs write {}: {}", uuid, e))?;
+        updated += 1;
+    }
+
+    Ok(updated)
+}
+
+/// Validate virtual paths across all pages in a vault.
+/// Returns a list of `(page_uuid, error_message)` for every page whose
+/// `cerbo:virtualPath` value fails validation.
+pub fn validate_virtual_paths(vault_ctx: &VaultContext) -> Vec<(String, String)> {
+    let Ok(page_uuids) = crate::vault::list_pages_in_vault(&vault_ctx.global, &vault_ctx.vault_path) else {
+        return Vec::new();
+    };
+    let mut errors = Vec::new();
+
+    for uuid in page_uuids {
+        let meta_path = vault_ctx.object_path(&uuid).join("meta.ttl");
+        if !meta_path.exists() {
+            continue;
+        }
+        let Ok(meta) = crate::object::ObjectMeta::read_from_file(&meta_path) else {
+            continue;
+        };
+        if let Some(vp) = meta.virtual_path {
+            if let Err(e) = crate::vault::validate_virtual_path(&vp) {
+                errors.push((uuid, format!("invalid virtualPath {:?}: {}", vp, e)));
+            }
+        }
+    }
+
+    errors
+}
+
+/// Detect path collisions: virtual paths (or slug-derived paths) where two or
+/// more pages would materialise at the same symlink location.
+/// Returns `Vec<(path, Vec<uuid>)>` for each collision.
+pub fn detect_path_collisions(vault_ctx: &VaultContext) -> Vec<(String, Vec<String>)> {
+    let Ok(page_uuids) = crate::vault::list_pages_in_vault(&vault_ctx.global, &vault_ctx.vault_path) else {
+        return Vec::new();
+    };
+
+    let mut path_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+    for uuid in page_uuids {
+        let meta_path = vault_ctx.object_path(&uuid).join("meta.ttl");
+        let Ok(meta) = crate::object::ObjectMeta::read_from_file(&meta_path) else {
+            continue;
+        };
+
+        let effective_path = if let Some(vp) = meta.virtual_path.filter(|s| !s.is_empty()) {
+            let leaf = meta.slug.as_deref().unwrap_or(&uuid);
+            format!("{}/{}", vp, leaf)
+        } else if let Some(s) = meta.slug {
+            s
+        } else {
+            uuid.clone()
+        };
+
+        path_map.entry(effective_path).or_default().push(uuid);
+    }
+
+    path_map
+        .into_iter()
+        .filter(|(_, uuids)| uuids.len() > 1)
+        .collect()
 }
 
 #[cfg(test)]

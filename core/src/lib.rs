@@ -89,9 +89,11 @@ pub mod migration;
 pub mod object;
 pub mod page;
 pub mod paths;
+pub mod slug;
 pub mod state;
 pub mod ui_settings;
 pub mod vault;
+pub mod vault_symlink;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod fixtures;

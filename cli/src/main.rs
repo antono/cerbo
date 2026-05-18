@@ -129,6 +129,18 @@ enum Commands {
         /// Explicit vault path (default: discover from CWD like Git)
         #[arg(long)]
         vault: Option<String>,
+        /// Skip backfilling missing cerbo:slug values
+        #[arg(long)]
+        no_backfill_slug: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Build the human-readable symlink tree at <repo-root>/cerbo/
+    Symlink {
+        /// Explicit vault path (default: discover from CWD like Git)
+        #[arg(long)]
+        vault: Option<String>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -198,6 +210,26 @@ enum PageCommands {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// Ensure `/cerbo/` is present in `.gitignore` at the given repo root.
+fn ensure_gitignore(repo_root: &std::path::Path) -> Result<(), String> {
+    let gitignore_path = repo_root.join(".gitignore");
+    let entry = "/cerbo/\n";
+
+    let existing = std::fs::read_to_string(&gitignore_path).unwrap_or_default();
+    if existing.lines().any(|l| l == "/cerbo/" || l == "cerbo/") {
+        return Ok(());
+    }
+
+    let mut content = existing;
+    if !content.is_empty() && !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(entry);
+
+    std::fs::write(&gitignore_path, content)
+        .map_err(|e| format!("Failed to write .gitignore: {}", e))
 }
 
 fn get_context() -> Result<CerboContext, String> {
@@ -320,6 +352,8 @@ async fn main() -> Result<(), String> {
                     },
                     Err(e) => if !json { println!("Warning: Failed to bundle FOAF: {}", e); },
                 }
+
+                let _ = ensure_gitignore(&current_dir);
 
                 if json {
                     print_json_success("Vault initialized with bundled ontologies");
@@ -482,10 +516,10 @@ async fn main() -> Result<(), String> {
                 println!("Imported ontology from {} with UUID: {}", url, uuid);
             }
         },
-        Commands::Index { page, vault, json } => {
+        Commands::Index { page, vault, no_backfill_slug, json } => {
             use cerbo_core::VaultContext;
             use cerbo_core::metadata_index;
-            
+
             // Discover vault from CWD or use explicit path
             let vault_ctx = if let Some(vault_path) = vault {
                 let path = std::path::PathBuf::from(&vault_path);
@@ -493,30 +527,149 @@ async fn main() -> Result<(), String> {
             } else {
                 VaultContext::from_cwd()?
             };
-            
+
             let stats = if let Some(page_uuid) = page {
-                // Incremental: index single page
                 metadata_index::index_page(&vault_ctx, &page_uuid)?
             } else {
-                // Full rebuild: index all pages in vault
                 metadata_index::index_vault(&vault_ctx)?
             };
-            
+
+            // Backfill missing slugs (full index only, unless --no-backfill-slug)
+            let slugs_backfilled = if !no_backfill_slug {
+                metadata_index::backfill_slugs(&vault_ctx).unwrap_or(0)
+            } else {
+                0
+            };
+
+            // Validate virtual paths and report issues
+            let path_errors = metadata_index::validate_virtual_paths(&vault_ctx);
+            for (uuid, msg) in &path_errors {
+                eprintln!("Warning: page {}: {}", uuid, msg);
+            }
+
+            // Detect and report collisions
+            let collisions = metadata_index::detect_path_collisions(&vault_ctx);
+            for (path, uuids) in &collisions {
+                eprintln!("Warning: symlink collision at {:?}: {:?}", path, uuids);
+            }
+
             if json {
                 print_json(&serde_json::json!({
                     "pages_processed": stats.pages_processed,
                     "links_found": stats.links_found,
                     "annotations_found": stats.annotations_found,
+                    "slugs_backfilled": slugs_backfilled,
+                    "path_errors": path_errors.len(),
+                    "collisions": collisions.len(),
                     "errors": stats.errors.len()
                 }));
             } else {
                 println!("Indexed {} pages", stats.pages_processed);
                 println!("Found {} links, {} annotations", stats.links_found, stats.annotations_found);
+                if slugs_backfilled > 0 {
+                    println!("Backfilled {} missing slugs", slugs_backfilled);
+                }
+                if !path_errors.is_empty() {
+                    eprintln!("Virtual path errors: {}", path_errors.len());
+                }
+                if !collisions.is_empty() {
+                    eprintln!("Symlink collisions detected: {}", collisions.len());
+                }
                 if !stats.errors.is_empty() {
                     eprintln!("Errors: {}", stats.errors.len());
                     for err in &stats.errors {
                         eprintln!("  {}: {}", err.page_uuid, err.error_message);
                     }
+                }
+            }
+        },
+        Commands::Symlink { vault, json } => {
+            use cerbo_core::vault::find_repository_root;
+            use cerbo_core::vault_symlink;
+
+            // Determine the repo root: explicit --vault path or CWD discovery
+            let repo_root = if let Some(vault_path) = vault {
+                let p = std::path::PathBuf::from(&vault_path);
+                if !p.join(".cerbo").is_dir() {
+                    if json {
+                        print_json_error("No .cerbo/ directory at the specified path");
+                    } else {
+                        eprintln!("Error: no .cerbo/ directory at {}", p.display());
+                    }
+                    std::process::exit(1);
+                }
+                p
+            } else {
+                let cwd = std::env::current_dir()
+                    .map_err(|e| format!("Failed to get current directory: {}", e))?;
+                match find_repository_root(&cwd) {
+                    Some(root) => root,
+                    None => {
+                        if json {
+                            print_json_error("Not inside a Cerbo vault (no .cerbo/ found)");
+                        } else {
+                            eprintln!("Error: not inside a Cerbo vault. Run 'cerbo init' or use --vault <path>.");
+                        }
+                        std::process::exit(1);
+                    }
+                }
+            };
+
+            match vault_symlink::materialize(&repo_root) {
+                Ok(report) => {
+                    if json {
+                        print_json(&serde_json::json!({
+                            "objects_scanned": report.objects_scanned,
+                            "leaves_created": report.leaves_created,
+                            "dirs_created": report.dirs_created
+                        }));
+                    } else {
+                        println!(
+                            "Symlink tree built: {} objects, {} symlinks, {} dirs",
+                            report.objects_scanned, report.leaves_created, report.dirs_created
+                        );
+                    }
+                }
+                Err(vault_symlink::SymlinkError::Conflict { collisions }) => {
+                    if json {
+                        let col: Vec<_> = collisions.iter().map(|c| serde_json::json!({
+                            "path": c.path.to_string_lossy(),
+                            "uuids": c.uuids
+                        })).collect();
+                        print_json_error(&format!("Symlink conflicts: {}", serde_json::to_string(&col).unwrap_or_default()));
+                    } else {
+                        eprintln!("Error: symlink conflicts detected:");
+                        for c in &collisions {
+                            eprintln!("  {:?}: {:?}", c.path, c.uuids);
+                        }
+                    }
+                    std::process::exit(1);
+                }
+                Err(vault_symlink::SymlinkError::UnsafeWipe { offenders }) => {
+                    if json {
+                        let off: Vec<_> = offenders.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+                        print_json_error(&format!("Unsafe wipe — non-cerbo entries in cerbo/: {:?}", off));
+                    } else {
+                        eprintln!("Error: cerbo/ contains non-symlink entries not owned by cerbo:");
+                        for p in &offenders {
+                            eprintln!("  {}", p.display());
+                        }
+                        eprintln!("Remove them manually and retry.");
+                    }
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    let msg = match e {
+                        vault_symlink::SymlinkError::Io(io_err) => io_err.to_string(),
+                        vault_symlink::SymlinkError::Other(s) => s,
+                        _ => unreachable!(),
+                    };
+                    if json {
+                        print_json_error(&msg);
+                    } else {
+                        eprintln!("Error: {}", msg);
+                    }
+                    std::process::exit(1);
                 }
             }
         },

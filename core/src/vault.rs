@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -287,5 +287,147 @@ mod tests {
 
         let loaded = state::load_state(&ctx).unwrap();
         assert_eq!(loaded.active_vault_id.as_deref(), Some(vault.id.as_str()));
+    }
+}
+
+// ── Repository discovery ──────────────────────────────────────────────────────
+
+/// Walk upward from `start` looking for a directory containing `.cerbo/`.
+/// Stops at filesystem mount-point boundaries (Unix: different `st_dev`).
+pub fn find_repository_root(start: &Path) -> Option<PathBuf> {
+    let mut current = start.to_path_buf();
+
+    loop {
+        if current.join(".cerbo").is_dir() {
+            return Some(current);
+        }
+
+        let parent = match current.parent() {
+            Some(p) if p != current => p.to_path_buf(),
+            _ => return None,
+        };
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let cur_dev = current.metadata().ok()?.dev();
+            let par_dev = parent.metadata().ok()?.dev();
+            if cur_dev != par_dev {
+                return None;
+            }
+        }
+
+        current = parent;
+    }
+}
+
+// ── Virtual path validation ───────────────────────────────────────────────────
+
+/// Error returned when a cerbo:virtualPath value is malformed.
+#[derive(Debug, PartialEq)]
+pub enum VirtualPathError {
+    LeadingOrTrailingSlash,
+    DotSegment,
+    EmptySegment,
+    NulByte,
+}
+
+impl std::fmt::Display for VirtualPathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LeadingOrTrailingSlash => write!(f, "leading or trailing slash"),
+            Self::DotSegment => write!(f, "dot or dotdot segment"),
+            Self::EmptySegment => write!(f, "empty segment (double slash)"),
+            Self::NulByte => write!(f, "NUL byte"),
+        }
+    }
+}
+
+/// Validate a cerbo:virtualPath string.
+/// Empty string (root) is valid. Otherwise: no leading/trailing '/', no '.' or
+/// '..' segments, no empty segments, no NUL bytes.
+pub fn validate_virtual_path(s: &str) -> Result<(), VirtualPathError> {
+    if s.is_empty() {
+        return Ok(());
+    }
+    if s.contains('\0') {
+        return Err(VirtualPathError::NulByte);
+    }
+    if s.starts_with('/') || s.ends_with('/') {
+        return Err(VirtualPathError::LeadingOrTrailingSlash);
+    }
+    for segment in s.split('/') {
+        if segment.is_empty() {
+            return Err(VirtualPathError::EmptySegment);
+        }
+        if segment == "." || segment == ".." {
+            return Err(VirtualPathError::DotSegment);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_validate_empty_is_valid() {
+        assert!(validate_virtual_path("").is_ok());
+    }
+
+    #[test]
+    fn test_validate_simple_paths() {
+        assert!(validate_virtual_path("notes").is_ok());
+        assert!(validate_virtual_path("notes/rust").is_ok());
+    }
+
+    #[test]
+    fn test_validate_leading_slash() {
+        assert_eq!(validate_virtual_path("/notes"), Err(VirtualPathError::LeadingOrTrailingSlash));
+    }
+
+    #[test]
+    fn test_validate_trailing_slash() {
+        assert_eq!(validate_virtual_path("notes/"), Err(VirtualPathError::LeadingOrTrailingSlash));
+    }
+
+    #[test]
+    fn test_validate_dot_segment() {
+        assert_eq!(validate_virtual_path("notes/./rust"), Err(VirtualPathError::DotSegment));
+        assert_eq!(validate_virtual_path("notes/../rust"), Err(VirtualPathError::DotSegment));
+    }
+
+    #[test]
+    fn test_validate_double_slash() {
+        assert_eq!(validate_virtual_path("notes//rust"), Err(VirtualPathError::EmptySegment));
+    }
+
+    #[test]
+    fn test_validate_nul_byte() {
+        assert_eq!(validate_virtual_path("notes/\0rust"), Err(VirtualPathError::NulByte));
+    }
+
+    #[test]
+    fn test_find_repo_root_at_start() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join(".cerbo")).unwrap();
+        assert_eq!(find_repository_root(temp.path()), Some(temp.path().to_path_buf()));
+    }
+
+    #[test]
+    fn test_find_repo_root_in_ancestor() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join(".cerbo")).unwrap();
+        let child = temp.path().join("a").join("b");
+        std::fs::create_dir_all(&child).unwrap();
+        assert_eq!(find_repository_root(&child), Some(temp.path().to_path_buf()));
+    }
+
+    #[test]
+    fn test_find_repo_root_not_found() {
+        let temp = TempDir::new().unwrap();
+        assert!(find_repository_root(temp.path()).is_none());
     }
 }
