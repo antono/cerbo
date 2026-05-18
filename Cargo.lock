@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "cerbo"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "cerbo-core",
  "clap",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "cerbo-core"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "chrono",
  "notify",
@@ -500,7 +500,7 @@ dependencies = [
 
 [[package]]
 name = "cerbo-desktop"
-version = "0.0.20"
+version = "0.0.21"
 dependencies = [
  "cerbo-core",
  "clap",
