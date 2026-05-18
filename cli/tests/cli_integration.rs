@@ -5,12 +5,21 @@ use tempfile::TempDir;
 struct TestContext {
     #[allow(dead_code)]
     tmp_dir: TempDir,
+    #[allow(dead_code)]
+    xdg_dir: TempDir,
     config_dir: std::path::PathBuf,
     bin_path: std::path::PathBuf,
 }
 
+impl TestContext {
+    fn cmd(&self) -> Command {
+        cerbo_cmd(&self.bin_path, self.xdg_dir.path())
+    }
+}
+
 fn setup() -> TestContext {
     let tmp_dir = TempDir::new().unwrap();
+    let xdg_dir = TempDir::new().unwrap();
     let config_dir = tmp_dir.path().join(".cerbo");
 
     // The binary is in the workspace target/debug directory
@@ -22,6 +31,7 @@ fn setup() -> TestContext {
 
     TestContext {
         tmp_dir,
+        xdg_dir,
         config_dir,
         bin_path,
     }
@@ -31,7 +41,7 @@ fn setup() -> TestContext {
 fn test_init_creates_cerbo_directory() {
     let ctx = setup();
 
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -49,7 +59,7 @@ fn test_init_idempotent() {
     let ctx = setup();
 
     // First init
-    let output1 = Command::new(&ctx.bin_path)
+    let output1 = ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -58,7 +68,7 @@ fn test_init_idempotent() {
     assert!(output1.status.success());
 
     // Second init should succeed (idempotent)
-    let output2 = Command::new(&ctx.bin_path)
+    let output2 = ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -72,13 +82,13 @@ fn test_page_create_and_read() {
     let ctx = setup();
 
     // Init vault
-    let _ = Command::new(&ctx.bin_path)
+    let _ = ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output();
 
     // Create page
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["page", "create", "Test Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -97,7 +107,7 @@ fn test_page_create_and_read() {
     assert!(ctx.config_dir.join("objects").join(&uuid).exists());
 
     // Read page
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["page", "read", &uuid])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -113,12 +123,12 @@ fn test_page_write_and_read() {
     let ctx = setup();
 
     // Init and create
-    let _ = Command::new(&ctx.bin_path)
+    let _ = ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output();
 
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["page", "create", "Editable Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -134,7 +144,7 @@ fn test_page_write_and_read() {
 
     // Write
     let new_content = "# Editable Page\n\nUpdated content here.";
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["page", "write", &uuid, new_content])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -143,7 +153,7 @@ fn test_page_write_and_read() {
     assert!(output.status.success());
 
     // Read back
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["page", "read", &uuid])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -158,12 +168,12 @@ fn test_page_delete() {
     let ctx = setup();
 
     // Init and create
-    let _ = Command::new(&ctx.bin_path)
+    let _ = ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output();
 
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["page", "create", "Page to Delete"])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -178,7 +188,7 @@ fn test_page_delete() {
         .to_string();
 
     // Delete
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["page", "delete", &uuid])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -193,20 +203,20 @@ fn test_page_list() {
     let ctx = setup();
 
     // Init and create several pages
-    let _ = Command::new(&ctx.bin_path)
+    let _ = ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output();
 
     for i in 1..=3 {
-        let _ = Command::new(&ctx.bin_path)
+        let _ = ctx.cmd()
             .args(&["page", "create", &format!("Page {}", i)])
             .current_dir(ctx.tmp_dir.path())
             .output();
     }
 
     // List pages
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["page", "list"])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -224,12 +234,12 @@ fn test_resolve_command() {
     let ctx = setup();
 
     // Init and create
-    let _ = Command::new(&ctx.bin_path)
+    let _ = ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output();
 
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["page", "create", "Resolvable Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -244,7 +254,7 @@ fn test_resolve_command() {
         .to_string();
 
     // Resolve
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["resolve", &uuid])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -261,13 +271,13 @@ fn test_import_url_creates_source() {
     let ctx = setup();
 
     // Init vault
-    let _ = Command::new(&ctx.bin_path)
+    let _ = ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output();
 
     // Import URL as Source
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["import", "https://example.com"])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -294,7 +304,7 @@ fn test_import_url_creates_source() {
     assert!(meta_content.contains(":type :Source"));
 
     // Try to write - should fail
-    let write_output = Command::new(&ctx.bin_path)
+    let write_output = ctx.cmd()
         .args(&["page", "write", &uuid, "Should fail"])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -308,7 +318,7 @@ fn test_import_ontology() {
     let ctx = setup();
 
     // Init vault (this bundles Schema.org and FOAF)
-    let _ = Command::new(&ctx.bin_path)
+    let _ = ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output();
@@ -321,7 +331,7 @@ fn test_import_ontology() {
     assert!(map_content.contains("foaf"));
 
     // Import a new ontology
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["import-ontology", "https://schema.org/version/latest/schema.ttl"])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -342,13 +352,13 @@ fn test_old_vault_not_compatible() {
     std::fs::write(old_slug_dir.join("page.md"), "# Old Style Page\n\nThis is old.\n").unwrap();
 
     // Try to init in the same directory - should create .cerbo/ but NOT recognize old pages
-    let _ = Command::new(&ctx.bin_path)
+    let _ = ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output();
 
     // List pages - should NOT find "old-style-page"
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["page", "list"])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -368,21 +378,21 @@ fn test_index_full_vault_rebuild() {
     let ctx = setup();
 
     // Init vault
-    Command::new(&ctx.bin_path)
+    ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
 
     // Create two pages
-    let output1 = Command::new(&ctx.bin_path)
+    let output1 = ctx.cmd()
         .args(&["page", "create", "Page 1"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
     let uuid1 = extract_uuid(&output1.stdout);
 
-    let output2 = Command::new(&ctx.bin_path)
+    let output2 = ctx.cmd()
         .args(&["page", "create", "Page 2"])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -395,7 +405,7 @@ fn test_index_full_vault_rebuild() {
     std::fs::write(&page1_path, content).unwrap();
 
     // Run index
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .arg("index")
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -418,14 +428,14 @@ fn test_index_single_page_incremental() {
     let ctx = setup();
 
     // Init vault
-    Command::new(&ctx.bin_path)
+    ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
 
     // Create page with annotation
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["page", "create", "Test Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -437,7 +447,7 @@ fn test_index_single_page_incremental() {
     std::fs::write(&page_path, "Some [knowledge]{schema:Thing} here").unwrap();
 
     // Run incremental index on single page
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["index", "--page", &uuid])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -460,14 +470,14 @@ fn test_index_with_explicit_vault_path() {
     let ctx = setup();
 
     // Init vault
-    Command::new(&ctx.bin_path)
+    ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
 
     // Create page
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["page", "create", "Test Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -475,7 +485,7 @@ fn test_index_with_explicit_vault_path() {
     assert!(output.status.success());
 
     // Run index from different directory with explicit --vault path
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["index", "--vault", ctx.tmp_dir.path().to_str().unwrap()])
         .current_dir("/tmp")
         .output()
@@ -491,14 +501,14 @@ fn test_index_git_style_discovery_from_subdirectory() {
     let ctx = setup();
 
     // Init vault
-    Command::new(&ctx.bin_path)
+    ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
 
     // Create page
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["page", "create", "Test Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
@@ -510,7 +520,7 @@ fn test_index_git_style_discovery_from_subdirectory() {
     std::fs::create_dir_all(&subdir).unwrap();
 
     // Run index from subdirectory (should discover vault like Git)
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .arg("index")
         .current_dir(&subdir)
         .output()
@@ -526,21 +536,21 @@ fn test_index_json_output() {
     let ctx = setup();
 
     // Init vault
-    Command::new(&ctx.bin_path)
+    ctx.cmd()
         .arg("init")
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
 
     // Create page
-    Command::new(&ctx.bin_path)
+    ctx.cmd()
         .args(&["page", "create", "Test Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
 
     // Run index with --json
-    let output = Command::new(&ctx.bin_path)
+    let output = ctx.cmd()
         .args(&["index", "--json"])
         .current_dir(ctx.tmp_dir.path())
         .output()
