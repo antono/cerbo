@@ -56,6 +56,8 @@ let
     TAURI_ENV_DEBUG = "false";
 
     postInstall = ''
+      rm -f $out/bin/cerbo
+
       # Install desktop file
       mkdir -p $out/share/applications
       cp src-tauri/cerbo-desktop.desktop $out/share/applications/
