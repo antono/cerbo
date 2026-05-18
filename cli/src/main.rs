@@ -722,13 +722,15 @@ async fn main() -> Result<(), String> {
                         print_json(&serde_json::json!({
                             "objects_scanned": report.objects_scanned,
                             "leaves_created": report.leaves_created,
-                            "dirs_created": report.dirs_created
+                            "dirs_created": report.dirs_created,
+                            "path": vault_root.join("cerbo").to_string_lossy()
                         }));
                     } else {
                         println!(
                             "Symlink tree built: {} objects, {} symlinks, {} dirs",
                             report.objects_scanned, report.leaves_created, report.dirs_created
                         );
+                        println!("{}", vault_root.join("cerbo").display());
                     }
                 }
                 Err(vault_symlink::SymlinkError::Conflict { collisions }) => {

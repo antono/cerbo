@@ -124,14 +124,14 @@ pub fn materialize(vault_root: &Path) -> Result<MaterializeReport, SymlinkError>
             vp_dir
         };
 
-        let leaf_path = leaf_parent.join(&entry.slug);
-        let object_dir = vault_root.join(".cerbo").join("objects").join(&entry.uuid);
+        let leaf_path = leaf_parent.join(format!("{}.md", &entry.slug));
+        let page_file = vault_root.join(".cerbo").join("objects").join(&entry.uuid).join("page.md");
 
-        let rel_target = pathdiff::diff_paths(&object_dir, &leaf_parent)
+        let rel_target = pathdiff::diff_paths(&page_file, &leaf_parent)
             .ok_or_else(|| SymlinkError::Other(format!(
                 "cannot compute relative path: {} → {}",
                 leaf_parent.display(),
-                object_dir.display()
+                page_file.display()
             )))?;
 
         create_symlink(&leaf_path, &rel_target)?;
@@ -194,7 +194,13 @@ fn build_plan(vault_root: &Path) -> Result<Vec<PlanEntry>, SymlinkError> {
                 "failed to read {}: {}", meta_path.display(), e
             )))?;
 
-        if matches!(meta.object_type, ObjectType::Ontology) {
+        if !matches!(meta.object_type, ObjectType::Product | ObjectType::Source) {
+            continue;
+        }
+
+        let page_md = path.join("page.md");
+        if !page_md.exists() {
+            eprintln!("cerbo symlink: skipping {uuid}: page.md not found");
             continue;
         }
 
@@ -211,12 +217,13 @@ fn build_plan(vault_root: &Path) -> Result<Vec<PlanEntry>, SymlinkError> {
     Ok(plan)
 }
 
-/// Returns the rendered path for a plan entry: `<virtual_path>/<slug>` or just `<slug>`.
+/// Returns the rendered path for a plan entry: `<virtual_path>/<slug>.md` or just `<slug>.md`.
 fn rendered_path(entry: &PlanEntry) -> PathBuf {
+    let leaf = format!("{}.md", &entry.slug);
     if entry.virtual_path.is_empty() {
-        PathBuf::from(&entry.slug)
+        PathBuf::from(leaf)
     } else {
-        PathBuf::from(&entry.virtual_path).join(&entry.slug)
+        PathBuf::from(&entry.virtual_path).join(leaf)
     }
 }
 
@@ -408,13 +415,13 @@ mod tests {
         let report = materialize(&repo).unwrap();
         assert_eq!(report.leaves_created, 1);
 
-        let leaf = repo.join("cerbo").join("rust-ownership");
+        let leaf = repo.join("cerbo").join("rust-ownership.md");
         assert!(leaf.exists(), "leaf symlink should exist");
         // Verify it's a symlink
         assert!(fs::symlink_metadata(&leaf).unwrap().file_type().is_symlink());
-        // Verify it resolves to the object dir
+        // Verify it resolves to page.md, not the object directory
         let target = fs::canonicalize(&leaf).unwrap();
-        assert!(target.ends_with("aaaa-1111"));
+        assert!(target.ends_with("page.md"));
     }
 
     #[test]
@@ -425,7 +432,7 @@ mod tests {
 
         materialize(&repo).unwrap();
 
-        let leaf = repo.join("cerbo").join("notes").join("rust").join("lifetimes");
+        let leaf = repo.join("cerbo").join("notes").join("rust").join("lifetimes.md");
         assert!(leaf.exists(), "nested leaf should exist at {}", leaf.display());
     }
 
@@ -465,7 +472,7 @@ mod tests {
         fs::rename(&repo, &new_repo).unwrap();
 
         // Symlink should still resolve
-        let leaf = new_repo.join("cerbo").join("a").join("b").join("page");
+        let leaf = new_repo.join("cerbo").join("a").join("b").join("page.md");
         assert!(fs::canonicalize(&leaf).is_ok(), "symlink must resolve after move");
     }
 
@@ -480,13 +487,14 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_plan_dir_vs_leaf_conflict() {
+    fn test_validate_plan_slug_same_as_vpath_no_longer_conflicts() {
+        // With .md extension, slug "notes" → leaf "notes.md" and vpath "notes" → directory "notes/".
+        // These can coexist on the filesystem, so this is no longer a conflict.
         let plan = vec![
             PlanEntry { uuid: "u1".into(), virtual_path: "".into(), slug: "notes".into() },
             PlanEntry { uuid: "u2".into(), virtual_path: "notes".into(), slug: "rust".into() },
         ];
-        let err = validate_plan(&plan).unwrap_err();
-        assert!(matches!(err, SymlinkError::Conflict { .. }));
+        assert!(validate_plan(&plan).is_ok());
     }
 
     #[test]
@@ -505,5 +513,61 @@ mod tests {
 
         let err = safe_wipe_check(&cerbo_dir, &repo).unwrap_err();
         assert!(matches!(err, SymlinkError::UnsafeWipe { .. }));
+    }
+
+    fn make_typed_object(repo: &Path, uuid: &str, type_name: &str, slug: &str, with_page: bool) {
+        let obj_dir = repo.join(".cerbo").join("objects").join(uuid);
+        fs::create_dir_all(&obj_dir).unwrap();
+        if with_page {
+            fs::write(obj_dir.join("page.md"), "content").unwrap();
+        }
+        let ttl = format!(
+            "@prefix : <cerbo://ontology/> .\n@prefix schema: <cerbo://ontology/schema/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\n<cerbo://objects/{uuid}>\n    :type :{type_name} ;\n    :title \"Test\" ;\n    schema:dateCreated \"2026-01-01T00:00:00Z\"^^xsd:dateTime ;\n    schema:dateModified \"2026-01-01T00:00:00Z\"^^xsd:dateTime ;\n    cerbo:slug \"{slug}\" .\n"
+        );
+        fs::write(obj_dir.join("meta.ttl"), ttl).unwrap();
+    }
+
+    #[test]
+    fn test_attachment_produces_no_symlink() {
+        let temp = TempDir::new().unwrap();
+        let repo = make_repo(&temp);
+        make_typed_object(&repo, "attach-0001", "Attachment", "my-file", true);
+        make_object(&repo, "page-0001", "A Page", Some("a-page"), None);
+
+        let report = materialize(&repo).unwrap();
+        assert_eq!(report.leaves_created, 1, "only the page should be linked");
+        assert!(!repo.join("cerbo").join("my-file.md").exists(), "attachment must not be symlinked");
+        assert!(repo.join("cerbo").join("a-page.md").exists(), "page must be symlinked");
+    }
+
+    #[test]
+    fn test_product_without_page_md_is_skipped() {
+        let temp = TempDir::new().unwrap();
+        let repo = make_repo(&temp);
+        make_typed_object(&repo, "nopg-0001", "Product", "no-page", false);
+        make_object(&repo, "page-0002", "Good Page", Some("good-page"), None);
+
+        let report = materialize(&repo).unwrap();
+        assert_eq!(report.leaves_created, 1, "object without page.md must be skipped");
+        assert!(!repo.join("cerbo").join("no-page.md").exists());
+        assert!(repo.join("cerbo").join("good-page.md").exists());
+    }
+
+    #[test]
+    fn test_symlink_target_is_page_md_not_directory() {
+        let temp = TempDir::new().unwrap();
+        let repo = make_repo(&temp);
+        make_object(&repo, "eeee-5555", "Target Test", Some("target-test"), None);
+
+        materialize(&repo).unwrap();
+
+        let leaf = repo.join("cerbo").join("target-test.md");
+        let target = fs::canonicalize(&leaf).unwrap();
+        assert!(
+            target.ends_with("page.md"),
+            "expected target to end with page.md, got: {}",
+            target.display()
+        );
+        assert!(target.is_file(), "target must be a file, not a directory");
     }
 }

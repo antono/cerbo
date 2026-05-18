@@ -138,7 +138,7 @@ Options:
 
 ## symlink
 
-Build (or rebuild) a human-readable symlink tree at `<repo-root>/cerbo/`. Each page with a `cerbo:slug` value is exposed as a relative symlink named after its slug. Pages that declare a `cerbo:virtualPath` are nested inside corresponding subdirectories. The tree is rebuilt atomically: a new staging directory is written and then swapped into place so readers always see a consistent state.
+Build (or rebuild) a human-readable symlink tree at `<repo-root>/cerbo/`. Each page (Product or Source object) with a `cerbo:slug` value is exposed as a relative symlink named `<slug>.md` pointing directly to the page file inside the object store. Pages that declare a `cerbo:virtualPath` are nested inside corresponding subdirectories. The tree is rebuilt atomically: a new staging directory is written and then swapped into place so readers always see a consistent state.
 
 Usage: `cerbo symlink [OPTIONS]`
 
@@ -150,6 +150,8 @@ Options:
 
 **Behavior:**
 - Symlinks are always relative (portable when the vault is moved or mounted elsewhere)
+- Only Product and Source objects are linked; Attachment and Ontology objects are skipped
+- Objects missing `page.md` are skipped with a warning on stderr
 - Pages without a `cerbo:slug` are skipped (run `cerbo index` first to backfill slugs)
 - Detects leaf-vs-leaf and dir-vs-leaf collisions and aborts with an error listing all conflicts
 - Refuses to wipe `cerbo/` if it contains entries that were not created by cerbo (safe-wipe guard)
