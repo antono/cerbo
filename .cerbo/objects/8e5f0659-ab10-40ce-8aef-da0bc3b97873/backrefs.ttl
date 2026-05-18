@@ -1,0 +1,4 @@
+@prefix : <cerbo://ontology/> .
+
+<cerbo://objects/<uuid>>
+    :hasBacklink <cerbo://objects/none> .
