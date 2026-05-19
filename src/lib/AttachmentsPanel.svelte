@@ -3,23 +3,23 @@
   import { invoke } from '@tauri-apps/api/core';
   import { FileText, Trash2, Paperclip, ExternalLink } from 'lucide-svelte';
 
-  let { slug }: { slug: string } = $props();
+  let { uuid }: { uuid: string } = $props();
   let loading = $state(false);
 
   async function refreshAttachments() {
     loading = true;
-    await loadAttachments(slug);
+    await loadAttachments(uuid);
     loading = false;
   }
 
   async function deleteAttachment(filename: string) {
-    if (!app.activeVaultId || !slug) return;
+    if (!app.activeVaultId || !uuid) return;
     if (!confirm(`Are you sure you want to delete "${filename}"?`)) return;
 
     try {
       await invoke('attachment_delete', {
         vaultId: app.activeVaultId,
-        slug,
+        uuid,
         filename
       });
       await refreshAttachments();
@@ -29,11 +29,11 @@
   }
 
   async function openAttachment(filename: string) {
-    if (!app.activeVaultId || !slug) return;
+    if (!app.activeVaultId || !uuid) return;
     try {
       await invoke('attachment_open', {
         vaultId: app.activeVaultId,
-        slug,
+        uuid,
         filename
       });
     } catch (e) {
@@ -50,7 +50,7 @@
   }
 
   $effect(() => {
-    if (slug) {
+    if (uuid) {
       refreshAttachments();
     }
   });

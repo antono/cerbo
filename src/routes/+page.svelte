@@ -78,10 +78,10 @@
         tabindex="-1"
       >
         <div class="panel-section">
-          <RightSidebarPanel slug={app.currentUuid} />
+          <RightSidebarPanel uuid={app.currentUuid} />
         </div>
         <div class="panel-section">
-          <AttachmentsPanel slug={app.currentUuid} />
+          <AttachmentsPanel uuid={app.currentUuid} />
         </div>
       </aside>
     {/if}

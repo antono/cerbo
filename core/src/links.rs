@@ -5,9 +5,9 @@ use std::path::PathBuf;
 
 // ── Link Extraction ─────────────────────────────────────
 
-/// Extract cerbo://<uuid> links from page content
+/// Extract cerbo://<uuid> links from page content (handles both cerbo://<uuid> and cerbo://objects/<uuid>)
 pub fn extract_cerbo_links(content: &str) -> Vec<String> {
-    let re = Regex::new(r"cerbo://([a-z0-9-]+)").unwrap();
+    let re = Regex::new(r"cerbo://(?:objects/)?([a-fA-F0-9-]+)").unwrap();
     re.captures_iter(content)
         .map(|cap| cap[1].to_string())
         .collect()
@@ -212,12 +212,12 @@ mod tests {
 
     #[test]
     fn test_extract_cerbo_links() {
-        let content = "Links to cerbo://uuid-1 and cerbo://uuid-2 and another cerbo://uuid-3";
+        let content = "Links to cerbo://1e5d7dc7-a34c-4a2a-aa49-8bfe2b9805b6 and cerbo://objects/10270714-7005-4627-8b5e-ac75a30c1990 and another cerbo://f7e435db-9740-4a2a-8e57-b439c4f8bb18";
         let links = extract_cerbo_links(content);
         assert_eq!(links.len(), 3);
-        assert!(links.contains(&"uuid-1".to_string()));
-        assert!(links.contains(&"uuid-2".to_string()));
-        assert!(links.contains(&"uuid-3".to_string()));
+        assert!(links.contains(&"1e5d7dc7-a34c-4a2a-aa49-8bfe2b9805b6".to_string()));
+        assert!(links.contains(&"10270714-7005-4627-8b5e-ac75a30c1990".to_string()));
+        assert!(links.contains(&"f7e435db-9740-4a2a-8e57-b439c4f8bb18".to_string()));
     }
 
     #[test]
