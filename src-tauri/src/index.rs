@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, State};
 
 pub struct WatcherState {
+    #[allow(dead_code)]
     pub watcher: Option<notify::RecommendedWatcher>,
 }
 
