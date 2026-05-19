@@ -1,5 +1,7 @@
-use cerbo_core::{CerboContext, object::{object_create, object_write, ObjectType}, index::index_load};
+use cerbo_core::{CerboContext, object::{object_create, object_write, ObjectType}, index::index_load, links};
 use clap::{Parser, Subcommand};
+use regex::Regex;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -98,10 +100,13 @@ fn migrate_vault(vault_path: &Path, dry_run: bool, force: bool) -> Result<(), St
 
     let mut migrated = 0;
     let mut failed = 0;
+    let mut title_to_uuid = std::collections::HashMap::new();
 
-    for slug_dir in slug_dirs {
-        match migrate_page(&ctx, vault_path, &slug_dir, dry_run) {
-            Ok(uuid) => {
+    // First pass: migrate pages and build title-to-UUID map
+    for slug_dir in slug_dirs.iter() {
+        match migrate_page(&ctx, vault_path, slug_dir, dry_run, &title_to_uuid) {
+            Ok((uuid, title)) => {
+                title_to_uuid.insert(title.clone(), uuid.clone());
                 println!("✓ Migrated: {} → {}", slug_dir.display(), uuid);
                 migrated += 1;
             }
@@ -112,13 +117,21 @@ fn migrate_vault(vault_path: &Path, dry_run: bool, force: bool) -> Result<(), St
         }
     }
 
+    // Second pass: convert wikilinks and generate backrefs (only if not dry-run)
+    if !dry_run {
+        for (title, uuid) in &title_to_uuid {
+            if let Err(e) = process_links_for_object(&ctx, uuid, &title_to_uuid) {
+                eprintln!("Warning: Failed to process links for {}: {}", title, e);
+            }
+        }
+    }
+
     println!("\nMigration complete: {} migrated, {} failed.", migrated, failed);
 
     if !dry_run && migrated >0 {
         println!("\nNext steps:");
         println!("1. Run 'cerbo-migrate verify' to check the migration");
-        println!("2. Run 'cerbo backlinks <uuid>' to regenerate backlinks");
-        println!("3. Review the migrated content in .cerbo/objects/");
+        println!("2. Review the migrated content in .cerbo/objects/");
         if failed == 0 {
             println!("\n✓ All pages migrated and old directories removed.");
         }
@@ -154,7 +167,13 @@ fn find_slug_directories(vault_path: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 /// Migrate a single page from slug-based to UUID-based storage
-fn migrate_page(ctx: &CerboContext, _vault_path: &Path, slug_dir: &Path, dry_run: bool) -> Result<String, String> {
+fn migrate_page(
+    ctx: &CerboContext,
+    _vault_path: &Path,
+    slug_dir: &Path,
+    dry_run: bool,
+    _title_to_uuid: &std::collections::HashMap<String, String>,
+) -> Result<(String, String), String> {
     // Read page.md content
     let page_md_path = slug_dir.join("page.md");
     let content = fs::read_to_string(&page_md_path)
@@ -166,13 +185,13 @@ fn migrate_page(ctx: &CerboContext, _vault_path: &Path, slug_dir: &Path, dry_run
 
     if dry_run {
         println!("[DRY RUN] Would migrate: {} (title: {})", slug_dir.display(), title);
-        return Ok("dry-run-uuid".to_string());
+        return Ok(("dry-run-uuid".to_string(), title));
     }
 
     // Create UUID object
     let uuid = object_create(ctx, None, ObjectType::Product, title.clone())?;
 
-    // Write content to new location
+    // Write content to new location (without link conversion - will be done in second pass)
     object_write(ctx, &uuid, &content)?;
 
     // Copy assets/ directory if it exists
@@ -205,13 +224,11 @@ fn migrate_page(ctx: &CerboContext, _vault_path: &Path, slug_dir: &Path, dry_run
     }
 
     // Remove old slug directory after successful migration
-    if !dry_run {
-        fs::remove_dir_all(slug_dir)
-            .map_err(|e| format!("Failed to remove old directory: {}", e))?;
-        println!("  → Removed old directory");
-    }
+    fs::remove_dir_all(slug_dir)
+        .map_err(|e| format!("Failed to remove old directory: {}", e))?;
+    println!("  → Removed old directory");
 
-    Ok(uuid)
+    Ok((uuid, title))
 }
 
 /// Extract title from markdown content (first # heading)
@@ -243,6 +260,81 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
             fs::copy(&path, &dest_path)
                 .map_err(|e| format!("Failed to copy file: {}", e))?;
         }
+    }
+
+    Ok(())
+}
+
+/// Process links in a migrated object: convert wikilinks and generate backrefs.ttl
+fn process_links_for_object(
+    ctx: &CerboContext,
+    uuid: &str,
+    title_to_uuid: &std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    let obj_dir = cerbo_core::object::object_path(ctx, uuid);
+    let page_md = obj_dir.join("page.md");
+
+    if !page_md.exists() {
+        return Ok(());
+    }
+
+    let mut content = fs::read_to_string(&page_md)
+        .map_err(|e| format!("Failed to read page.md: {}", e))?;
+
+    // Extract wikilinks and convert them
+    let wikilinks = links::extract_wikilinks(&content);
+    let mut converted_uuids = HashSet::new();
+    let mut unresolved_links = Vec::new();
+
+    for wikilink_title in wikilinks {
+        if let Some(target_uuid) = title_to_uuid.get(&wikilink_title) {
+            // Convert [[Title]] to [Title](cerbo://<uuid>)
+            let pattern = format!("\\[\\[{}\\]\\]", regex::escape(&wikilink_title));
+            let replacement = format!("[{}](cerbo://{})", wikilink_title, target_uuid);
+            content = Regex::new(&pattern)
+                .unwrap_or_else(|_| Regex::new(r"(?!)").unwrap()) // fallback regex that matches nothing
+                .replace_all(&content, replacement.as_str())
+                .to_string();
+            converted_uuids.insert(target_uuid.clone());
+        } else {
+            unresolved_links.push(wikilink_title);
+        }
+    }
+
+    // Write converted content back
+    fs::write(&page_md, &content)
+        .map_err(|e| format!("Failed to write converted page.md: {}", e))?;
+
+    // Generate backrefs.ttl with extracted links
+    let extracted_links = links::extract_cerbo_links(&content);
+    if !extracted_links.is_empty() {
+        let backrefs_path = obj_dir.join("backrefs.ttl");
+        let mut lines = vec![
+            "@prefix : <cerbo://ontology/> .".to_string(),
+            "".to_string(),
+            format!("<cerbo://objects/{}>", uuid),
+        ];
+
+        for (idx, link_uuid) in extracted_links.iter().enumerate() {
+            if idx < extracted_links.len() - 1 {
+                lines.push(format!("    :linksTo <cerbo://objects/{}> ;", link_uuid));
+            } else {
+                lines.push(format!("    :linksTo <cerbo://objects/{}> .", link_uuid));
+            }
+        }
+
+        let backrefs_content = lines.join("\n") + "\n";
+        fs::write(&backrefs_path, backrefs_content)
+            .map_err(|e| format!("Failed to write backrefs.ttl: {}", e))?;
+    }
+
+    // Warn about unresolved links
+    if !unresolved_links.is_empty() {
+        eprintln!(
+            "Warning: {} has unresolved wikilinks: {}",
+            uuid,
+            unresolved_links.join(", ")
+        );
     }
 
     Ok(())

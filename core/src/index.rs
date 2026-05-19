@@ -59,7 +59,7 @@ pub fn index_add(ctx: &CerboContext, title: &str, uuid: &str) -> Result<(), Stri
 
     index.title_to_uuid.insert(title.to_string(), uuid.to_string());
 
-    let relative = format!("objects/{}//", uuid);
+    let relative = format!("objects/{}/", uuid);
     index.uuid_to_path.insert(uuid.to_string(), relative);
 
     index_save(ctx, &index)
