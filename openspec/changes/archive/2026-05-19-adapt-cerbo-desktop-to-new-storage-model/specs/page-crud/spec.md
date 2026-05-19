@@ -52,9 +52,3 @@ The system SHALL return a list of all pages by scanning `.cerbo/objects/` direct
 - **WHEN** `page_list` is invoked with any extra parameter
 - **THEN** the extra parameter is ignored
 - **THEN** all pages in the configured objects directory are returned
-
-## REMOVED Requirements
-
-### Requirement: slug_from_title desktop command
-**Reason**: The slug concept does not exist in desktop page navigation. Pages are identified by UUID. The `slug_from_title` Tauri command and its `src-tauri/src/slug.rs` module are dead code.
-**Migration**: No replacement needed in the desktop. Slug derivation remains in `cerbo_core::slug` for use by the CLI symlink and index subsystems only.

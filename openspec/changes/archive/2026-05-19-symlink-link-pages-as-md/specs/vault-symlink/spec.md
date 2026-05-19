@@ -18,25 +18,6 @@ The system SHALL build the symlink tree by reading each Product or Source object
 - **THEN** `<vault-root>/cerbo/notes/rust/` is a single real directory
 - **THEN** both `ownership.md` and `lifetimes.md` exist as symlinks inside it
 
-### Requirement: Skip non-page objects
-
-The system SHALL materialise only objects whose `meta.ttl` declares `type :Product` or `type :Source`. Objects of type `:Ontology` and `:Attachment` SHALL be skipped. Ontology objects exist for internal vocabulary registration; Attachment objects have no `page.md` content for editors to open.
-
-#### Scenario: Ontology object is not symlinked
-- **WHEN** the repository contains an ontology object and a page object
-- **THEN** the page is symlinked under `<vault-root>/cerbo/`
-- **THEN** the ontology object has no corresponding symlink anywhere in `<vault-root>/cerbo/`
-
-#### Scenario: Attachment object is not symlinked
-- **WHEN** the repository contains an attachment object and a page object
-- **THEN** the page is symlinked under `<vault-root>/cerbo/`
-- **THEN** the attachment object has no corresponding symlink anywhere in `<vault-root>/cerbo/`
-
-#### Scenario: Object missing page.md is skipped with warning
-- **WHEN** a Product or Source object has no `page.md` file in its object directory
-- **THEN** the object is skipped (no symlink created)
-- **THEN** a warning is written to stderr identifying the UUID
-
 ### Requirement: Symlink target form
 
 The system SHALL set each leaf symlink's target to the page file `<vault-root>/.cerbo/objects/<uuid>/page.md` (NOT to the object directory). The target SHALL be expressed as a relative path computed from the symlink's parent directory.
@@ -57,3 +38,24 @@ The system SHALL set each leaf symlink's target to the page file `<vault-root>/.
 #### Scenario: Repository is portable
 - **WHEN** the repository directory is moved (e.g. `mv my-notes /backup/my-notes`)
 - **THEN** every leaf symlink continues to resolve correctly without rebuild
+
+## ADDED Requirements
+
+### Requirement: Skip non-page objects
+
+The system SHALL materialise only objects whose `meta.ttl` declares `type :Product` or `type :Source`. Objects of type `:Ontology` and `:Attachment` SHALL be skipped. Ontology objects exist for internal vocabulary registration; Attachment objects have no `page.md` content for editors to open.
+
+#### Scenario: Ontology object is not symlinked
+- **WHEN** the repository contains an ontology object and a page object
+- **THEN** the page is symlinked under `<vault-root>/cerbo/`
+- **THEN** the ontology object has no corresponding symlink anywhere in `<vault-root>/cerbo/`
+
+#### Scenario: Attachment object is not symlinked
+- **WHEN** the repository contains an attachment object and a page object
+- **THEN** the page is symlinked under `<vault-root>/cerbo/`
+- **THEN** the attachment object has no corresponding symlink anywhere in `<vault-root>/cerbo/`
+
+#### Scenario: Object missing page.md is skipped with warning
+- **WHEN** a Product or Source object has no `page.md` file in its object directory
+- **THEN** the object is skipped (no symlink created)
+- **THEN** a warning is written to stderr identifying the UUID

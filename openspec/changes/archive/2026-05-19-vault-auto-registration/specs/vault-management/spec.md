@@ -24,8 +24,6 @@ The system SHALL provide `cerbo vault approve <ID> [--json]` as a `vault` subcom
 - **WHEN** user runs `cerbo vault approve <id> --json`
 - **THEN** output is `{"success": true, "message": "..."}` on success
 
-## MODIFIED Requirements
-
 ### Requirement: vault remove works on both registries
 The system SHALL allow `cerbo vault remove <id>` to remove a vault from either the manual or auto registry, searching both files. The command SHALL succeed regardless of which file the vault is in.
 

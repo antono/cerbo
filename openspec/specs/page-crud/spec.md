@@ -66,19 +66,25 @@ The system SHALL provide a unified editor interface using a tabbed layout (e.g.,
 - **THEN** the system SHALL switch to the "Preview" mode
 
 ### Requirement: Write page
-The system SHALL write updated markdown content to a page's `page.md` file atomically. The system SHALL extract `cerbo://<uuid>` links to `relations.ttl` and HackMD annotations to `annotations.ttl`. The system SHALL NOT write to `type: :Source` pages (read-only).
+The system SHALL write updated markdown content to a page's `page.md` file atomically via `cerbo_core::links::page_write_with_links`. The system SHALL update `backrefs.ttl` on all TARGET objects whose link status changes as a result of this write. The system SHALL NOT write to `type: :Source` pages (read-only).
 
-#### Scenario: Save page content
-- **WHEN** the frontend provides a UUID and updated markdown content
-- **THEN** the system writes the content to `.cerbo/objects/<uuid>/page.md`
-- **THEN** outgoing `cerbo://` links are extracted to `relations.ttl`
-- **THEN** HackMD `[Text]{prefix:Type}` annotations are extracted to `annotations.ttl`
+#### Scenario: Save page content updates backrefs
+- **WHEN** the frontend provides a UUID and updated markdown content via `page_write`
+- **THEN** the Tauri command calls `page_write_with_links(ctx, uuid, content)`
+- **THEN** the content is written to `.cerbo/objects/<uuid>/page.md`
+- **THEN** outgoing `cerbo://` links are extracted from the new content
+- **THEN** `backrefs.ttl` is updated on each target object to reflect added or removed links
 - **THEN** `meta.ttl` `schema:dateModified` is updated
 
 #### Scenario: Write to source type (read-only)
 - **WHEN** the user attempts to write to a page with `type: :Source` in `meta.ttl`
 - **THEN** the system SHALL return an error "Cannot write to source type (read-only)"
 - **THEN** no changes are written to disk
+
+#### Scenario: Link removed on save clears backref
+- **WHEN** a page previously linked to `cerbo://<uuid-b>` and the user saves without that link
+- **THEN** `page_write_with_links` detects the removed link
+- **THEN** `.cerbo/objects/<uuid-b>/backrefs.ttl` SHALL NOT contain the source page's UUID
 
 ### Requirement: Delete page
 The system SHALL delete a page by removing its entire `.cerbo/objects/<uuid>/` directory. The system SHALL NOT delete `type: :Source` pages. This operation SHALL be irreversible and MUST require confirmation via a modal dialog.
@@ -97,14 +103,18 @@ The system SHALL delete a page by removing its entire `.cerbo/objects/<uuid>/` d
 - **THEN** no files or folders are removed
 
 ### Requirement: Rename page
-The system SHALL rename a page by updating its title (H1 heading in `page.md`) and its `:title` in `meta.ttl`. The page's UUID and directory location SHALL NOT change. The UI SHALL provide a focused modal dialog showing current metadata.
+The system SHALL rename a page by updating its `:title` in `meta.ttl` and its H1 heading in `page.md` using the `page_update_title(uuid, newTitle)` Tauri command. The page's UUID and directory location SHALL NOT change. The UI SHALL provide a focused modal dialog showing the current title. The former slug-based `page_rename` command SHALL NOT be used.
 
-#### Scenario: Rename page title
-- **WHEN** the user provides a new title "Advanced Rust" for a page
-- **THEN** the H1 heading in `page.md` is updated to `# Advanced Rust`
-- **THEN** the `:title` in `meta.ttl` is updated to "Advanced Rust"
-- **THEN** `index.json` `title_to_uuid` is updated to map "Advanced Rust" to the page's UUID
+#### Scenario: Rename page via page_update_title
+- **WHEN** the user provides a new title "Advanced Rust" for a page via the rename dialog
+- **THEN** `page_update_title` updates `:title` in `meta.ttl` to "Advanced Rust"
+- **THEN** the first H1 heading in `page.md` is updated to `# Advanced Rust`
 - **THEN** the UUID and directory location SHALL NOT change
+- **THEN** `page_list` subsequently returns the updated title for this UUID
+
+#### Scenario: page_rename command is not registered
+- **WHEN** any caller invokes `page_rename`
+- **THEN** the call SHALL fail — the command is not registered in the Tauri invoke handler
 
 ### Requirement: Bidirectional Title Sync
 The system SHALL maintain synchronization between the page's metadata (title in `meta.ttl`) and the first H1 heading in its markdown content.
@@ -129,13 +139,18 @@ The system SHALL ensure that every page has an H1 heading in its markdown conten
 - **THEN** the system SHALL prepend the inferred title as an H1 heading to the markdown content before writing to disk
 
 ### Requirement: List pages
-The system SHALL return a list of all pages by scanning `.cerbo/objects/` directories that contain `page.md` and have `type: :Page` or `type: :Source` in `meta.ttl`.
+The system SHALL return a list of all pages by scanning `.cerbo/objects/` directories that contain `page.md`. Each entry SHALL include `uuid` and `title`. The command SHALL NOT accept a `vaultId` parameter — page storage is global within the app context.
 
-#### Scenario: List pages in a vault
-- **WHEN** the frontend requests the page list
-- **THEN** the system returns one entry per object with `page.md` and valid page type
-- **THEN** each entry includes UUID, title (from `meta.ttl`), and type
-- **THEN** objects without `page.md` (attachments, ontologies without page) are excluded
+#### Scenario: page_list returns uuid entries
+- **WHEN** the frontend calls `invoke('page_list')` without a `vaultId`
+- **THEN** the system returns one entry per object with `page.md` and a valid page type
+- **THEN** each entry includes `uuid` (UUID v4 string) and `title` (from `meta.ttl`)
+- **THEN** no entry includes a `slug` field
+
+#### Scenario: page_list ignores vaultId parameter
+- **WHEN** `page_list` is invoked with any extra parameter
+- **THEN** the extra parameter is ignored
+- **THEN** all pages in the configured objects directory are returned
 
 ### Requirement: Import source page
 The system SHALL import a URL as a new page with `type: :Source` (read-only). The system SHALL fetch the URL content, convert to markdown if needed, and store in `.cerbo/objects/<uuid>/page.md`.
