@@ -110,6 +110,10 @@ fn write_backrefs_vault(vault_ctx: &VaultContext, uuid: &str, backrefs: &[String
 }
 
 fn write_backrefs_to_path(obj_dir: &PathBuf, backrefs: &[String]) -> Result<(), String> {
+    // Create object directory if it doesn't exist
+    fs::create_dir_all(obj_dir)
+        .map_err(|e| format!("Failed to create object directory: {}", e))?;
+
     let backrefs_path = obj_dir.join("backrefs.ttl");
 
     let mut lines = vec![

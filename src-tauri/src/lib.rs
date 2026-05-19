@@ -123,6 +123,7 @@ pub fn run() {
             vault::vault_set_active,
             vault::vault_relocate,
             vault::vault_update_last_page,
+            vault::vault_objects_list,
             // index
             index::backlinks_get,
             vault_open,

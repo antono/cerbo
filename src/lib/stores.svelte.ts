@@ -33,6 +33,12 @@ export interface BacklinkEntry {
   title: string;
 }
 
+export interface VaultObject {
+  uuid: string;
+  title: string;
+  object_type: string;
+}
+
 export interface VaultsFile {
   vaults: Vault[];
   activeVaultId: string | null;
@@ -54,6 +60,7 @@ export const app = $state({
   vaults: [] as Vault[],
   activeVaultId: null as string | null,
   pages: [] as PageMeta[],
+  vaultObjects: [] as VaultObject[],
   currentUuid: null as string | null,
   currentContent: '',
   backlinks: [] as BacklinkEntry[],
@@ -195,6 +202,7 @@ export async function openVault(vaultId: string): Promise<void> {
     app.activeVaultId = vaultId;
     await invoke('vault_set_active', { id: vaultId });
     await loadPages();
+    await loadVaultObjects();
 
     const vault = activeVault();
     if (!vault) return;
@@ -266,6 +274,16 @@ export async function loadPages(): Promise<void> {
   try {
     const pages = await invoke<PageMeta[]>('page_list');
     app.pages = pages;
+  } catch (e) {
+    setError(String(e));
+  }
+}
+
+export async function loadVaultObjects(): Promise<void> {
+  if (!app.activeVaultId) return;
+  try {
+    const objects = await invoke<VaultObject[]>('vault_objects_list', { vaultId: app.activeVaultId });
+    app.vaultObjects = objects;
   } catch (e) {
     setError(String(e));
   }

@@ -157,6 +157,7 @@
     extensions: [
       wikilinkPlugin({
         getPages: () => pageTitles(),
+        getVaultObjects: () => app.vaultObjects,
         onNavigate: (title) => {
           const page = app.pages.find(p => p.title === title);
           if (page) openPage(page.uuid);
@@ -293,7 +294,15 @@
           vaultId: app.activeVaultId,
           uuid,
           filename: f
-        })
+        }),
+        onResolveCerboLink: async (linkUuid) => {
+          const page = app.pages.find(p => p.uuid === linkUuid);
+          if (page) {
+            await openPage(page.uuid);
+          } else {
+            app.error = `Page not found: ${linkUuid}`;
+          }
+        }
       });
     }
   });

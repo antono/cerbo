@@ -46,9 +46,17 @@ function titleToSlug(title: string): string {
 
 // ── Plugin factory ────────────────────────────────────────────────────────────
 
+export interface VaultObject {
+  uuid: string;
+  title: string;
+  object_type: string;
+}
+
 export interface WikilinkPluginOptions {
-  /** Reactive getter — called each render cycle to get the current slug list. */
+  /** Reactive getter — called each render cycle to get the current page list. */
   getPages: () => string[];
+  /** Reactive getter — called each render cycle to get vault objects with UUIDs. */
+  getVaultObjects: () => VaultObject[];
   /** Called when the user clicks a resolved wikilink. */
   onNavigate: (slug: string) => void;
   /** Called when the user clicks a broken wikilink (offer to create). */
@@ -142,7 +150,7 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
             const currentSlug = options.getSlug();
 
             visit(tree, 'element', (node: Element) => {
-              // Wikilinks
+              // Wikilinks (legacy format)
               if (
                 node.tagName === 'a' &&
                 node.properties?.['data-wikilink'] === 'true'
@@ -152,6 +160,23 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
                 node.properties['data-wikilink-resolved'] = String(resolved);
                 node.properties.class = `wikilink ${resolved ? 'wikilink-resolved' : 'wikilink-broken'}`;
                 node.properties.href = '#';
+                if (!resolved) {
+                  console.debug('[wikilink-plugin] unresolved legacy wikilink:', linkTitle);
+                }
+              }
+
+              // Cerbo Links
+              if (node.tagName === 'a') {
+                const href = node.properties?.href as string;
+                if (href && href.startsWith('cerbo://objects/')) {
+                  const match = /cerbo:\/\/objects\/([a-f0-9\-]+)/.exec(href);
+                  if (match) {
+                    const uuid = match[1];
+                    node.properties['data-cerbo-link'] = 'true';
+                    node.properties['data-cerbo-uuid'] = uuid;
+                    node.properties.class = 'cerbo-link';
+                  }
+                }
               }
 
               // Asset Links
@@ -164,7 +189,7 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
                   try {
                     filename = decodeURIComponent(encodedFilename);
                   } catch (_) {}
-                  
+
                   node.properties['data-asset'] = 'true';
                   node.properties['data-asset-filename'] = filename;
                   node.properties.href = '#';
@@ -199,7 +224,7 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
     components: [
       {
         component: WikilinkAutocomplete as any,
-        props: { getPages: options.getPages } as any,
+        props: { getVaultObjects: options.getVaultObjects } as any,
         parent: 'input',
       },
     ],
@@ -253,17 +278,31 @@ export function previewTaskListPlugin(): Plugin {
 /** Attach a click listener to the preview container to handle wikilink clicks. */
 export function attachPreviewClickHandler(
   previewEl: HTMLElement,
-  options: Pick<WikilinkPluginOptions, 'onNavigate' | 'onCreate' | 'onOpenAsset'>,
+  options: Pick<WikilinkPluginOptions, 'onNavigate' | 'onCreate' | 'onOpenAsset'> & {
+    onResolveCerboLink?: (uuid: string) => Promise<void>;
+  },
 ): () => void {
   function handler(ev: MouseEvent) {
     const target = (ev.target as HTMLElement).closest('a');
     if (!target) return;
-    
+
     // Handle External Links
     const href = target.getAttribute('href');
     if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
       ev.preventDefault();
       openUrl(href).catch((err) => console.error('Failed to open external URL:', err));
+      return;
+    }
+
+    // Handle Cerbo Links
+    if (target.hasAttribute('data-cerbo-link')) {
+      ev.preventDefault();
+      const uuid = target.getAttribute('data-cerbo-uuid');
+      if (uuid && options.onResolveCerboLink) {
+        options.onResolveCerboLink(uuid).catch((err) => {
+          console.error('Failed to resolve cerbo link:', err);
+        });
+      }
       return;
     }
 

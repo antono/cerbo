@@ -24,6 +24,14 @@ pub struct VaultsFile {
     pub vaults: Vec<Vault>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultObject {
+    pub uuid: String,
+    pub title: String,
+    pub object_type: String,
+}
+
 pub fn load_vaults(ctx: &CerboContext) -> Result<VaultsFile, String> {
     Ok(VaultsFile {
         vaults: config::load_config(ctx)?.vaults,
@@ -64,31 +72,69 @@ pub fn list_all_vaults(ctx: &CerboContext) -> Result<Vec<Vault>, String> {
 /// List all page UUIDs in a vault (scans vault_path/.cerbo/objects/)
 pub fn list_pages_in_vault(_ctx: &CerboContext, vault_path: &PathBuf) -> Result<Vec<String>, String> {
     let objects_dir = vault_path.join(".cerbo").join("objects");
-    
+
     if !objects_dir.exists() {
         return Ok(Vec::new());
     }
-    
+
     let mut page_uuids = Vec::new();
-    
+
     let entries = std::fs::read_dir(&objects_dir)
         .map_err(|e| format!("list_pages_in_vault read_dir: {}", e))?;
-    
+
     for entry in entries {
         let entry = entry.map_err(|e| format!("list_pages_in_vault entry: {}", e))?;
         let path = entry.path();
-        
+
         if !path.is_dir() {
             continue;
         }
-        
+
         // Check if it's a page object (has page.md)
         if path.join("page.md").exists() {
             page_uuids.push(entry.file_name().to_string_lossy().to_string());
         }
     }
-    
+
     Ok(page_uuids)
+}
+
+/// List all objects in a vault with their UUID, title, and type
+pub fn list_vault_objects(_ctx: &CerboContext, vault_path: &PathBuf) -> Result<Vec<VaultObject>, String> {
+    use crate::object::ObjectMeta;
+
+    let objects_dir = vault_path.join(".cerbo").join("objects");
+
+    if !objects_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut objects = Vec::new();
+
+    let entries = std::fs::read_dir(&objects_dir)
+        .map_err(|e| format!("list_vault_objects read_dir: {}", e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("list_vault_objects entry: {}", e))?;
+        let path = entry.path();
+
+        if !path.is_dir() {
+            continue;
+        }
+
+        let uuid = entry.file_name().to_string_lossy().to_string();
+        let meta_path = path.join("meta.ttl");
+
+        if let Ok(meta) = ObjectMeta::read_from_file(&meta_path) {
+            objects.push(VaultObject {
+                uuid,
+                title: meta.title,
+                object_type: meta.object_type.as_str().to_string(),
+            });
+        }
+    }
+
+    Ok(objects)
 }
 
 // ── Business Logic ────────────────────────────────────────────────────────────
