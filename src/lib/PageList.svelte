@@ -1,7 +1,7 @@
 <script lang="ts">
   import { FileText, Plus, Pencil, Trash2, Search } from 'lucide-svelte';
   import { tick } from 'svelte';
-  import { app, openPage, createPage, deletePage, renamePage, previewSlug, closeAllDialogs, triggerRename, triggerDelete, openNextPage, openPrevPage } from './stores.svelte';
+  import { app, openPage, createPage, deletePage, closeAllDialogs, triggerRename, triggerDelete, openNextPage, openPrevPage } from './stores.svelte';
   import { isInputFocused } from './hotkeys';
   import ConfirmationDialog from './ConfirmationDialog.svelte';
 
@@ -36,15 +36,15 @@
 
     if (isR) {
       e.preventDefault();
-      const slug = currentIndex !== -1 ? app.pages[currentIndex].slug : app.currentSlug;
-      if (slug) triggerRename(slug);
+      const uuid = currentIndex !== -1 ? app.pages[currentIndex].uuid : app.currentUuid;
+      if (uuid) triggerRename(uuid);
       return;
     }
 
     if (isDel) {
       e.preventDefault();
-      const slug = currentIndex !== -1 ? app.pages[currentIndex].slug : app.currentSlug;
-      if (slug) triggerDelete(slug);
+      const uuid = currentIndex !== -1 ? app.pages[currentIndex].uuid : app.currentUuid;
+      if (uuid) triggerDelete(uuid);
       return;
     }
 
@@ -74,11 +74,11 @@
   // ── Delete ────────────────────────────────────────────────────────────────────
 
   async function handleDelete() {
-    if (!app.confirmDeleteSlug) return;
+    if (!app.confirmDeleteUuid) return;
     deleting = true;
     try {
-      await deletePage(app.confirmDeleteSlug);
-      app.confirmDeleteSlug = null;
+      await deletePage(app.confirmDeleteUuid);
+      app.confirmDeleteUuid = null;
     } catch (_) {
       // error set in store
     } finally {
@@ -114,11 +114,11 @@
   <!-- Page items -->
   <div class="items-wrap" onkeydown={handleListKeydown} role="listbox" tabindex="0" aria-label="Page list navigation">
     <ul class="items" bind:this={itemsList}>
-    {#each app.pages as page (page.slug)}
-      <li class="item" class:active={page.slug === app.currentSlug}>
+    {#each app.pages as page (page.uuid)}
+      <li class="item" class:active={page.uuid === app.currentUuid}>
         <button
           class="page-btn"
-          onclick={() => openPage(page.slug)}
+          onclick={() => openPage(page.uuid)}
         >
           <FileText size={14} class="opacity-70" />
           {page.title}
@@ -127,14 +127,14 @@
           <button
             class="icon-btn small"
             title="Rename"
-            onclick={(e) => { e.stopPropagation(); triggerRename(page.slug); }}
+            onclick={(e) => { e.stopPropagation(); triggerRename(page.uuid); }}
           >
             <Pencil size={12} />
           </button>
           <button
             class="icon-btn small danger"
             title="Delete"
-            onclick={(e) => { e.stopPropagation(); triggerDelete(page.slug); }}
+            onclick={(e) => { e.stopPropagation(); triggerDelete(page.uuid); }}
           >
             <Trash2 size={12} />
           </button>
@@ -149,14 +149,14 @@
 </aside>
 
 <!-- Delete confirmation overlay -->
-{#if app.confirmDeleteSlug}
-  {@const page = app.pages.find(p => p.slug === app.confirmDeleteSlug)}
+{#if app.confirmDeleteUuid}
+  {@const page = app.pages.find(p => p.uuid === app.confirmDeleteUuid)}
   <ConfirmationDialog
     title="Delete page?"
-    message={`This will permanently delete ${page?.title ?? app.confirmDeleteSlug} [slug:${app.confirmDeleteSlug}] and all its assets.`}
+    message={`This will permanently delete "${page?.title ?? app.confirmDeleteUuid}" and all its assets.`}
     confirmLabel={deleting ? 'Deleting…' : 'Delete'}
     confirmDisabled={deleting}
-    onClose={() => { app.confirmDeleteSlug = null; }}
+    onClose={() => { app.confirmDeleteUuid = null; }}
     onConfirm={handleDelete}
   />
 {/if}

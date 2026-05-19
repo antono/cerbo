@@ -38,14 +38,14 @@
     function handleKeydown(e: KeyboardEvent) {
       // 1. Escape: Close active dialogs/forms
       if (e.key === 'Escape') {
-        if (app.showSearch || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.renameSlug || app.confirmDeleteSlug) {
+        if (app.showSearch || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.renameUuid || app.confirmDeleteUuid) {
           closeAllDialogs();
           return;
         }
       }
 
       // Confirmation dialogs own their own keyboard handling.
-      if (app.showExitPrompt || app.confirmDeleteSlug) return;
+      if (app.showExitPrompt || app.confirmDeleteUuid) return;
 
       // 2. New Page (Ctrl+N) - Handle first so it can toggle itself
       if (isModKey(e, 'n')) {
@@ -76,7 +76,7 @@
       }
 
       // Ignore other global shortcuts if any modal is open
-      if (app.showSearch || app.showExitPrompt || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.confirmDeleteSlug) return;
+      if (app.showSearch || app.showExitPrompt || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.confirmDeleteUuid) return;
 
       // 5. Go Back (Alt+Left) - only when not in input
       if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'Left') && !isInputFocused()) {
@@ -378,8 +378,8 @@
   <NewPageDialog onClose={() => app.showNewPageForm = false} />
 {/if}
 
-{#if app.renameSlug}
-  <RenamePageDialog onClose={() => app.renameSlug = null} />
+{#if app.renameUuid}
+  <RenamePageDialog onClose={() => app.renameUuid = null} />
 {/if}
 
 {#if app.showHelp}

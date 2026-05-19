@@ -27,9 +27,9 @@ pub fn vault_set_active(app: AppHandle, id: String) -> Result<(), String> {
 pub fn vault_update_last_page(
     app: AppHandle,
     vaultId: String,
-    slug: Option<String>,
+    uuid: Option<String>,
 ) -> Result<(), String> {
-    vault::vault_update_last_page(&get_context(&app)?, vaultId, slug)
+    vault::vault_update_last_page(&get_context(&app)?, vaultId, uuid)
 }
 
 #[tauri::command]

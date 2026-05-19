@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{PathBuf, Path};
 use crate::CerboContext;
+use crate::object::{object_path, ObjectMeta};
 
 /// Get the full path to a page object directory within a vault
 pub fn get_page_path(vault_path: &Path, page_uuid: &str) -> PathBuf {
@@ -37,13 +38,49 @@ pub fn page_write(
     uuid: String,
     content: String,
 ) -> Result<String, String> {
-    crate::object::object_write(ctx, &uuid, &content)?;
+    crate::links::page_write_with_links(ctx, &uuid, &content)?;
     Ok(content)
 }
 
 /// Delete a page by UUID. Fails if type is Source (read-only).
 pub fn page_delete(ctx: &CerboContext, uuid: String) -> Result<(), String> {
     crate::object::object_delete(ctx, &uuid)
+}
+
+/// Update the title of a page: writes new title to meta.ttl and replaces the first H1 in page.md.
+pub fn page_update_title(ctx: &CerboContext, uuid: String, new_title: String) -> Result<(), String> {
+    let obj_dir = object_path(ctx, &uuid);
+    let meta_path = obj_dir.join("meta.ttl");
+    let page_path = obj_dir.join("page.md");
+
+    // Update meta.ttl
+    let mut meta = ObjectMeta::read_from_file(&meta_path)
+        .map_err(|e| format!("page_update_title: read meta.ttl: {e}"))?;
+    meta.title = new_title.clone();
+    meta.write_to_file(&meta_path)
+        .map_err(|e| format!("page_update_title: write meta.ttl: {e}"))?;
+
+    // Update first H1 in page.md
+    if page_path.exists() {
+        let content = std::fs::read_to_string(&page_path)
+            .map_err(|e| format!("page_update_title: read page.md: {e}"))?;
+        let updated = if let Some(pos) = content.find('\n') {
+            let first_line = &content[..pos];
+            if first_line.trim().starts_with("# ") {
+                format!("# {}{}", new_title, &content[pos..])
+            } else {
+                content
+            }
+        } else if content.trim().starts_with("# ") {
+            format!("# {}", new_title)
+        } else {
+            content
+        };
+        std::fs::write(&page_path, updated)
+            .map_err(|e| format!("page_update_title: write page.md: {e}"))?;
+    }
+
+    Ok(())
 }
 
 /// List all pages by scanning .cerbo/objects/ for directories with page.md.

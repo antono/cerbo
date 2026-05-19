@@ -1,26 +1,24 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Pencil } from 'lucide-svelte';
-  import { app, renamePage, previewSlug, closeAllDialogs } from './stores.svelte';
+  import { app, updatePageTitle, closeAllDialogs } from './stores.svelte';
 
   let { onClose }: { onClose: () => void } = $props();
 
   let title = $state(app.renameTitle);
-  let slugPreview = $state('');
   let renaming = $state(false);
   let error = $state('');
   let inputEl = $state<HTMLInputElement | null>(null);
 
-  const currentSlug = app.renameSlug;
-  const currentPage = $derived(app.pages.find(p => p.slug === currentSlug));
+  const currentUuid = app.renameUuid;
+  const currentPage = $derived(app.pages.find(p => p.uuid === currentUuid));
 
   async function handleRename() {
-    if (!title.trim() || renaming || !currentSlug) return;
+    if (!title.trim() || renaming || !currentUuid) return;
     renaming = true;
     error = '';
     try {
-      const contentToPass = currentSlug === app.currentSlug ? app.currentContent : undefined;
-      await renamePage(currentSlug, title.trim(), contentToPass);
+      await updatePageTitle(currentUuid, title.trim());
       onClose();
     } catch (e) {
       error = String(e);
@@ -28,15 +26,6 @@
       renaming = false;
     }
   }
-
-  $effect(() => {
-    const t = title.trim();
-    if (t) {
-      previewSlug(t).then(s => slugPreview = s);
-    } else {
-      slugPreview = '';
-    }
-  });
 
   onMount(() => {
     inputEl?.focus();
@@ -79,10 +68,6 @@
           <span class="label">Current Title:</span>
           <span class="value">{currentPage?.title ?? '...'}</span>
         </div>
-        <div class="meta-item">
-          <span class="label">Current Slug:</span>
-          <span class="value slug">/{currentSlug}</span>
-        </div>
       </div>
 
       <div class="field">
@@ -99,13 +84,6 @@
         />
       </div>
 
-      {#if slugPreview && slugPreview !== currentSlug}
-        <div class="slug-preview">
-          <span class="label">New Slug:</span>
-          <span class="slug">/{slugPreview}</span>
-        </div>
-      {/if}
-      
       {#if error}
         <div class="error-msg">{error}</div>
       {/if}
@@ -201,11 +179,6 @@
     font-weight: 500;
   }
 
-  .meta-item .slug {
-    font-family: monospace;
-    color: var(--primary);
-  }
-
   .field {
     display: flex;
     flex-direction: column;
@@ -233,19 +206,6 @@
 
   .dialog-input:focus {
     border-color: var(--primary);
-  }
-
-  .slug-preview {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.85rem;
-    color: var(--muted-foreground);
-  }
-
-  .slug-preview .slug {
-    font-family: monospace;
-    color: var(--primary);
   }
 
   .error-msg {

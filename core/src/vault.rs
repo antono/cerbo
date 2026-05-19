@@ -187,7 +187,7 @@ pub fn vault_set_active(ctx: &CerboContext, id: String) -> Result<(), String> {
 pub fn vault_update_last_page(
     ctx: &CerboContext,
     vault_id: String,
-    slug: Option<String>,
+    uuid: Option<String>,
 ) -> Result<(), String> {
     let reg = load_vaults(ctx)?;
     let vault = reg
@@ -199,7 +199,7 @@ pub fn vault_update_last_page(
     st.vault_states
         .entry(vault.id.clone())
         .or_default()
-        .last_open_page = slug;
+        .last_open_page = uuid;
     state::save_state(ctx, &st)
 }
 

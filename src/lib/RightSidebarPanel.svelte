@@ -31,12 +31,12 @@
       <p class="empty">No pages link here.</p>
     {:else}
       <ul class="backlink-list">
-        {#each app.backlinks as link (link.slug)}
+        {#each app.backlinks as link (link.uuid)}
           <li>
             <button
               class="backlink-item"
-              onclick={() => openPage(link.slug)}
-              title={link.slug}
+              onclick={() => openPage(link.uuid)}
+              title={link.title}
             >
               {link.title}
             </button>

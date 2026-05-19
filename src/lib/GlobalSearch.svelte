@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Search, FileText } from 'lucide-svelte';
-  import { app, openPage, createPage, previewSlug } from './stores.svelte';
+  import { app, openPage, createPage } from './stores.svelte';
   import { isModKey, isMac } from './hotkeys';
 
   let { onClose }: { onClose: () => void } = $props();
@@ -19,13 +19,11 @@
   async function handleCreate() {
     const title = query.trim();
     if (!title) return;
-    
+
     try {
-      // Check if slug already exists to satisfy "if no such slug" requirement
-      const slug = await previewSlug(title);
-      const existing = app.pages.find(p => p.slug === slug);
+      const existing = app.pages.find(p => p.title.toLowerCase() === title.toLowerCase());
       if (existing) {
-        openPage(existing.slug);
+        openPage(existing.uuid);
       } else {
         await createPage(title);
       }
@@ -60,7 +58,7 @@
       } else if (e.key === 'Enter') {
         e.preventDefault();
         if (list[selectedIndex]) {
-          openPage(list[selectedIndex].slug);
+          openPage(list[selectedIndex].uuid);
           onClose();
         } else if (query.trim()) {
           // No results selected, create new page
@@ -80,10 +78,7 @@
     const q = query.toLowerCase().trim();
     if (!q) return app.pages.slice(0, 15);
     return app.pages
-      .filter((p) => 
-        p.title.toLowerCase().includes(q) || 
-        p.slug.toLowerCase().includes(q)
-      )
+      .filter((p) => p.title.toLowerCase().includes(q))
       .slice(0, 15);
   });
 </script>
@@ -117,11 +112,10 @@
           <button
             class="result-item"
             class:selected={i === selectedIndex}
-            onclick={() => { openPage(page.slug); onClose(); }}
+            onclick={() => { openPage(page.uuid); onClose(); }}
           >
             <FileText size={16} class="result-icon" />
             <span class="result-title">{page.title}</span>
-            <span class="result-slug">/{page.slug}</span>
           </button>
         </li>
       {/each}
@@ -221,7 +215,6 @@
     color: #fff;
   }
 
-  .result-item.selected .result-slug,
   .result-item.selected .result-icon {
     color: rgba(255, 255, 255, 0.8);
   }
@@ -237,12 +230,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  .result-slug {
-    font-size: 0.75rem;
-    color: var(--muted-foreground);
-    font-family: monospace;
   }
 
   .no-results {

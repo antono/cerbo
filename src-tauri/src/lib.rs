@@ -6,6 +6,18 @@ mod vault;
 use cerbo_core::context::CoreContext;
 use cerbo_core::CerboContext;
 use index::WatcherState;
+use std::path::PathBuf;
+use std::sync::Mutex;
+use tauri::Manager;
+
+/// Holds the active vault's filesystem path. Set on vault_open, used by page commands.
+pub struct ActiveVaultState(pub Mutex<Option<PathBuf>>);
+
+impl Default for ActiveVaultState {
+    fn default() -> Self {
+        Self(Mutex::new(None))
+    }
+}
 
 pub fn get_context(_app: &tauri::AppHandle) -> Result<CerboContext, String> {
     let core = CoreContext::new()?;
@@ -27,6 +39,20 @@ pub fn get_context(_app: &tauri::AppHandle) -> Result<CerboContext, String> {
         cerbo_core::state::save_state(&ctx, &cerbo_core::state::State::default())?;
     }
     Ok(ctx)
+}
+
+/// Returns a CerboContext scoped to the active vault's .cerbo/ directory.
+/// Page operations (create/read/write/delete/list) must use this so they
+/// operate on the current vault rather than the global config dir.
+pub fn get_vault_ctx(app: &tauri::AppHandle) -> Result<CerboContext, String> {
+    let global = get_context(app)?;
+    let state = app.state::<ActiveVaultState>();
+    let lock = state.0.lock().map_err(|_| "vault state lock poisoned".to_string())?;
+    let vault_path = lock.as_ref().ok_or("No vault is open")?;
+    Ok(CerboContext {
+        config_dir: vault_path.join(".cerbo"),
+        cache_dir: global.cache_dir,
+    })
 }
 
 #[tauri::command]
@@ -88,6 +114,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(WatcherState::default())
+        .manage(ActiveVaultState::default())
         .invoke_handler(tauri::generate_handler![
             // vault
             vault::vault_add,
@@ -105,6 +132,7 @@ pub fn run() {
             page::page_write,
             page::page_delete,
             page::page_list,
+            page::page_update_title,
             page::cursor_position_save,
             page::cursor_position_load,
             page::attachment_list,
@@ -139,38 +167,15 @@ fn state_load(app: tauri::AppHandle) -> Result<cerbo_core::state::State, String>
 fn vault_open(
     app: tauri::AppHandle,
     vaultId: String,
+    active_vault: tauri::State<ActiveVaultState>,
     watcher_state: tauri::State<WatcherState>,
 ) -> Result<(), String> {
     let ctx = get_context(&app)?;
     let vault_path = cerbo_core::vault::get_vault_path(&ctx, &vaultId)
         .ok_or_else(|| format!("vault_open: vault not found: {}", vaultId))?;
 
-    // Build/refresh index if needed
-    let index = cerbo_core::index::index_load(&ctx)?;
-    if index.title_to_uuid.is_empty() {
-        // Rebuild index from objects directory
-        let objects_dir = cerbo_core::object::objects_dir(&ctx);
-        if objects_dir.exists() {
-            let mut new_index = cerbo_core::index::IndexJson::default();
-            let entries = std::fs::read_dir(&objects_dir)
-                .map_err(|e| format!("Failed to read objects dir: {}", e))?;
-            
-            for entry in entries {
-                let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-                let uuid = entry.file_name().to_string_lossy().to_string();
-                let meta_path = entry.path().join("meta.ttl");
-                
-                if meta_path.exists() {
-                    let meta = cerbo_core::object::ObjectMeta::read_from_file(&meta_path)
-                        .map_err(|e| format!("Failed to read meta.ttl: {}", e))?;
-                    new_index.title_to_uuid.insert(meta.title.clone(), uuid.clone());
-                    new_index.uuid_to_path.insert(uuid, format!("objects/{}", entry.file_name().to_string_lossy()));
-                }
-            }
-            
-            cerbo_core::index::index_save(&ctx, &new_index)?;
-        }
-    }
+    // Record the active vault path so page commands use the right .cerbo/objects/ dir.
+    *active_vault.0.lock().map_err(|_| "vault state lock poisoned")? = Some(vault_path.clone());
 
     // Start FS watcher
     index::start_watcher(&app, &vaultId, vault_path, &watcher_state)?;

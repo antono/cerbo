@@ -34,7 +34,7 @@
   }
 </script>
 
-{#if app.currentSlug}
+{#if app.currentUuid}
   <div class="editor-area" class:is-resizing={isResizingBacklinks}>
     <!-- Save indicator (floating or subtle) -->
     {#if isSaving}
@@ -43,8 +43,8 @@
 
     <!-- Editor -->
     <div class="editor-wrap">
-      <PageEditor 
-        slug={app.currentSlug} 
+      <PageEditor
+        uuid={app.currentUuid}
         onSaving={(s) => isSaving = s}
       />
       
@@ -78,10 +78,10 @@
         tabindex="-1"
       >
         <div class="panel-section">
-          <RightSidebarPanel slug={app.currentSlug} />
+          <RightSidebarPanel slug={app.currentUuid} />
         </div>
         <div class="panel-section">
-          <AttachmentsPanel slug={app.currentSlug} />
+          <AttachmentsPanel slug={app.currentUuid} />
         </div>
       </aside>
     {/if}

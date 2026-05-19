@@ -34,8 +34,11 @@ pub fn index_load(ctx: &CerboContext) -> Result<IndexJson, String> {
         return Ok(IndexJson::default());
     }
 
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse index.json: {}", e))
+    serde_json::from_str(&content).or_else(|_| {
+        // Corrupted file — delete it and return empty so callers rebuild.
+        let _ = fs::remove_file(&path);
+        Ok(IndexJson::default())
+    })
 }
 
 // ── Save Index ────────────────────────────────────────────────

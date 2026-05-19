@@ -24,12 +24,12 @@ interface AppStateFile {
 }
 
 export interface PageMeta {
-  slug: string;
+  uuid: string;
   title: string;
 }
 
 export interface BacklinkEntry {
-  slug: string;
+  uuid: string;
   title: string;
 }
 
@@ -54,7 +54,7 @@ export const app = $state({
   vaults: [] as Vault[],
   activeVaultId: null as string | null,
   pages: [] as PageMeta[],
-  currentSlug: null as string | null,
+  currentUuid: null as string | null,
   currentContent: '',
   backlinks: [] as BacklinkEntry[],
   attachments: [] as string[],
@@ -79,9 +79,9 @@ export const app = $state({
   showNewPageForm: false,
   showVaultSelector: false,
   showHelp: false,
-  renameSlug: null as string | null,
+  renameUuid: null as string | null,
   renameTitle: '',
-  confirmDeleteSlug: null as string | null,
+  confirmDeleteUuid: null as string | null,
 });
 
 export async function loadUiSettings(): Promise<void> {
@@ -129,9 +129,9 @@ export function closeAllDialogs() {
   app.showNewPageForm = false;
   app.showVaultSelector = false;
   app.showHelp = false;
-  app.renameSlug = null;
+  app.renameUuid = null;
   app.renameTitle = '';
-  app.confirmDeleteSlug = null;
+  app.confirmDeleteUuid = null;
 }
 
 // ── Computed helpers ──────────────────────────────────────────────────────────
@@ -140,8 +140,12 @@ export function activeVault(): Vault | undefined {
   return app.vaults.find((v) => v.id === app.activeVaultId);
 }
 
-export function pageSlugs(): string[] {
-  return app.pages.map((p) => p.slug);
+export function pageUuids(): string[] {
+  return app.pages.map((p) => p.uuid);
+}
+
+export function pageTitles(): string[] {
+  return app.pages.map((p) => p.title);
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
@@ -203,14 +207,13 @@ export async function openVault(vaultId: string): Promise<void> {
 
     // Restore last-open page
     const last = vault.lastOpenPage;
-    if (last && app.pages.find((p) => p.slug === last)) {
+    if (last && app.pages.find((p) => p.uuid === last)) {
       await openPage(last);
     } else if (app.pages.length > 0) {
-      // Try to find 'index' slug first, otherwise first available
-      const indexPage = app.pages.find((p) => p.slug === 'index');
-      await openPage(indexPage ? indexPage.slug : app.pages[0].slug);
+      const indexPage = app.pages.find((p) => p.title === 'Index');
+      await openPage(indexPage ? indexPage.uuid : app.pages[0].uuid);
     } else {
-      app.currentSlug = null;
+      app.currentUuid = null;
       app.currentContent = '';
       app.backlinks = [];
     }
@@ -261,7 +264,7 @@ export async function quickAddVault(): Promise<void> {
 export async function loadPages(): Promise<void> {
   if (!app.activeVaultId) return;
   try {
-    const pages = await invoke<PageMeta[]>('page_list', { vaultId: app.activeVaultId });
+    const pages = await invoke<PageMeta[]>('page_list');
     app.pages = pages;
   } catch (e) {
     setError(String(e));
@@ -272,34 +275,31 @@ export interface OpenPageOptions {
   pushToHistory?: boolean;
 }
 
-export async function openPage(slug: string, options?: OpenPageOptions): Promise<void> {
+export async function openPage(uuid: string, options?: OpenPageOptions): Promise<void> {
   if (!app.activeVaultId) return;
   const pushToHistory = options?.pushToHistory ?? true;
 
   // Handle history
   if (pushToHistory) {
-    // If we're not at the end of history, truncate forward history
     if (app.historyIndex < app.history.length - 1) {
       app.history = app.history.slice(0, app.historyIndex + 1);
     }
-    // Add to history if it's different from current
-    if (app.history[app.history.length - 1] !== slug) {
-      app.history.push(slug);
+    if (app.history[app.history.length - 1] !== uuid) {
+      app.history.push(uuid);
       app.historyIndex = app.history.length - 1;
     }
   }
 
   try {
-    const content = await invoke<string>('page_read', { vaultId: app.activeVaultId, slug });
-    app.currentSlug = slug;
+    const content = await invoke<string>('page_read', { uuid });
+    app.currentUuid = uuid;
     app.currentContent = content;
-    await invoke('vault_update_last_page', { vaultId: app.activeVaultId, slug });
-    // Update local state too so we don't have to reload all vaults
+    await invoke('vault_update_last_page', { vaultId: app.activeVaultId, uuid });
     const v = activeVault();
-    if (v) v.lastOpenPage = slug;
-    
-    await loadBacklinks(slug);
-    await loadAttachments(slug);
+    if (v) v.lastOpenPage = uuid;
+
+    await loadBacklinks(uuid);
+    await loadAttachments(uuid);
   } catch (e) {
     setError(String(e));
   }
@@ -307,22 +307,22 @@ export async function openPage(slug: string, options?: OpenPageOptions): Promise
 
 export async function openNextPage(): Promise<void> {
   if (app.pages.length === 0) return;
-  const currentIndex = app.pages.findIndex(p => p.slug === app.currentSlug);
+  const currentIndex = app.pages.findIndex(p => p.uuid === app.currentUuid);
   const nextIndex = (currentIndex + 1) % app.pages.length;
-  await openPage(app.pages[nextIndex].slug);
+  await openPage(app.pages[nextIndex].uuid);
 }
 
 export async function openPrevPage(): Promise<void> {
   if (app.pages.length === 0) return;
-  const currentIndex = app.pages.findIndex(p => p.slug === app.currentSlug);
+  const currentIndex = app.pages.findIndex(p => p.uuid === app.currentUuid);
   const prevIndex = (currentIndex - 1 + app.pages.length) % app.pages.length;
-  await openPage(app.pages[prevIndex].slug);
+  await openPage(app.pages[prevIndex].uuid);
 }
 
-export async function savePage(slug: string, content: string): Promise<string | undefined> {
+export async function savePage(uuid: string, content: string): Promise<string | undefined> {
   if (!app.activeVaultId) return;
   try {
-    const finalContent = await invoke<string>('page_write', { vaultId: app.activeVaultId, slug, content });
+    const finalContent = await invoke<string>('page_write', { uuid, content });
     return finalContent;
   } catch (e) {
     setError(String(e));
@@ -331,23 +331,23 @@ export async function savePage(slug: string, content: string): Promise<string | 
 
 export async function createPage(title: string): Promise<string> {
   if (!app.activeVaultId) throw new Error('No active vault');
-  const slug = await invoke<string>('page_create', { vaultId: app.activeVaultId, title });
+  const uuid = await invoke<string>('page_create', { title });
   await loadPages();
   app.editorTab = 'write';
-  await openPage(slug);
-  return slug;
+  await openPage(uuid);
+  return uuid;
 }
 
-export async function deletePage(slug: string): Promise<void> {
+export async function deletePage(uuid: string): Promise<void> {
   if (!app.activeVaultId) return;
   try {
-    await invoke('page_delete', { vaultId: app.activeVaultId, slug });
+    await invoke('page_delete', { uuid });
     await loadPages();
-    if (app.currentSlug === slug) {
+    if (app.currentUuid === uuid) {
       if (app.pages.length > 0) {
-        await openPage(app.pages[0].slug);
+        await openPage(app.pages[0].uuid);
       } else {
-        app.currentSlug = null;
+        app.currentUuid = null;
         app.currentContent = '';
         app.backlinks = [];
       }
@@ -358,41 +358,29 @@ export async function deletePage(slug: string): Promise<void> {
   }
 }
 
-export async function renamePage(oldSlug: string, newTitle: string, content?: string): Promise<string> {
+export async function updatePageTitle(uuid: string, newTitle: string): Promise<void> {
   if (!app.activeVaultId) throw new Error('No active vault');
-  const newSlug = await invoke<string>('page_rename', {
-    vaultId: app.activeVaultId,
-    oldSlug: oldSlug,
-    newTitle: newTitle,
-    content: content || null,
-  });
+  await invoke('page_update_title', { uuid, newTitle });
   await loadPages();
-  if (app.currentSlug === oldSlug) {
-    await openPage(newSlug);
-  }
-  return newSlug;
+  await openPage(uuid);
 }
 
-export function triggerRename(slug?: string) {
-  const targetSlug = slug || app.currentSlug;
-  if (!targetSlug) return;
-  const page = app.pages.find(p => p.slug === targetSlug);
+export function triggerRename(uuid?: string) {
+  const targetUuid = uuid || app.currentUuid;
+  if (!targetUuid) return;
+  const page = app.pages.find(p => p.uuid === targetUuid);
   if (!page) return;
 
   closeAllDialogs();
-  app.renameSlug = targetSlug;
+  app.renameUuid = targetUuid;
   app.renameTitle = page.title;
 }
 
-export function triggerDelete(slug?: string) {
-  const targetSlug = slug || app.currentSlug;
-  if (!targetSlug) return;
+export function triggerDelete(uuid?: string) {
+  const targetUuid = uuid || app.currentUuid;
+  if (!targetUuid) return;
   closeAllDialogs();
-  app.confirmDeleteSlug = targetSlug;
-}
-
-export async function previewSlug(title: string): Promise<string> {
-  return invoke<string>('slug_from_title', { title });
+  app.confirmDeleteUuid = targetUuid;
 }
 
 export function extractTitle(content: string): string | null {
@@ -405,12 +393,12 @@ export function extractTitle(content: string): string | null {
   return null;
 }
 
-export async function loadBacklinks(slug: string): Promise<void> {
+export async function loadBacklinks(uuid: string): Promise<void> {
   if (!app.activeVaultId) return;
   try {
     const entries = await invoke<BacklinkEntry[]>('backlinks_get', {
       vaultId: app.activeVaultId,
-      slug,
+      uuid,
     });
     app.backlinks = entries;
   } catch (_) {
@@ -432,12 +420,12 @@ export async function goForward(): Promise<void> {
   if (slug) await openPage(slug, { pushToHistory: false });
 }
 
-export async function loadAttachments(slug: string): Promise<void> {
-  if (!app.activeVaultId || !slug) return;
+export async function loadAttachments(uuid: string): Promise<void> {
+  if (!app.activeVaultId || !uuid) return;
   try {
     const attachments = await invoke<string[]>('attachment_list', {
       vaultId: app.activeVaultId,
-      slug,
+      uuid,
     });
     app.attachments = attachments;
   } catch (e) {

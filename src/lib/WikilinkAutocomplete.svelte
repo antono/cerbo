@@ -86,19 +86,11 @@
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
-  function slugToTitle(slug: string): string {
-    return slug
-      .split('-')
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ');
-  }
-
-  function insertSuggestion(slug: string) {
+  function insertSuggestion(title: string) {
     const input = carta.input;
     if (!input) return;
     const textarea = input.textarea;
     const pos = textarea.selectionStart;
-    const title = slugToTitle(slug);
     const insertion = `[[${title}]]`;
 
     textarea.focus();
@@ -189,15 +181,15 @@
       style:left="{anchorX}px"
       style:top="{anchorY}px"
     >
-      {#each list as slug, i}
+      {#each list as title, i}
         <button
           class="wikilink-autocomplete-item"
           class:selected={i === selected}
           role="option"
           aria-selected={i === selected}
-          onmousedown={(e) => { e.preventDefault(); insertSuggestion(slug); }}
+          onmousedown={(e) => { e.preventDefault(); insertSuggestion(title); }}
         >
-          {slugToTitle(slug)}
+          {title}
         </button>
       {/each}
     </div>

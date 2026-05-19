@@ -1,12 +1,11 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
   import { Plus, FileText } from 'lucide-svelte';
-  import { app, createPage, previewSlug, closeAllDialogs } from './stores.svelte';
+  import { app, createPage, closeAllDialogs } from './stores.svelte';
 
   let { onClose }: { onClose: () => void } = $props();
 
   let title = $state('');
-  let slugPreview = $state('');
   let creating = $state(false);
   let error = $state('');
   let inputEl = $state<HTMLInputElement | null>(null);
@@ -24,15 +23,6 @@
       creating = false;
     }
   }
-
-  $effect(() => {
-    const t = title.trim();
-    if (t) {
-      previewSlug(t).then(s => slugPreview = s);
-    } else {
-      slugPreview = '';
-    }
-  });
 
   onMount(() => {
     inputEl?.focus();
@@ -77,12 +67,6 @@
         autocomplete="off"
         disabled={creating}
       />
-      {#if slugPreview}
-        <div class="slug-preview">
-          <span class="label">Slug:</span>
-          <span class="slug">/{slugPreview}</span>
-        </div>
-      {/if}
       {#if error}
         <div class="error-msg">{error}</div>
       {/if}
@@ -167,19 +151,6 @@
 
   .dialog-input:focus {
     border-color: var(--primary);
-  }
-
-  .slug-preview {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.85rem;
-    color: var(--muted-foreground);
-  }
-
-  .slug-preview .slug {
-    font-family: monospace;
-    color: var(--primary);
   }
 
   .error-msg {

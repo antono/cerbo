@@ -147,8 +147,8 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
                 node.tagName === 'a' &&
                 node.properties?.['data-wikilink'] === 'true'
               ) {
-                const linkSlug = node.properties['data-wikilink-slug'] as string;
-                const resolved = pages.includes(linkSlug);
+                const linkTitle = node.properties['data-wikilink-title'] as string;
+                const resolved = pages.includes(linkTitle);
                 node.properties['data-wikilink-resolved'] = String(resolved);
                 node.properties.class = `wikilink ${resolved ? 'wikilink-resolved' : 'wikilink-broken'}`;
                 node.properties.href = '#';
@@ -270,11 +270,10 @@ export function attachPreviewClickHandler(
     // Handle Wikilinks
     if (target.hasAttribute('data-wikilink')) {
       ev.preventDefault();
-      const slug = target.getAttribute('data-wikilink-slug') ?? '';
       const title = target.getAttribute('data-wikilink-title') ?? '';
       const resolved = target.getAttribute('data-wikilink-resolved') === 'true';
       if (resolved) {
-        options.onNavigate(slug);
+        options.onNavigate(title);
       } else {
         options.onCreate(title);
       }
