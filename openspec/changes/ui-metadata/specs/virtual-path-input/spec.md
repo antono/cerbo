@@ -41,7 +41,7 @@ The system SHALL provide autocomplete suggestions based on existing paths in the
 - **THEN** autocomplete list updates dynamically with each keystroke showing only "docs/guides"
 
 ### Requirement: Virtual path validation
-The system SHALL validate that virtual path contains only valid path characters (alphanumeric, hyphens, underscores, forward slashes).
+The system SHALL validate that virtual path contains only valid path characters (alphanumeric, hyphens, underscores, forward slashes). Virtual path is optional; empty value is allowed.
 
 #### Scenario: Valid path characters
 - **WHEN** path is "docs/my-guide_v2/section"
@@ -51,9 +51,9 @@ The system SHALL validate that virtual path contains only valid path characters 
 - **WHEN** path contains special characters like "docs/my@guide" or "docs\\backslash"
 - **THEN** validation fails and form submit is blocked with error message
 
-#### Scenario: Empty path validation
-- **WHEN** user attempts to submit with empty virtual path
-- **THEN** validation fails with error "Virtual path is required"
+#### Scenario: Empty path allowed
+- **WHEN** user leaves virtual path empty and submits
+- **THEN** page is created without a virtual path (at root level)
 
 #### Scenario: Path with trailing slash
 - **WHEN** path is "docs/guides/"
@@ -69,3 +69,14 @@ The system SHALL load existing paths from the vault to populate the autocomplete
 #### Scenario: Empty vault with no paths
 - **WHEN** vault has no existing paths and user types in virtual path field
 - **THEN** autocomplete list remains empty (no suggestions available)
+
+### Requirement: Autocomplete selection via keyboard
+The system SHALL allow users to select autocomplete suggestions using the Enter key.
+
+#### Scenario: Enter key selects first suggestion
+- **WHEN** user types in virtual path field and suggestions are visible, then presses Enter
+- **THEN** first suggestion in the autocomplete list is selected and field is populated
+
+#### Scenario: Enter key creates page when no suggestions
+- **WHEN** suggestions are not visible and user presses Enter
+- **THEN** form submission is triggered (page is created with current values)

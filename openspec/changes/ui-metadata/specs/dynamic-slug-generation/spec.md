@@ -49,3 +49,10 @@ The system SHALL maintain auto-update state (enabled/disabled) separately for ea
 #### Scenario: Multiple dialogs with independent state
 - **WHEN** user opens two new-page dialogs simultaneously
 - **THEN** manual slug edit in one dialog does not affect auto-update in the other dialog
+
+### Requirement: Real-time slug generation on keystroke
+The system SHALL update slug in real-time on every keystroke in the page name field (not just on blur).
+
+#### Scenario: Slug updates on every character
+- **WHEN** user types "M", "y", " ", "P", "a", "g", "e" in the title field one character at a time
+- **THEN** slug updates to "m", "my", "my", "my-p", "my-pa", "my-pag", "my-page" respectively with each keystroke
