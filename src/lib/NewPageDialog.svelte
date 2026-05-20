@@ -57,6 +57,17 @@
     showPathSuggestions = false;
   }
 
+  function onInputKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (showPathSuggestions && pathSuggestions.length > 0) {
+        selectPathSuggestion(pathSuggestions[0]);
+      } else {
+        handleCreate();
+      }
+    }
+  }
+
   async function handleCreate() {
     if (!title.trim() || !slug.trim() || !virtualPath.trim() || creating) return;
     if (!validateSlug(slug) || !validateVirtualPath(virtualPath)) {
@@ -115,6 +126,7 @@
           bind:this={titleInputEl}
           bind:value={title}
           onchange={updateSlugFromTitle}
+          onkeydown={onInputKeydown}
           placeholder="My Page..."
           class="dialog-input"
           spellcheck="false"
@@ -132,6 +144,7 @@
             onSlugInput();
           }}
           onchange={updateSlugFromTitle}
+          onkeydown={onInputKeydown}
           placeholder="my-page"
           class="dialog-input"
           spellcheck="false"
@@ -149,6 +162,7 @@
           <input
             bind:value={virtualPath}
             oninput={(e) => onPathInput(e.currentTarget.value)}
+            onkeydown={onInputKeydown}
             placeholder="docs/guides"
             class="dialog-input"
             spellcheck="false"
