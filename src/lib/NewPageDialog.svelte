@@ -125,7 +125,7 @@
         <input
           bind:this={titleInputEl}
           bind:value={title}
-          onchange={updateSlugFromTitle}
+          oninput={updateSlugFromTitle}
           onkeydown={onInputKeydown}
           placeholder="My Page..."
           class="dialog-input"
@@ -143,7 +143,6 @@
             slug = e.currentTarget.value;
             onSlugInput();
           }}
-          onchange={updateSlugFromTitle}
           onkeydown={onInputKeydown}
           placeholder="my-page"
           class="dialog-input"

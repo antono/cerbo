@@ -6,5 +6,5 @@
     :type :Product ;
     :title "Index" ;
     schema:dateCreated "2026-05-19T17:50:07.401759360+00:00"^^xsd:dateTime ;
-    schema:dateModified "2026-05-19T23:03:04.048892441+00:00"^^xsd:dateTime .
+    schema:dateModified "2026-05-20T18:45:04.277299198+00:00"^^xsd:dateTime .
     cerbo:slug "index" .
