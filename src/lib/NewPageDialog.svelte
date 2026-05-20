@@ -69,15 +69,15 @@
   }
 
   async function handleCreate() {
-    if (!title.trim() || !slug.trim() || !virtualPath.trim() || creating) return;
-    if (!validateSlug(slug) || !validateVirtualPath(virtualPath)) {
+    if (!title.trim() || !slug.trim() || creating) return;
+    if (!validateSlug(slug) || (virtualPath.trim() && !validateVirtualPath(virtualPath))) {
       error = 'Invalid slug or path format';
       return;
     }
     creating = true;
     error = '';
     try {
-      await createPage(title.trim(), slug, virtualPath);
+      await createPage(title.trim(), slug, virtualPath.trim() || undefined);
       onClose();
     } catch (e) {
       error = String(e);
@@ -157,7 +157,7 @@
       </div>
 
       <div class="field">
-        <label>Mount Path</label>
+        <label>Virtual Path <span class="optional">(optional)</span></label>
         <div class="path-input-wrapper">
           <input
             bind:value={virtualPath}
@@ -283,6 +283,14 @@
     border-radius: 3px;
     margin-left: 0.5rem;
     font-weight: 600;
+    text-transform: none;
+    letter-spacing: normal;
+  }
+
+  .optional {
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--muted-foreground);
     text-transform: none;
     letter-spacing: normal;
   }
