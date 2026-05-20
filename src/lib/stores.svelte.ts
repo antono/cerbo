@@ -347,9 +347,9 @@ export async function savePage(uuid: string, content: string): Promise<string | 
   }
 }
 
-export async function createPage(title: string): Promise<string> {
+export async function createPage(title: string, slug?: string, virtualPath?: string): Promise<string> {
   if (!app.activeVaultId) throw new Error('No active vault');
-  const uuid = await invoke<string>('page_create', { title });
+  const uuid = await invoke<string>('page_create', { title, slug, virtualPath });
   await loadPages();
   app.editorTab = 'write';
   await openPage(uuid);

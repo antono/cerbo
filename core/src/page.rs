@@ -26,6 +26,17 @@ pub fn page_create(ctx: &CerboContext, title: String) -> Result<String, String> 
     crate::object::object_create(ctx, None, crate::object::ObjectType::Product, title)
 }
 
+/// Create a new page with custom metadata (slug and virtual path).
+/// Returns the generated UUID.
+pub fn page_create_with_metadata(
+    ctx: &CerboContext,
+    title: String,
+    slug: Option<String>,
+    virtual_path: Option<String>,
+) -> Result<String, String> {
+    crate::object::object_create_with_metadata(ctx, None, crate::object::ObjectType::Product, title, slug, virtual_path)
+}
+
 /// Read page content by UUID.
 pub fn page_read(ctx: &CerboContext, uuid: String) -> Result<String, String> {
     crate::object::object_read(ctx, &uuid)

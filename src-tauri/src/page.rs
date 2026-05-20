@@ -4,9 +4,9 @@ use tauri::AppHandle;
 
 #[tauri::command]
 #[allow(non_snake_case)]
-pub fn page_create(app: AppHandle, title: String) -> Result<String, String> {
+pub fn page_create(app: AppHandle, title: String, slug: Option<String>, virtualPath: Option<String>) -> Result<String, String> {
     let ctx = get_vault_ctx(&app)?;
-    cerbo_core::page::page_create(&ctx, title)
+    cerbo_core::page::page_create_with_metadata(&ctx, title, slug, virtualPath)
 }
 
 #[tauri::command]

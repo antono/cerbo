@@ -251,6 +251,62 @@ pub fn object_create(
     Ok(uuid)
 }
 
+/// Create an object with custom metadata (slug and virtual path).
+pub fn object_create_with_metadata(
+    ctx: &CerboContext,
+    uuid: Option<String>,
+    obj_type: ObjectType,
+    title: String,
+    custom_slug: Option<String>,
+    virtual_path: Option<String>,
+) -> Result<String, String> {
+    let uuid = uuid.unwrap_or_else(|| Uuid::new_v4().to_string());
+    let obj_dir = object_path(ctx, &uuid);
+
+    fs::create_dir_all(&obj_dir).map_err(|e| format!("Failed to create object dir: {}", e))?;
+
+    // Create meta.ttl
+    let now = chrono::Utc::now().to_rfc3339();
+    let slug = match obj_type {
+        ObjectType::Product | ObjectType::Source => {
+            if let Some(custom) = custom_slug {
+                Some(custom)
+            } else {
+                let parsed_uuid = Uuid::parse_str(&uuid).unwrap_or_else(|_| Uuid::new_v4());
+                Some(crate::slug::slugify(&title, parsed_uuid))
+            }
+        }
+        _ => None,
+    };
+    let meta = ObjectMeta {
+        object_type: obj_type,
+        title: title.clone(),
+        created: now.clone(),
+        modified: now,
+        original_url: None,
+        mime_type: None,
+        slug,
+        virtual_path,
+    };
+
+    let meta_path = obj_dir.join("meta.ttl");
+    meta.write_to_file(&meta_path)
+        .map_err(|e| format!("Failed to write meta.ttl: {}", e))?;
+
+    // Create page.md for Product/Source/Ontology types (not Attachment)
+    if !matches!(obj_type, ObjectType::Attachment) {
+        let page_path = obj_dir.join("page.md");
+        let content = format!("# {}\n", title);
+        fs::write(&page_path, content)
+            .map_err(|e| format!("Failed to write page.md: {}", e))?;
+    }
+
+    // Update index (best effort - don't fail if index update fails)
+    let _ = index::index_add(ctx, &title, &uuid);
+
+    Ok(uuid)
+}
+
 /// Delete an object by UUID. Fails if type is Source (read-only).
 pub fn object_delete(ctx: &CerboContext, uuid: &str) -> Result<(), String> {
     let obj_dir = object_path(ctx, uuid);
