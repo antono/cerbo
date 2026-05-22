@@ -143,7 +143,6 @@ jobs:
     timeout-minutes: 20
     needs: prepare
     permissions:
-      id-token: write
       contents: read
     steps:
         - name: Check out release tag
@@ -155,8 +154,41 @@ jobs:
         - name: Install Nix
           uses: DeterminateSystems/nix-installer-action@v16
 
-        - name: Set up FlakeHub cache
-          uses: DeterminateSystems/flakehub-cache-action@v1
+        - name: Restore Nix closure cache
+          id: nix-closure-cache
+          uses: actions/cache/restore@v4
+          with:
+            path: .tmp/nix-closure.tar.zst
+            key: ${{ runner.os }}-nix-closure-${{ hashFiles('flake.lock') }}
+
+        - name: Import cached Nix closure
+          if: steps.nix-closure-cache.outputs.cache-hit == 'true'
+          run: zstd -d --stdout .tmp/nix-closure.tar.zst | nix-store --import
+
+        - name: Build Nix devshell
+          id: devshell
+          run: |
+            DEVSHELL_PATH=$(nix build .#devShells.x86_64-linux.default --no-link --print-out-paths)
+            echo "path=$DEVSHELL_PATH" >> "$GITHUB_OUTPUT"
+
+        - name: Export Nix closure archive (cache miss)
+          if: steps.nix-closure-cache.outputs.cache-hit != 'true'
+          run: |
+            set -euo pipefail
+            mkdir -p .tmp
+            nix-store --query --requisites "${{ steps.devshell.outputs.path }}" \
+              | sort -u > .tmp/nix-closure-paths.txt
+            echo "Unique store paths in closure: $(wc -l < .tmp/nix-closure-paths.txt)"
+            xargs nix-store --export < .tmp/nix-closure-paths.txt \
+              | zstd -1 -T0 -o .tmp/nix-closure.tar.zst
+            echo "Closure archive size: $(du -h .tmp/nix-closure.tar.zst | cut -f1)"
+
+        - name: Save Nix closure cache
+          if: steps.nix-closure-cache.outputs.cache-hit != 'true'
+          uses: actions/cache/save@v4
+          with:
+            path: .tmp/nix-closure.tar.zst
+            key: ${{ steps.nix-closure-cache.outputs.cache-primary-key }}
 
         - name: Cache Rust dependencies
           uses: actions/cache@v4
