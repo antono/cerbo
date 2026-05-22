@@ -2,6 +2,7 @@
 let
   cerbo = pkgs.rustPlatform.buildRustPackage {
     pname = "cerbo";
+
     version = "0.2.0";
     src = ../.;
     cargoLock.lockFile = ../Cargo.lock;
@@ -26,6 +27,7 @@ let
 
   cerbo-frontend = pkgs.stdenv.mkDerivation {
     pname = "cerbo-frontend";
+
     version = "0.2.0";
     src = ../.;
     nativeBuildInputs = [
@@ -48,6 +50,7 @@ let
 
   cerbo-desktop = pkgs.rustPlatform.buildRustPackage {
     pname = "cerbo-desktop";
+
     version = "0.2.0";
     src = ../.;
     cargoLock.lockFile = ../Cargo.lock;
@@ -70,6 +73,8 @@ let
     TAURI_ENV_DEBUG = "false";
 
     postInstall = ''
+      rm -f $out/bin/cerbo
+
       # Install desktop file
       mkdir -p $out/share/applications
       cp src-tauri/cerbo-desktop.desktop $out/share/applications/
