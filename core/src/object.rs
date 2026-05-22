@@ -39,6 +39,18 @@ pub struct ObjectMeta {
     pub modified: String,
     pub original_url: Option<String>,
     pub mime_type: Option<String>,
+    pub slug: Option<String>,
+    pub virtual_path: Option<String>,
+}
+
+/// Validate a slug: ASCII alphanumeric + dash, no leading/trailing dash, len ≤ 80, non-empty.
+pub fn is_valid_slug(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 80
+        && !s.contains('/')
+        && !s.starts_with('-')
+        && !s.ends_with('-')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 impl ObjectMeta {
@@ -88,6 +100,14 @@ impl ObjectMeta {
             lines.push(format!("    :mime-type \"{}\" .", mime));
         }
 
+        if let Some(s) = &self.slug {
+            lines.push(format!("    cerbo:slug \"{}\" .", s));
+        }
+
+        if let Some(vp) = &self.virtual_path {
+            lines.push(format!("    cerbo:virtualPath \"{}\" .", vp));
+        }
+
         lines.join("\n") + "\n"
     }
 
@@ -99,6 +119,8 @@ impl ObjectMeta {
         let mut modified = String::new();
         let mut original_url = None;
         let mut mime_type = None;
+        let mut slug = None;
+        let mut virtual_path = None;
 
         for line in content.lines() {
             let line = line.trim();
@@ -122,6 +144,16 @@ impl ObjectMeta {
                 original_url = Some(extract_quoted_value(line));
             } else if line.contains(":mime-type") {
                 mime_type = Some(extract_quoted_value(line));
+            } else if line.contains("cerbo:slug") {
+                let v = extract_quoted_value(line);
+                if is_valid_slug(&v) {
+                    slug = Some(v);
+                }
+            } else if line.contains("cerbo:virtualPath") {
+                let v = extract_quoted_value(line);
+                if crate::vault::validate_virtual_path(&v).is_ok() {
+                    virtual_path = Some(v);
+                }
             }
         }
 
@@ -132,6 +164,8 @@ impl ObjectMeta {
             modified,
             original_url,
             mime_type,
+            slug,
+            virtual_path,
         })
     }
 }
@@ -181,6 +215,13 @@ pub fn object_create(
 
     // Create meta.ttl
     let now = chrono::Utc::now().to_rfc3339();
+    let auto_slug = match obj_type {
+        ObjectType::Product | ObjectType::Source => {
+            let parsed_uuid = Uuid::parse_str(&uuid).unwrap_or_else(|_| Uuid::new_v4());
+            Some(crate::slug::slugify(&title, parsed_uuid))
+        }
+        _ => None,
+    };
     let meta = ObjectMeta {
         object_type: obj_type,
         title: title.clone(),
@@ -188,6 +229,64 @@ pub fn object_create(
         modified: now,
         original_url: None,
         mime_type: None,
+        slug: auto_slug,
+        virtual_path: None,
+    };
+
+    let meta_path = obj_dir.join("meta.ttl");
+    meta.write_to_file(&meta_path)
+        .map_err(|e| format!("Failed to write meta.ttl: {}", e))?;
+
+    // Create page.md for Product/Source/Ontology types (not Attachment)
+    if !matches!(obj_type, ObjectType::Attachment) {
+        let page_path = obj_dir.join("page.md");
+        let content = format!("# {}\n", title);
+        fs::write(&page_path, content)
+            .map_err(|e| format!("Failed to write page.md: {}", e))?;
+    }
+
+    // Update index (best effort - don't fail if index update fails)
+    let _ = index::index_add(ctx, &title, &uuid);
+
+    Ok(uuid)
+}
+
+/// Create an object with custom metadata (slug and virtual path).
+pub fn object_create_with_metadata(
+    ctx: &CerboContext,
+    uuid: Option<String>,
+    obj_type: ObjectType,
+    title: String,
+    custom_slug: Option<String>,
+    virtual_path: Option<String>,
+) -> Result<String, String> {
+    let uuid = uuid.unwrap_or_else(|| Uuid::new_v4().to_string());
+    let obj_dir = object_path(ctx, &uuid);
+
+    fs::create_dir_all(&obj_dir).map_err(|e| format!("Failed to create object dir: {}", e))?;
+
+    // Create meta.ttl
+    let now = chrono::Utc::now().to_rfc3339();
+    let slug = match obj_type {
+        ObjectType::Product | ObjectType::Source => {
+            if let Some(custom) = custom_slug {
+                Some(custom)
+            } else {
+                let parsed_uuid = Uuid::parse_str(&uuid).unwrap_or_else(|_| Uuid::new_v4());
+                Some(crate::slug::slugify(&title, parsed_uuid))
+            }
+        }
+        _ => None,
+    };
+    let meta = ObjectMeta {
+        object_type: obj_type,
+        title: title.clone(),
+        created: now.clone(),
+        modified: now,
+        original_url: None,
+        mime_type: None,
+        slug,
+        virtual_path,
     };
 
     let meta_path = obj_dir.join("meta.ttl");
@@ -246,13 +345,20 @@ pub fn object_import(ctx: &CerboContext, url: &str) -> Result<String, String> {
 
     // Create meta.ttl with original-url
     let now = chrono::Utc::now().to_rfc3339();
+    let import_title = format!("Imported: {}", url);
+    let import_slug = {
+        let parsed_uuid = Uuid::parse_str(&uuid).unwrap_or_else(|_| Uuid::new_v4());
+        Some(crate::slug::slugify(&import_title, parsed_uuid))
+    };
     let meta = ObjectMeta {
         object_type: ObjectType::Source,
-        title: format!("Imported: {}", url),
+        title: import_title.clone(),
         created: now.clone(),
         modified: now,
         original_url: Some(url.to_string()),
         mime_type: Some("text/markdown".to_string()),
+        slug: import_slug,
+        virtual_path: None,
     };
 
     let meta_path = obj_dir.join("meta.ttl");
@@ -265,7 +371,7 @@ pub fn object_import(ctx: &CerboContext, url: &str) -> Result<String, String> {
         .map_err(|e| format!("Failed to write page.md: {}", e))?;
 
     // Update index
-    let _ = index::index_add(ctx, &format!("Imported: {}", url), &uuid);
+    let _ = index::index_add(ctx, &import_title, &uuid);
 
     Ok(uuid)
 }
@@ -291,6 +397,8 @@ pub fn object_import_ontology(ctx: &CerboContext, url: &str) -> Result<String, S
         modified: now,
         original_url: Some(url.to_string()),
         mime_type: Some("text/markdown".to_string()),
+        slug: None,
+        virtual_path: None,
     };
 
     let meta_path = obj_dir.join("meta.ttl");
@@ -633,6 +741,70 @@ mod tests {
         let _ = object_delete(&ctx, &uuid);
         cleanup(&ctx);
     }
+
+    #[test]
+    fn test_object_create_product_has_slug() {
+        let ctx = create_test_context();
+        let uuid = object_create(&ctx, None, ObjectType::Product, "My Test Page".to_string()).unwrap();
+        let meta = ObjectMeta::read_from_file(&object_path(&ctx, &uuid).join("meta.ttl")).unwrap();
+        assert!(meta.slug.is_some(), "Product page should have auto-generated slug");
+        let slug = meta.slug.unwrap();
+        assert!(slug.contains("my-test-page"), "slug: {slug}");
+        let _ = object_delete(&ctx, &uuid);
+        cleanup(&ctx);
+    }
+
+    #[test]
+    fn test_object_meta_slug_roundtrip() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let meta_path = tmp.path().join("meta.ttl");
+        let now = chrono::Utc::now().to_rfc3339();
+        let original = ObjectMeta {
+            object_type: ObjectType::Product,
+            title: "Round Trip".to_string(),
+            created: now.clone(),
+            modified: now,
+            original_url: None,
+            mime_type: None,
+            slug: Some("round-trip".to_string()),
+            virtual_path: Some("notes/rust".to_string()),
+        };
+        original.write_to_file(&meta_path).unwrap();
+        let loaded = ObjectMeta::read_from_file(&meta_path).unwrap();
+        assert_eq!(loaded.slug.as_deref(), Some("round-trip"));
+        assert_eq!(loaded.virtual_path.as_deref(), Some("notes/rust"));
+    }
+
+    #[test]
+    fn test_object_meta_optional_slug_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let meta_path = tmp.path().join("meta.ttl");
+        let now = chrono::Utc::now().to_rfc3339();
+        let original = ObjectMeta {
+            object_type: ObjectType::Product,
+            title: "No Slug".to_string(),
+            created: now.clone(),
+            modified: now,
+            original_url: None,
+            mime_type: None,
+            slug: None,
+            virtual_path: None,
+        };
+        original.write_to_file(&meta_path).unwrap();
+        let loaded = ObjectMeta::read_from_file(&meta_path).unwrap();
+        assert!(loaded.slug.is_none());
+        assert!(loaded.virtual_path.is_none());
+    }
+
+    #[test]
+    fn test_invalid_slug_ignored_on_parse() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let meta_path = tmp.path().join("meta.ttl");
+        let content = "@prefix : <cerbo://ontology/> .\n@prefix schema: <cerbo://ontology/schema/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\n<cerbo://objects/<uuid>>\n    :type :Product ;\n    :title \"Test\" ;\n    schema:dateCreated \"2024-01-01T00:00:00Z\"^^xsd:dateTime ;\n    schema:dateModified \"2024-01-01T00:00:00Z\"^^xsd:dateTime .\n    cerbo:slug \"/invalid/slug/\" .\n";
+        fs::write(&meta_path, content).unwrap();
+        let loaded = ObjectMeta::read_from_file(&meta_path).unwrap();
+        assert!(loaded.slug.is_none(), "invalid slug should be silently ignored");
+    }
 }
 
 // ── Attachment Management ──────────────────────────────────────
@@ -669,6 +841,8 @@ pub fn attachment_add(ctx: &CerboContext, _page_uuid: &str, file_path: &std::pat
         modified: now,
         original_url: None,
         mime_type: Some(mime_type),
+        slug: None,
+        virtual_path: None,
     };
 
     let meta_path = obj_dir.join("meta.ttl");

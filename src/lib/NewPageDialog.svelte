@@ -1,22 +1,83 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { Plus, FileText } from 'lucide-svelte';
-  import { app, createPage, previewSlug, closeAllDialogs } from './stores.svelte';
+  import { Plus } from 'lucide-svelte';
+  import { app, createPage, closeAllDialogs } from './stores.svelte';
+  import { stringToSlug } from './slug';
 
   let { onClose }: { onClose: () => void } = $props();
 
   let title = $state('');
-  let slugPreview = $state('');
+  let slug = $state('');
+  let virtualPath = $state('');
+  let slugAutoUpdateEnabled = $state(true);
+  let pathSuggestions = $state<string[]>([]);
+  let showPathSuggestions = $state(false);
   let creating = $state(false);
   let error = $state('');
-  let inputEl = $state<HTMLInputElement | null>(null);
+  let titleInputEl = $state<HTMLInputElement | null>(null);
+
+  function updateSlugFromTitle() {
+    if (slugAutoUpdateEnabled) {
+      slug = stringToSlug(title);
+    }
+  }
+
+  function onSlugInput() {
+    slugAutoUpdateEnabled = false;
+    showPathSuggestions = false;
+  }
+
+  function validateSlug(s: string): boolean {
+    return /^[a-z0-9\-_]+$/.test(s);
+  }
+
+  function validateVirtualPath(p: string): boolean {
+    return /^[a-z0-9\-_\/]+$/.test(p);
+  }
+
+  function onPathInput(value: string) {
+    const existing = ['docs', 'docs/guides', 'docs/api', 'references', 'archive'];
+
+    if (!value.trim()) {
+      pathSuggestions = [];
+      showPathSuggestions = false;
+      return;
+    }
+
+    const lowerValue = value.toLowerCase();
+    pathSuggestions = existing
+      .filter(p => p.toLowerCase().startsWith(lowerValue))
+      .sort();
+
+    showPathSuggestions = pathSuggestions.length > 0;
+  }
+
+  function selectPathSuggestion(path: string) {
+    virtualPath = path;
+    showPathSuggestions = false;
+  }
+
+  function onInputKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (showPathSuggestions && pathSuggestions.length > 0) {
+        selectPathSuggestion(pathSuggestions[0]);
+      } else {
+        handleCreate();
+      }
+    }
+  }
 
   async function handleCreate() {
-    if (!title.trim() || creating) return;
+    if (!title.trim() || !slug.trim() || creating) return;
+    if (!validateSlug(slug) || (virtualPath.trim() && !validateVirtualPath(virtualPath))) {
+      error = 'Invalid slug or path format';
+      return;
+    }
     creating = true;
     error = '';
     try {
-      await createPage(title.trim());
+      await createPage(title.trim(), slug, virtualPath.trim() || undefined);
       onClose();
     } catch (e) {
       error = String(e);
@@ -25,23 +86,14 @@
     }
   }
 
-  $effect(() => {
-    const t = title.trim();
-    if (t) {
-      previewSlug(t).then(s => slugPreview = s);
-    } else {
-      slugPreview = '';
-    }
-  });
-
   onMount(() => {
-    inputEl?.focus();
+    titleInputEl?.focus();
 
     function handleWindowKeydown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         e.preventDefault();
         onClose();
-      } else if (e.key === 'Enter') {
+      } else if (e.key === 'Enter' && !showPathSuggestions) {
         e.preventDefault();
         handleCreate();
       }
@@ -68,21 +120,73 @@
     </div>
 
     <div class="input-wrap">
-      <input
-        bind:this={inputEl}
-        bind:value={title}
-        placeholder="Enter page title..."
-        class="dialog-input"
-        spellcheck="false"
-        autocomplete="off"
-        disabled={creating}
-      />
-      {#if slugPreview}
-        <div class="slug-preview">
-          <span class="label">Slug:</span>
-          <span class="slug">/{slugPreview}</span>
+      <div class="field">
+        <label>Page Title</label>
+        <input
+          bind:this={titleInputEl}
+          bind:value={title}
+          oninput={updateSlugFromTitle}
+          onkeydown={onInputKeydown}
+          placeholder="My Page..."
+          class="dialog-input"
+          spellcheck="false"
+          autocomplete="off"
+          disabled={creating}
+        />
+      </div>
+
+      <div class="field">
+        <label>Slug {#if !slugAutoUpdateEnabled}<span class="badge">manual</span>{/if}</label>
+        <input
+          bind:value={slug}
+          oninput={(e) => {
+            slug = e.currentTarget.value;
+            onSlugInput();
+          }}
+          onkeydown={onInputKeydown}
+          placeholder="my-page"
+          class="dialog-input"
+          spellcheck="false"
+          autocomplete="off"
+          disabled={creating}
+        />
+        {#if slug && !validateSlug(slug)}
+          <div class="error-msg">Only alphanumeric, hyphens, underscores</div>
+        {/if}
+      </div>
+
+      <div class="field">
+        <label>Virtual Path <span class="optional">(optional)</span></label>
+        <div class="path-input-wrapper">
+          <input
+            bind:value={virtualPath}
+            oninput={(e) => onPathInput(e.currentTarget.value)}
+            onkeydown={onInputKeydown}
+            placeholder="docs/guides"
+            class="dialog-input"
+            spellcheck="false"
+            autocomplete="off"
+            disabled={creating}
+          />
+          {#if showPathSuggestions && pathSuggestions.length > 0}
+            <div class="suggestions">
+              {#each pathSuggestions as suggestion}
+                <button
+                  class="suggestion-item"
+                  onclick={() => selectPathSuggestion(suggestion)}
+                  disabled={creating}
+                >
+                  {suggestion}
+                </button>
+              {/each}
+            </div>
+          {/if}
         </div>
-      {/if}
+        {#if virtualPath && !validateVirtualPath(virtualPath)}
+          <div class="error-msg">Only alphanumeric, hyphens, underscores, slashes</div>
+        {/if}
+      </div>
+
       {#if error}
         <div class="error-msg">{error}</div>
       {/if}
@@ -150,7 +254,44 @@
     padding: 1.5rem;
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 1rem;
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .field label {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--muted-foreground);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    background: var(--primary);
+    color: white;
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    margin-left: 0.5rem;
+    font-weight: 600;
+    text-transform: none;
+    letter-spacing: normal;
+  }
+
+  .optional {
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--muted-foreground);
+    text-transform: none;
+    letter-spacing: normal;
   }
 
   .dialog-input {
@@ -159,7 +300,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 0.75rem 1rem;
-    font-size: 1.2rem;
+    font-size: 1rem;
     color: var(--fg);
     outline: none;
     transition: border-color 0.2s;
@@ -169,17 +310,50 @@
     border-color: var(--primary);
   }
 
-  .slug-preview {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.85rem;
-    color: var(--muted-foreground);
+  .path-input-wrapper {
+    position: relative;
   }
 
-  .slug-preview .slug {
-    font-family: monospace;
-    color: var(--primary);
+  .suggestions {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 var(--radius) var(--radius);
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 10;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  }
+
+  .suggestion-item {
+    display: block;
+    width: 100%;
+    padding: 0.75rem 1rem;
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    color: var(--fg);
+    cursor: pointer;
+    font-size: 0.95rem;
+    transition: background-color 0.15s;
+  }
+
+  .suggestion-item:last-child {
+    border-bottom: none;
+  }
+
+  .suggestion-item:hover:not(:disabled) {
+    background-color: var(--sidebar-bg);
+  }
+
+  .suggestion-item:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .error-msg {

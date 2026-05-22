@@ -1,0 +1,10 @@
+@prefix : <cerbo://ontology/> .
+@prefix schema: <cerbo://ontology/schema/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<cerbo://objects/<uuid>>
+    :type :Product ;
+    :title "Hello World" ;
+    schema:dateCreated "2026-05-19T22:04:31.999723640+00:00"^^xsd:dateTime ;
+    schema:dateModified "2026-05-19T23:02:58.723595784+00:00"^^xsd:dateTime .
+    cerbo:slug "hello-world" .

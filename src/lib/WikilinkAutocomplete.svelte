@@ -1,17 +1,19 @@
 <script lang="ts">
   import type { Carta } from 'carta-md';
+  import type { VaultObject } from './stores.svelte';
 
   /**
    * WikilinkAutocomplete — injected into Carta's input area.
    * Watches the textarea for `[[` patterns and shows a filtered dropdown.
+   * Inserts cerbo:// UUID-based links instead of wikilinks.
    */
 
   let {
     carta,
-    getPages,
+    getVaultObjects,
   }: {
     carta: Carta;
-    getPages: () => string[];
+    getVaultObjects: () => VaultObject[];
   } = $props();
 
   // ── State ────────────────────────────────────────────────────────────────────
@@ -20,6 +22,7 @@
   let query = $state('');
   let selected = $state(0);
   let triggerStart = $state(-1);
+  let triggerType = $state<'wikilink' | 'cerbo-link'>('wikilink');
 
   // Dropdown position
   let anchorX = $state(0);
@@ -28,10 +31,22 @@
   // ── Derived ──────────────────────────────────────────────────────────────────
 
   const suggestions = $derived(() => {
-    const pages = getPages();
-    if (!query) return pages.slice(0, 10);
+    const objects = getVaultObjects();
+    if (!query) {
+      return objects.slice().sort((a, b) => a.title.localeCompare(b.title)).slice(0, 10);
+    }
     const q = query.toLowerCase();
-    return pages.filter((s) => s.toLowerCase().includes(q)).slice(0, 10);
+    return objects
+      .filter((o) => o.title.toLowerCase().includes(q))
+      .sort((a, b) => {
+        const aTitle = a.title.toLowerCase();
+        const bTitle = b.title.toLowerCase();
+        const aStarts = aTitle.startsWith(q);
+        const bStarts = bTitle.startsWith(q);
+        if (aStarts !== bStarts) return bStarts ? 1 : -1;
+        return aTitle.localeCompare(bTitle);
+      })
+      .slice(0, 10);
   });
 
   // ── Caret Position Helper ───────────────────────────────────────────────────
@@ -86,20 +101,18 @@
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
-  function slugToTitle(slug: string): string {
-    return slug
-      .split('-')
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ');
-  }
-
-  function insertSuggestion(slug: string) {
+  function insertSuggestion(obj: VaultObject) {
     const input = carta.input;
     if (!input) return;
     const textarea = input.textarea;
     const pos = textarea.selectionStart;
-    const title = slugToTitle(slug);
-    const insertion = `[[${title}]]`;
+
+    let insertion = '';
+    if (triggerType === 'wikilink') {
+      insertion = `[${obj.title}](cerbo://objects/${obj.uuid})`;
+    } else if (triggerType === 'cerbo-link') {
+      insertion = `cerbo://objects/${obj.uuid})`;
+    }
 
     textarea.focus();
     textarea.setSelectionRange(triggerStart, pos);
@@ -113,6 +126,7 @@
     query = '';
     selected = 0;
     triggerStart = -1;
+    triggerType = 'wikilink';
   }
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -144,21 +158,41 @@
     const pos = textarea.selectionStart;
     const text = textarea.value.slice(0, pos);
 
-    const match = /\[\[([^\][\n]*)$/.exec(text);
-    if (match) {
-      const start = match.index;
+    // Try wikilink pattern: [[...
+    const wikiMatch = /\[\[([^\][\n]*)$/.exec(text);
+    if (wikiMatch) {
+      triggerType = 'wikilink';
+      const start = wikiMatch.index;
       triggerStart = start;
-      
+
       const coords = getCaretCoordinates(textarea, pos);
       anchorX = coords.x;
       anchorY = coords.y;
-      
+
       open = true;
       selected = 0;
-      query = match[1];
-    } else {
-      if (open) close();
+      query = wikiMatch[1];
+      return;
     }
+
+    // Try cerbo link pattern: [text](cerbo://...
+    const cerboMatch = /\[([^\]]*)\]\(cerbo:\/\/([^)]*)\)$/.exec(text);
+    if (cerboMatch) {
+      triggerType = 'cerbo-link';
+      const start = text.lastIndexOf('[');
+      triggerStart = start + cerboMatch[1].length + 3; // Position after ](cerbo://
+
+      const coords = getCaretCoordinates(textarea, pos);
+      anchorX = coords.x;
+      anchorY = coords.y;
+
+      open = true;
+      selected = 0;
+      query = cerboMatch[2]; // Query after cerbo://
+      return;
+    }
+
+    if (open) close();
   }
 
   $effect(() => {
@@ -189,15 +223,17 @@
       style:left="{anchorX}px"
       style:top="{anchorY}px"
     >
-      {#each list as slug, i}
+      {#each list as obj, i}
         <button
           class="wikilink-autocomplete-item"
           class:selected={i === selected}
           role="option"
           aria-selected={i === selected}
-          onmousedown={(e) => { e.preventDefault(); insertSuggestion(slug); }}
+          onmousedown={(e) => { e.preventDefault(); insertSuggestion(obj); }}
+          title={obj.uuid}
         >
-          {slugToTitle(slug)}
+          <span class="object-type">[{obj.object_type}]</span>
+          <span class="object-title">{obj.title}</span>
         </button>
       {/each}
     </div>
@@ -219,22 +255,35 @@
   }
 
   .wikilink-autocomplete-item {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     width: 100%;
     text-align: left;
     padding: 0.375rem 0.75rem;
     border: none;
     background: none;
     cursor: pointer;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     color: var(--fg);
+    min-width: 0;
   }
 
   .wikilink-autocomplete-item:hover,
   .wikilink-autocomplete-item.selected {
     background: var(--accent);
     color: var(--fg);
+  }
+
+  .object-type {
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    opacity: 0.7;
+    font-weight: 500;
+  }
+
+  .object-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 </style>

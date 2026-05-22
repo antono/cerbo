@@ -4,13 +4,14 @@ let
   gschema = pkgs.gsettings-desktop-schemas;
 in
 pkgs.mkShell {
-  buildInputs = tauri-deps ++ dev-deps ++ [ gtk3 pkgs.gtk4 gschema pkgs.adwaita-icon-theme pkgs.glib ];
+  buildInputs = tauri-deps ++ dev-deps ++ [ gtk3 pkgs.gtk4 gschema pkgs.adwaita-icon-theme pkgs.glib pkgs.mandown ];
 
   shellHook = ''
     echo "Cerbo dev environment"
     echo "  rustc $(rustc --version)"
     echo "  bun   $(bun --version)"
     cargo tauri --version 2>/dev/null || echo "  cargo-tauri: available"
+    echo "  mandown $(mandown --version 2>/dev/null || echo 'not installed')"
 
     # GTK file chooser requires gsettings-schemas path (per Tauri docs)
     export XDG_DATA_DIRS="${gschema}/share/gsettings-schemas/${gschema.name}:${gtk3}/share/gsettings-schemas/${gtk3.name}:$XDG_DATA_DIRS"

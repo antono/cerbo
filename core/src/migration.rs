@@ -40,6 +40,7 @@ mod tests {
                 id: "vault-1".into(),
                 name: "Vault One".into(),
                 path: tmp.path().join("vault-1"),
+                is_auto: false,
             }],
         };
         let legacy_path = config_dir.join("vaults.json");
@@ -75,6 +76,7 @@ mod tests {
                 id: "vault-1".into(),
                 name: "Vault One".into(),
                 path: tmp.path().join("vault-1"),
+                is_auto: false,
             }],
         };
         std::fs::write(

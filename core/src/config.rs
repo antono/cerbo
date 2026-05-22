@@ -13,6 +13,10 @@ fn config_path(ctx: &CerboContext) -> Result<PathBuf, String> {
     Ok(paths::config_dir(ctx.config_dir.clone())?.join("vaults.toml"))
 }
 
+pub fn auto_config_path(ctx: &CerboContext) -> Result<PathBuf, String> {
+    Ok(paths::config_dir(ctx.config_dir.clone())?.join("vaults.auto.toml"))
+}
+
 pub fn load_config(ctx: &CerboContext) -> Result<Config, String> {
     let p = config_path(ctx)?;
     if !p.exists() {

@@ -1,12 +1,12 @@
 <script lang="ts">
   import { app, loadBacklinks, openPage, saveUiSettings } from './stores.svelte';
 
-  let { slug }: { slug: string } = $props();
+  let { uuid }: { uuid: string } = $props();
 
-  // Reload backlinks when slug changes
+  // Reload backlinks when uuid changes
   $effect(() => {
-    if (slug) {
-      loadBacklinks(slug);
+    if (uuid) {
+      loadBacklinks(uuid);
     }
   });
 </script>
@@ -31,12 +31,12 @@
       <p class="empty">No pages link here.</p>
     {:else}
       <ul class="backlink-list">
-        {#each app.backlinks as link (link.slug)}
+        {#each app.backlinks as link (link.uuid)}
           <li>
             <button
               class="backlink-item"
-              onclick={() => openPage(link.slug)}
-              title={link.slug}
+              onclick={() => openPage(link.uuid)}
+              title={link.title}
             >
               {link.title}
             </button>

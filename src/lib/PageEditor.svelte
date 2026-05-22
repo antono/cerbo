@@ -24,11 +24,11 @@
   import {
     app,
     activeVault,
-    pageSlugs,
+    pageTitles,
     openPage,
     createPage,
     savePage,
-    renamePage,
+    updatePageTitle,
     loadAttachments,
     extractTitle,
   } from './stores.svelte';
@@ -36,11 +36,11 @@
 
   // ── Props ─────────────────────────────────────────────────────────────────────
 
-  let { 
-    slug,
+  let {
+    uuid,
     onSaving = (s: boolean) => {}
-  }: { 
-    slug: string;
+  }: {
+    uuid: string;
     onSaving?: (s: boolean) => void;
   } = $props();
 
@@ -65,18 +65,25 @@
 
   let isDirty = $derived(content !== baselineContent);
 
-  let loadedSlug = $state<string | null>(null);
+  let loadedUuid = $state<string | null>(null);
 
   $effect(() => {
-    const currentSlug = app.currentSlug;
-    if (!currentSlug || currentSlug === loadedSlug) return;
-    loadedSlug = currentSlug;
+    const currentUuid = app.currentUuid;
+    const externalContent = app.currentContent ?? '';
+
+    if (!currentUuid) return;
 
     untrack(() => {
-      const currentContent = app.currentContent ?? '';
-      baselineContent = currentContent;
-      content = currentContent;
-      showConflictPrompt = false;
+      if (currentUuid !== loadedUuid) {
+        loadedUuid = currentUuid;
+        baselineContent = externalContent;
+        content = externalContent;
+        showConflictPrompt = false;
+      } else if (content === baselineContent && externalContent !== baselineContent) {
+        // Same page, content updated externally (e.g. rename changed the H1), no local edits
+        baselineContent = externalContent;
+        content = externalContent;
+      }
     });
   });
 
@@ -84,8 +91,8 @@
     let unlisten: (() => void) | null = null;
     void listen<{ vaultId: string; path: string }>('page-file-changed', (event) => {
       const vault = activeVault();
-      const currentSlug = app.currentSlug;
-      if (!vault || event.payload.vaultId !== vault.id || !currentSlug) return;
+      const currentUuid = app.currentUuid;
+      if (!vault || event.payload.vaultId !== vault.id || !currentUuid) return;
 
       const conflictKey = pageChangeKey(event.payload.vaultId, event.payload.path);
       if (shouldSkipExternalPageChange(conflictKey, suppressedConflictKey)) {
@@ -97,17 +104,14 @@
 
       const changedSlug = pageMdPathToSlug(vault.path, event.payload.path);
       const action = decideExternalPageChange({
-        currentSlug,
+        currentSlug: currentUuid,
         changedSlug,
         editorTab: app.editorTab,
         dirty: isDirty,
       });
 
       const readCurrentDiskContent = async () => {
-        const nextContent = await invoke<string>('page_read', {
-          vaultId: vault.id,
-          slug: currentSlug,
-        });
+        const nextContent = await invoke<string>('page_read', { uuid: currentUuid });
         return nextContent;
       };
 
@@ -118,7 +122,7 @@
           return;
         }
 
-        logPageContentDiff(`[page-change-diff] ${currentSlug}`, content, nextContent);
+        logPageContentDiff(`[page-change-diff] ${currentUuid}`, content, nextContent);
 
         if (action === 'reload') {
           app.currentContent = nextContent;
@@ -139,7 +143,7 @@
 
   // ── Carta instance ──────────────────────────────────────────────────────────
 
-  // Create a stable Carta instance that doesn't re-create on every slug change.
+  // Create a stable Carta instance that doesn't re-create on every uuid change.
   // The plugins use getters so they stay up to date with the latest props.
   const carta = new Carta({
     sanitizer: false,
@@ -152,22 +156,26 @@
     },
     extensions: [
       wikilinkPlugin({
-        getPages: () => pageSlugs(),
-        onNavigate: (s) => openPage(s),
+        getPages: () => pageTitles(),
+        getVaultObjects: () => app.vaultObjects,
+        onNavigate: (title) => {
+          const page = app.pages.find(p => p.title === title);
+          if (page) openPage(page.uuid);
+        },
         onCreate: (title) => {
-          createPage(title).then((newSlug) => {
-            openPage(newSlug);
+          createPage(title).then((newUuid) => {
+            openPage(newUuid);
           }).catch((e) => {
             app.error = String(e);
           });
         },
         getVaultPath: () => activeVault()?.path,
-        getSlug: () => slug,
+        getSlug: () => uuid,
         onOpenAsset: (filename) => {
           invoke('attachment_open', {
             vaultId: app.activeVaultId,
-            slug: slug,
-            filename: filename
+            uuid,
+            filename
           });
         }
       }),
@@ -188,12 +196,12 @@
             
             const filename = await invoke<string>('attachment_upload', {
               vaultId: app.activeVaultId,
-              slug: slug,
+              uuid,
               filename: file.name,
               data: Array.from(bytes)
             });
-            
-            await loadAttachments(slug);
+
+            await loadAttachments(uuid);
             const encoded = encodeURIComponent(filename).replace(/%20/g, '%20');
             return `assets/${encoded}`;
           } catch (e) {
@@ -207,12 +215,12 @@
 
   // ── Effects ──────────────────────────────────────────────────────────────────
 
-  // Load content when slug changes
+  // Load content when uuid changes
   $effect(() => {
-    // We only want to run this when 'slug' changes, not when app.currentContent updates from auto-save
-    const targetSlug = slug; 
+    // We only want to run this when 'uuid' changes, not when app.currentContent updates from auto-save
+    const targetUuid = uuid;
     untrack(() => {
-      const page = app.pages.find((p) => p.slug === targetSlug);
+      const page = app.pages.find((p) => p.uuid === targetUuid);
       if (page) {
         content = app.currentContent ?? '';
       }
@@ -233,22 +241,21 @@
     if (!value && !app.currentContent) return;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
-      const targetSlugForSave = slug;
+      const targetUuidForSave = uuid;
       saving = true;
       try {
-        // ── Detect title change for auto-rename ──
+        // ── Detect title change for auto-update ──
         const extractedTitle = extractTitle(value);
-        const currentPage = app.pages.find(p => p.slug === slug);
-        
+        const currentPage = app.pages.find(p => p.uuid === uuid);
+
         if (extractedTitle && currentPage && extractedTitle !== currentPage.title) {
-          // Title changed in markdown, trigger rename
-          await renamePage(slug, extractedTitle, value);
-          // renamePage already calls loadPages and openPage(newSlug)
+          // Title changed in markdown, update title metadata then save content
+          await updatePageTitle(uuid, extractedTitle);
         } else {
           suppressNextOwnPageChange();
-          const finalContent = await savePage(slug, value);
-          // Only update currentContent if the slug hasn't changed in the meantime
-          if (slug === targetSlugForSave) {
+          const finalContent = await savePage(uuid, value);
+          // Only update currentContent if the uuid hasn't changed in the meantime
+          if (uuid === targetUuidForSave) {
             app.currentContent = finalContent ?? value;
             baselineContent = finalContent ?? value;
             // If backend modified the content (e.g. prepended title), update the editor
@@ -271,20 +278,31 @@
     {
       const previewSurface = editorContainer.querySelector('.carta-renderer') as HTMLElement | null;
       console.debug('[page-editor] attach preview handler', {
-        slug,
+        uuid,
         container: editorContainer,
         previewSurface,
       });
       if (!previewSurface) return;
 
       return attachPreviewClickHandler(previewSurface, {
-        onNavigate: (s) => openPage(s),
+        onNavigate: (title) => {
+          const page = app.pages.find(p => p.title === title);
+          if (page) openPage(page.uuid);
+        },
         onCreate: (t) => createPage(t),
         onOpenAsset: (f) => invoke('attachment_open', {
           vaultId: app.activeVaultId,
-          slug: slug,
+          uuid,
           filename: f
-        })
+        }),
+        onResolveCerboLink: async (linkUuid) => {
+          const page = app.pages.find(p => p.uuid === linkUuid);
+          if (page) {
+            await openPage(page.uuid);
+          } else {
+            app.error = `Page not found: ${linkUuid}`;
+          }
+        }
       });
     }
   });
@@ -294,7 +312,7 @@
     {
       const previewSurface = editorContainer.querySelector('.carta-renderer') as HTMLElement | null;
       console.debug('[page-editor] attach task-list handler', {
-        slug,
+        uuid,
         hasContainer: !!editorContainer,
         previewSurface,
       });
@@ -303,7 +321,7 @@
       return attachTaskListClickHandler(previewSurface, {
         onToggleTask: (index, checked) => {
           console.debug('[page-editor] toggle request', {
-            slug,
+            uuid,
             index,
             checked,
             contentPreview: content.slice(0, 120),
@@ -311,7 +329,7 @@
           const updated = toggleTaskListItemAtIndex(content, index, checked);
           if (updated === null) return;
           console.debug('[page-editor] toggle applied', {
-            slug,
+            uuid,
             index,
             checked,
             before: content,
@@ -321,10 +339,10 @@
           saveTimer = null;
           content = updated;
           app.currentContent = updated;
-          void savePage(slug, updated).then((finalContent) => {
+          void savePage(uuid, updated).then((finalContent) => {
             if (finalContent && finalContent !== updated) {
               console.debug('[page-editor] toggle save normalized content', {
-                slug,
+                uuid,
                 index,
                 checked,
                 finalContent,
@@ -346,24 +364,24 @@
    */
   async function saveCursorPosition() {
     const textarea = carta.input?.textarea;
-    if (!textarea || !app.activeVaultId || !app.currentSlug) return;
+    if (!textarea || !app.activeVaultId || !app.currentUuid) return;
     const selectionStart = textarea.selectionStart ?? 0;
     const cursor = getCursorPositionFromOffset(textarea.value, selectionStart);
 
     await invoke('cursor_position_save', {
       vaultId: app.activeVaultId,
-      slug: app.currentSlug,
+      uuid: app.currentUuid,
       line: cursor.line,
       column: cursor.column,
     });
   }
 
   async function restoreCursorPosition() {
-    if (!app.activeVaultId || !app.currentSlug) return;
+    if (!app.activeVaultId || !app.currentUuid) return;
 
     const saved = await invoke<{ line: number; column: number } | null>('cursor_position_load', {
       vaultId: app.activeVaultId,
-      slug: app.currentSlug,
+      uuid: app.currentUuid,
     });
 
     await tick();
@@ -420,13 +438,10 @@
 
   async function loadCurrentPageFromDisk() {
     const vault = activeVault();
-    if (!vault || !app.currentSlug) return;
+    if (!vault || !app.currentUuid) return;
 
-    const nextContent = await invoke<string>('page_read', {
-      vaultId: vault.id,
-      slug: app.currentSlug,
-    });
-    logPageContentDiff(`[page-change-diff] ${app.currentSlug}`, content, nextContent);
+    const nextContent = await invoke<string>('page_read', { uuid: app.currentUuid });
+    logPageContentDiff(`[page-change-diff] ${app.currentUuid}`, content, nextContent);
     app.currentContent = nextContent;
     baselineContent = nextContent;
     content = nextContent;
@@ -437,22 +452,19 @@
 
   async function previewCurrentPageDiff() {
     const vault = activeVault();
-    if (!vault || !app.currentSlug) return;
+    if (!vault || !app.currentUuid) return;
 
     previewDiffFile = await loadPageDiffFile(
-      () => invoke<string>('page_read', {
-        vaultId: vault.id,
-        slug: app.currentSlug!,
-      }),
+      () => invoke<string>('page_read', { uuid: app.currentUuid! }),
       content,
-      `${app.currentSlug}/page.md`,
+      `${app.currentUuid}/page.md`,
     );
   }
 
   function suppressNextOwnPageChange() {
     const vault = activeVault();
     if (!vault) return;
-    suppressedConflictKey = pageChangeKey(vault.id, `${vault.path}/${slug}/page.md`);
+    suppressedConflictKey = pageChangeKey(vault.id, `${vault.path}/${uuid}/page.md`);
   }
 
   async function overwriteCurrentPage() {
@@ -460,7 +472,7 @@
     showConflictPrompt = false;
     previewDiffFile = null;
     lastConflictKey = '';
-    await savePage(slug, content);
+    await savePage(uuid, content);
   }
 </script>
 

@@ -1,6 +1,8 @@
 {
   "name": "tmpcerbo-scaffold",
-  "version": "0.0.21",
+
+
+  "version": "0.2.0",
   "description": "",
   "type": "module",
   "scripts": {

@@ -1,5 +1,5 @@
 use crate::get_context;
-use cerbo_core::vault::{self, Vault, VaultsFile};
+use cerbo_core::vault::{self, Vault, VaultsFile, VaultObject};
 use tauri::AppHandle;
 
 #[tauri::command]
@@ -27,13 +27,22 @@ pub fn vault_set_active(app: AppHandle, id: String) -> Result<(), String> {
 pub fn vault_update_last_page(
     app: AppHandle,
     vaultId: String,
-    slug: Option<String>,
+    uuid: Option<String>,
 ) -> Result<(), String> {
-    vault::vault_update_last_page(&get_context(&app)?, vaultId, slug)
+    vault::vault_update_last_page(&get_context(&app)?, vaultId, uuid)
 }
 
 #[tauri::command]
 #[allow(non_snake_case)]
 pub fn vault_relocate(app: AppHandle, id: String, newPath: String) -> Result<(), String> {
     vault::vault_relocate(&get_context(&app)?, id, newPath)
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+pub fn vault_objects_list(app: AppHandle, vaultId: String) -> Result<Vec<VaultObject>, String> {
+    let ctx = get_context(&app)?;
+    let vault_path = vault::get_vault_path(&ctx, &vaultId)
+        .ok_or_else(|| format!("vault not found: {}", vaultId))?;
+    vault::list_vault_objects(&ctx, &vault_path)
 }

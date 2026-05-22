@@ -1,34 +1,49 @@
 # Page CRUD
 
 ## Purpose
-Enable creating, reading, updating, and deleting pages within a vault.
-
+Enable creating, reading, updating, and deleting pages within a vault using UUID-based object storage.
 ## Requirements
-
 ### Requirement: Create page
-The system SHALL create a new page by deriving a slug from the provided title, creating a folder named after the slug inside the active vault, and writing an empty `page.md` with the title as an H1 heading. The UI SHALL provide a focused modal dialog with a live slug preview for this operation.
+The system SHALL create a new page by generating a UUID v4, creating `.cerbo/objects/<uuid>/` directory, and writing `page.md` with the title as H1 heading. The system SHALL write `meta.ttl` with `type: :Page` (or `:Product`). The system SHALL automatically populate `cerbo:slug` in `meta.ttl` by deriving it from the title using the project slug algorithm (kebab-case ASCII, deunicode-transliterated, lowercase, 1..=80 characters, fallback to `untitled-<first-8-of-uuid>` for empty results). Callers MAY optionally supply an initial `cerbo:virtualPath`; if omitted, the predicate SHALL NOT be written (equivalent to placing the page at the symlink-tree root). The UI SHALL provide a focused modal dialog for this operation.
 
 #### Scenario: Create page with valid title
 - **WHEN** the user creates a page with title "Rust Ownership" via the New Page dialog
-- **THEN** the folder `rust-ownership/` is created in the vault root
-- **THEN** `rust-ownership/page.md` is created with content `# Rust Ownership`
+- **THEN** a UUID v4 is generated (e.g., `<uuid-page>`)
+- **THEN** directory `.cerbo/objects/<uuid-page>/` is created
+- **THEN** `page.md` is created with content `# Rust Ownership`
+- **THEN** `meta.ttl` is created with `type: :Page`, `:title "Rust Ownership"`, and `cerbo:slug "rust-ownership"`
 - **THEN** the system SHALL switch the editor to "Write" mode for the new page
+- **THEN** `index.json` is updated with title→UUID and UUID→path mappings
 
-#### Scenario: Create page with title that conflicts with existing slug
-- **WHEN** the user creates a page whose derived slug matches an existing page's slug
-- **THEN** the system SHALL reject the operation with a descriptive error in the dialog
-- **THEN** no folder is created
+#### Scenario: Create page with existing title
+- **WHEN** the user creates a page whose title matches an existing page's title
+- **THEN** a new UUID is still generated (titles are not unique identifiers)
+- **THEN** both pages exist with different UUIDs
+- **THEN** `index.json` maps both titles to their respective UUIDs
+- **THEN** the auto-generated `cerbo:slug` for the new page may collide with the existing page's slug; this collision is surfaced by `cerbo index` and blocks `cerbo symlink` until the user resolves it by editing one of the slugs or virtualPaths
+
+#### Scenario: Create page with explicit virtualPath
+- **WHEN** a caller creates a page and supplies `cerbo:virtualPath "notes/rust"`
+- **THEN** `meta.ttl` SHALL include `cerbo:virtualPath "notes/rust"` as an independent Turtle triple
+
+#### Scenario: Create page with title that transliterates to empty
+- **WHEN** the user creates a page whose title slugifies to an empty string (e.g. emoji-only title)
+- **THEN** `cerbo:slug` SHALL be set to `untitled-<first-8-chars-of-uuid>`
+
+#### Scenario: Create page without explicit virtualPath
+- **WHEN** the user creates a page without supplying `cerbo:virtualPath`
+- **THEN** `meta.ttl` SHALL NOT contain a `cerbo:virtualPath` predicate
 
 ### Requirement: Read page
-The system SHALL read the raw markdown content of a page from its `page.md` file and return it to the frontend. The frontend SHALL render the page title from the first level-1 heading (`# `) within the content in the preview mode.
+The system SHALL read the raw markdown content of a page from `.cerbo/objects/<uuid>/page.md` using the UUID identifier. The frontend SHALL render the page title from the first level-1 heading (`# `) within the content in the preview mode.
 
 #### Scenario: Read existing page
-- **WHEN** the frontend requests the content of a page by slug
-- **THEN** the system returns the raw markdown string from `<slug>/page.md`
+- **WHEN** the frontend requests the content of a page by UUID
+- **THEN** the system returns the raw markdown string from `.cerbo/objects/<uuid>/page.md`
 - **THEN** the frontend renders the markdown preview with the title included as the first heading
 
 #### Scenario: Read non-existent page
-- **WHEN** the frontend requests a slug that has no corresponding folder
+- **WHEN** the frontend requests a UUID that does not exist
 - **THEN** the system SHALL return an error indicating the page does not exist
 
 ### Requirement: Unified Editor Interface
@@ -51,45 +66,64 @@ The system SHALL provide a unified editor interface using a tabbed layout (e.g.,
 - **THEN** the system SHALL switch to the "Preview" mode
 
 ### Requirement: Write page
-The system SHALL write updated markdown content to a page's `page.md` file atomically.
+The system SHALL write updated markdown content to a page's `page.md` file atomically via `cerbo_core::links::page_write_with_links`. The system SHALL update `backrefs.ttl` on all TARGET objects whose link status changes as a result of this write. The system SHALL NOT write to `type: :Source` pages (read-only).
 
-#### Scenario: Save page content
-- **WHEN** the frontend provides a slug and updated markdown content
-- **THEN** the system writes the content to `<slug>/page.md`
-- **THEN** the FS watcher triggers an incremental link index update
+#### Scenario: Save page content updates backrefs
+- **WHEN** the frontend provides a UUID and updated markdown content via `page_write`
+- **THEN** the Tauri command calls `page_write_with_links(ctx, uuid, content)`
+- **THEN** the content is written to `.cerbo/objects/<uuid>/page.md`
+- **THEN** outgoing `cerbo://` links are extracted from the new content
+- **THEN** `backrefs.ttl` is updated on each target object to reflect added or removed links
+- **THEN** `meta.ttl` `schema:dateModified` is updated
+
+#### Scenario: Write to source type (read-only)
+- **WHEN** the user attempts to write to a page with `type: :Source` in `meta.ttl`
+- **THEN** the system SHALL return an error "Cannot write to source type (read-only)"
+- **THEN** no changes are written to disk
+
+#### Scenario: Link removed on save clears backref
+- **WHEN** a page previously linked to `cerbo://<uuid-b>` and the user saves without that link
+- **THEN** `page_write_with_links` detects the removed link
+- **THEN** `.cerbo/objects/<uuid-b>/backrefs.ttl` SHALL NOT contain the source page's UUID
 
 ### Requirement: Delete page
-The system SHALL delete a page by removing its entire folder (including all assets) from the vault. This operation SHALL be irreversible and MUST require confirmation via a modal dialog.
+The system SHALL delete a page by removing its entire `.cerbo/objects/<uuid>/` directory. The system SHALL NOT delete `type: :Source` pages. This operation SHALL be irreversible and MUST require confirmation via a modal dialog.
 
 #### Scenario: Delete existing page
-- **WHEN** the user triggers a delete operation
-- **THEN** the system SHALL display a confirmation modal showing the page title and slug (e.g., `Title [slug:slug]`)
+- **WHEN** the user triggers a delete operation for a page with `type: :Page`
+- **THEN** the system SHALL display a confirmation modal showing the page title
 - **WHEN** the user confirms the deletion
-- **THEN** the page folder and all its contents are removed from disk
-- **THEN** the link index is updated to remove the page and its outbound links
+- **THEN** the directory `.cerbo/objects/<uuid>/` and all its contents are removed
+- **THEN** `index.json` is updated to remove the UUID and title mappings
+- **THEN** other objects' `relations.ttl` are updated to remove backlinks
+
+#### Scenario: Delete source type (read-only)
+- **WHEN** the user attempts to delete a page with `type: :Source`
+- **THEN** the system SHALL return an error "Cannot delete source type (read-only)"
+- **THEN** no files or folders are removed
 
 ### Requirement: Rename page
-The system SHALL rename a page by updating its title (H1 heading in `page.md`) and/or its slug (folder name). The UI SHALL provide a focused modal dialog showing current metadata and a preview of the new slug.
+The system SHALL rename a page by updating its `:title` in `meta.ttl` and its H1 heading in `page.md` using the `page_update_title(uuid, newTitle)` Tauri command. The page's UUID and directory location SHALL NOT change. The UI SHALL provide a focused modal dialog showing the current title. The former slug-based `page_rename` command SHALL NOT be used.
 
-#### Scenario: Rename page title and slug
-- **WHEN** the user provides a new title "Advanced Rust" for a page with slug "rust-intro"
-- **THEN** the folder is renamed from `rust-intro/` to `advanced-rust/`
-- **THEN** the H1 heading in `page.md` is updated to `# Advanced Rust`
-- **THEN** the link index is updated to reflect the new slug
+#### Scenario: Rename page via page_update_title
+- **WHEN** the user provides a new title "Advanced Rust" for a page via the rename dialog
+- **THEN** `page_update_title` updates `:title` in `meta.ttl` to "Advanced Rust"
+- **THEN** the first H1 heading in `page.md` is updated to `# Advanced Rust`
+- **THEN** the UUID and directory location SHALL NOT change
+- **THEN** `page_list` subsequently returns the updated title for this UUID
 
-#### Scenario: Rename results in slug conflict
-- **WHEN** the user renames a page to a title whose derived slug already exists
-- **THEN** the system SHALL reject the operation with a descriptive error in the dialog
-- **THEN** no files or folders are moved
+#### Scenario: page_rename command is not registered
+- **WHEN** any caller invokes `page_rename`
+- **THEN** the call SHALL fail — the command is not registered in the Tauri invoke handler
 
 ### Requirement: Bidirectional Title Sync
-The system SHALL maintain synchronization between the page's metadata (title/slug) and the first H1 heading in its markdown content.
+The system SHALL maintain synchronization between the page's metadata (title in `meta.ttl`) and the first H1 heading in its markdown content.
 
 #### Scenario: Update title via markdown
 - **WHEN** the user edits the first `# Heading` in the markdown editor
-- **THEN** after the auto-save delay, the system SHALL trigger a page rename
-- **THEN** the folder SHALL be renamed to match the new derived slug
-- **THEN** the sidebar and internal state SHALL update to reflect the new title and slug
+- **THEN** after the auto-save delay, the system SHALL update `meta.ttl` `:title` to match
+- **THEN** `index.json` `title_to_uuid` SHALL update to reflect the new title
+- **THEN** the sidebar and internal state SHALL update to reflect the new title
 
 #### Scenario: Update markdown via rename dialog
 - **WHEN** the user renames a page via the modal dialog
@@ -101,13 +135,42 @@ The system SHALL ensure that every page has an H1 heading in its markdown conten
 
 #### Scenario: Save page without H1 heading
 - **WHEN** the user saves a page (via editor auto-save or CLI) that lacks an H1 heading (`# Title`)
-- **THEN** the system SHALL infer a title from the current page metadata or the slug (e.g., humanizing `my-long-slug` to `My Long Slug`)
+- **THEN** the system SHALL infer a title from the current page metadata (`meta.ttl` `:title`)
 - **THEN** the system SHALL prepend the inferred title as an H1 heading to the markdown content before writing to disk
 
 ### Requirement: List pages
-The system SHALL return a list of all pages in the active vault by scanning for folders containing a `page.md` file.
+The system SHALL return a list of all pages by scanning `.cerbo/objects/` directories that contain `page.md`. Each entry SHALL include `uuid` and `title`. The command SHALL NOT accept a `vaultId` parameter — page storage is global within the app context.
 
-#### Scenario: List pages in a populated vault
-- **WHEN** the frontend requests the page list
-- **THEN** the system returns one entry per folder containing `page.md`, including slug and title
-- **THEN** folders without `page.md` are excluded
+#### Scenario: page_list returns uuid entries
+- **WHEN** the frontend calls `invoke('page_list')` without a `vaultId`
+- **THEN** the system returns one entry per object with `page.md` and a valid page type
+- **THEN** each entry includes `uuid` (UUID v4 string) and `title` (from `meta.ttl`)
+- **THEN** no entry includes a `slug` field
+
+#### Scenario: page_list ignores vaultId parameter
+- **WHEN** `page_list` is invoked with any extra parameter
+- **THEN** the extra parameter is ignored
+- **THEN** all pages in the configured objects directory are returned
+
+### Requirement: Import source page
+The system SHALL import a URL as a new page with `type: :Source` (read-only). The system SHALL fetch the URL content, convert to markdown if needed, and store in `.cerbo/objects/<uuid>/page.md`.
+
+#### Scenario: Import page from URL
+- **WHEN** user runs `cerbo import https://example.com/page`
+- **THEN** a new UUID is generated
+- **THEN** content is fetched and stored in `.cerbo/objects/<uuid>/page.md`
+- **THEN** `meta.ttl` is created with `type: :Source` and `:original-url`
+- **THEN** the page is read-only (cannot be written or deleted)
+
+### Requirement: Resolve UUID to path
+The system SHALL provide `cerbo resolve <uuid>` command that returns the local filesystem path to the object's primary file based on its type.
+
+#### Scenario: Resolve page UUID
+- **WHEN** user runs `cerbo resolve <uuid-page>`
+- **THEN** the system returns `/path/to/vault/.cerbo/objects/<uuid-page>/page.md`
+
+#### Scenario: Resolve attachment UUID
+- **WHEN** user runs `cerbo resolve <uuid-attachment>`
+- **THEN** the system detects the binary filename from the attachment directory
+- **THEN** returns `/path/to/vault/.cerbo/objects/<uuid-attachment>/filename`
+

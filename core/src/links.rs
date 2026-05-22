@@ -1,12 +1,13 @@
-use crate::{CerboContext, object};
+use crate::{CerboContext, VaultContext, object};
 use regex::Regex;
 use std::fs;
+use std::path::PathBuf;
 
 // ── Link Extraction ─────────────────────────────────────
 
-/// Extract cerbo://<uuid> links from page content
+/// Extract cerbo://<uuid> links from page content (handles both cerbo://<uuid> and cerbo://objects/<uuid>)
 pub fn extract_cerbo_links(content: &str) -> Vec<String> {
-    let re = Regex::new(r"cerbo://([a-z0-9-]+)").unwrap();
+    let re = Regex::new(r"cerbo://(?:objects/)?([a-fA-F0-9-]+)").unwrap();
     re.captures_iter(content)
         .map(|cap| cap[1].to_string())
         .collect()
@@ -25,6 +26,16 @@ pub fn extract_wikilinks(content: &str) -> Vec<String> {
 /// Read backrefs.ttl for an object, returns list of UUIDs that link to this object
 pub fn backrefs_read(ctx: &CerboContext, uuid: &str) -> Result<Vec<String>, String> {
     let obj_dir = object::object_path(ctx, uuid);
+    backrefs_read_from_path(&obj_dir)
+}
+
+/// Read backrefs.ttl from a vault context
+pub fn backrefs_read_vault(vault_ctx: &VaultContext, uuid: &str) -> Result<Vec<String>, String> {
+    let obj_dir = vault_ctx.object_path(uuid);
+    backrefs_read_from_path(&obj_dir)
+}
+
+fn backrefs_read_from_path(obj_dir: &PathBuf) -> Result<Vec<String>, String> {
     let backrefs_path = obj_dir.join("backrefs.ttl");
 
     if !backrefs_path.exists() {
@@ -37,8 +48,7 @@ pub fn backrefs_read(ctx: &CerboContext, uuid: &str) -> Result<Vec<String>, Stri
     parse_backrefs(&content)
 }
 
-/// Add a backlink to an object's backrefs.ttl
-/// This is called when another page links to this object
+/// Add a backlink to an object's backrefs.ttl (legacy API)
 pub fn backrefs_add(ctx: &CerboContext, target_uuid: &str, source_uuid: &str) -> Result<(), String> {
     let mut backrefs = backrefs_read(ctx, target_uuid)?;
 
@@ -51,16 +61,59 @@ pub fn backrefs_add(ctx: &CerboContext, target_uuid: &str, source_uuid: &str) ->
     write_backrefs(ctx, target_uuid, &backrefs)
 }
 
-/// Remove a backlink from an object's backrefs.ttl
+/// Add a backlink (vault-aware)
+pub fn backrefs_add_vault(vault_ctx: &VaultContext, target_uuid: &str, source_uuid: &str) -> Result<(), String> {
+    let mut backrefs = backrefs_read_vault(vault_ctx, target_uuid)?;
+
+    if backrefs.contains(&source_uuid.to_string()) {
+        return Ok(());
+    }
+
+    backrefs.push(source_uuid.to_string());
+    write_backrefs_vault(vault_ctx, target_uuid, &backrefs)
+}
+
+/// Remove a backlink from an object's backrefs.ttl (legacy API)
 pub fn backrefs_remove(ctx: &CerboContext, target_uuid: &str, source_uuid: &str) -> Result<(), String> {
     let mut backrefs = backrefs_read(ctx, target_uuid)?;
     backrefs.retain(|u| u != source_uuid);
     write_backrefs(ctx, target_uuid, &backrefs)
 }
 
-/// Write backrefs.ttl for an object
+/// Remove a backlink (vault-aware)
+pub fn backrefs_remove_vault(vault_ctx: &VaultContext, target_uuid: &str, source_uuid: &str) -> Result<(), String> {
+    let mut backrefs = backrefs_read_vault(vault_ctx, target_uuid)?;
+    backrefs.retain(|u| u != source_uuid);
+    write_backrefs_vault(vault_ctx, target_uuid, &backrefs)
+}
+
+/// Clear all backlinks for an object (legacy API)
+pub fn backrefs_clear(ctx: &CerboContext, uuid: &str) -> Result<(), String> {
+    write_backrefs(ctx, uuid, &[])
+}
+
+/// Clear all backlinks (vault-aware)
+pub fn backrefs_clear_vault(vault_ctx: &VaultContext, uuid: &str) -> Result<(), String> {
+    write_backrefs_vault(vault_ctx, uuid, &[])
+}
+
+/// Write backrefs.ttl for an object (legacy API)
 fn write_backrefs(ctx: &CerboContext, uuid: &str, backrefs: &[String]) -> Result<(), String> {
     let obj_dir = object::object_path(ctx, uuid);
+    write_backrefs_to_path(&obj_dir, backrefs)
+}
+
+/// Write backrefs.ttl (vault-aware)
+fn write_backrefs_vault(vault_ctx: &VaultContext, uuid: &str, backrefs: &[String]) -> Result<(), String> {
+    let obj_dir = vault_ctx.object_path(uuid);
+    write_backrefs_to_path(&obj_dir, backrefs)
+}
+
+fn write_backrefs_to_path(obj_dir: &PathBuf, backrefs: &[String]) -> Result<(), String> {
+    // Create object directory if it doesn't exist
+    fs::create_dir_all(obj_dir)
+        .map_err(|e| format!("Failed to create object directory: {}", e))?;
+
     let backrefs_path = obj_dir.join("backrefs.ttl");
 
     let mut lines = vec![
@@ -159,12 +212,12 @@ mod tests {
 
     #[test]
     fn test_extract_cerbo_links() {
-        let content = "Links to cerbo://uuid-1 and cerbo://uuid-2 and another cerbo://uuid-3";
+        let content = "Links to cerbo://1e5d7dc7-a34c-4a2a-aa49-8bfe2b9805b6 and cerbo://objects/10270714-7005-4627-8b5e-ac75a30c1990 and another cerbo://f7e435db-9740-4a2a-8e57-b439c4f8bb18";
         let links = extract_cerbo_links(content);
         assert_eq!(links.len(), 3);
-        assert!(links.contains(&"uuid-1".to_string()));
-        assert!(links.contains(&"uuid-2".to_string()));
-        assert!(links.contains(&"uuid-3".to_string()));
+        assert!(links.contains(&"1e5d7dc7-a34c-4a2a-aa49-8bfe2b9805b6".to_string()));
+        assert!(links.contains(&"10270714-7005-4627-8b5e-ac75a30c1990".to_string()));
+        assert!(links.contains(&"f7e435db-9740-4a2a-8e57-b439c4f8bb18".to_string()));
     }
 
     #[test]

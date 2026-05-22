@@ -1,6 +1,7 @@
-use crate::{CerboContext, object};
+use crate::{CerboContext, VaultContext, object};
 use regex::Regex;
 use std::fs;
+use std::path::PathBuf;
 
 // ── Annotation Extraction ──────────────────────────────────────
 
@@ -47,9 +48,19 @@ pub fn extract_annotations(content: &str) -> Vec<Annotation> {
 
 // ── Annotations.ttl Management ────────────────────────────────────
 
-/// Write annotations.ttl for an object
+/// Write annotations.ttl for an object (legacy API)
 pub fn annotations_write(ctx: &CerboContext, uuid: &str, annotations: &[Annotation]) -> Result<(), String> {
     let obj_dir = object::object_path(ctx, uuid);
+    annotations_write_to_path(ctx, &obj_dir, uuid, annotations)
+}
+
+/// Write annotations.ttl (vault-aware)
+pub fn annotations_write_vault(vault_ctx: &VaultContext, uuid: &str, annotations: &[Annotation]) -> Result<(), String> {
+    let obj_dir = vault_ctx.object_path(uuid);
+    annotations_write_to_path(&vault_ctx.global, &obj_dir, uuid, annotations)
+}
+
+fn annotations_write_to_path(ctx: &CerboContext, obj_dir: &PathBuf, _uuid: &str, annotations: &[Annotation]) -> Result<(), String> {
     let annotations_path = obj_dir.join("annotations.ttl");
 
     let mut lines = vec![
