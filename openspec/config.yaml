@@ -1,20 +1,20 @@
 schema: spec-driven
-
 # Project context (optional)
 # This is shown to AI when creating artifacts.
 # Add your tech stack, conventions, style guides, domain knowledge, etc.
 # Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
-
+context: |
+  Tech stack: Rust, Tauri, SvelteKit for UI
+  Domain: Semantic knowledge management tool for agents and humans.
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
 # Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+rules:
+  proposal:
+    - Keep proposals under 500 words
+    - Always include a "Non-goals" section
+  design:
+    - Use mermaid skills to draw diagrams when required. Also keep ascii diagrams for compatability.
+    - Use perplexity to validate technologies compatability and ideas.
+    - For each new technology or approach include link from perplexity sources.
+    - Always include a "Non-goals" section.

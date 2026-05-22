@@ -1,0 +1,3 @@
+[test]
+# Run tests sequentially to avoid shared state pollution
+threads = 1

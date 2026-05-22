@@ -3,6 +3,7 @@ use cerbo_core::context::CoreContext;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 use serde_json;
+use std::path::PathBuf;
 
 fn print_json<T: Serialize>(value: &T) {
     println!("{}", serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()));
@@ -18,6 +19,12 @@ fn print_json_error(message: &str) {
 
 #[derive(Serialize)]
 struct PageJson {
+    uuid: String,
+    title: String,
+}
+
+#[derive(Serialize)]
+struct BacklinkJson {
     uuid: String,
     title: String,
 }
@@ -48,26 +55,13 @@ enum Commands {
         #[command(subcommand)]
         action: PageCommands,
     },
-    /// Resolve object UUID to local filesystem path
-    Resolve {
-        uuid: String,
+    /// Watch vaults for changes
+    Watch {
         #[arg(long)]
         json: bool,
     },
     /// Show configuration and vault info
     Info {
-        #[arg(long)]
-        json: bool,
-    },
-    /// Import URL as Source object (read-only)
-    Import {
-        url: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Import ontology (creates type: Ontology object)
-    ImportOntology {
-        url: String,
         #[arg(long)]
         json: bool,
     },
@@ -133,32 +127,43 @@ enum PageCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Attachment management
+    Attachment {
+        #[command(subcommand)]
+        action: AttachmentCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum AttachmentCommands {
+    /// List attachments for a page
+    List {
+        uuid: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add an attachment to a page
+    Add {
+        page_uuid: String,
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete an attachment from a page
+    Delete {
+        uuid: String,
+        filename: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn get_context() -> Result<CerboContext, String> {
-    // Check for local .cerbo/ directory first (for init'd vaults)
-    let current_dir = std::env::current_dir()
-        .map_err(|e| format!("Failed to get current directory: {}", e))?;
-    let local_cerbo = current_dir.join(".cerbo");
-
-    let (config_dir, cache_dir) = if local_cerbo.exists() {
-        (local_cerbo.clone(), current_dir.join(".cache"))
-    } else {
-        // Fall back to XDG directories
-        let core = CoreContext::new()?;
-        (core.config_dir.clone(), core.cache_dir.clone())
-    };
-
+    let core = CoreContext::new()?;
     let ctx = CerboContext {
-        config_dir: config_dir.clone(),
-        cache_dir: cache_dir.clone(),
+        config_dir: core.config_dir.clone(),
+        cache_dir: core.cache_dir.clone(),
     };
-
-    if local_cerbo.exists() {
-        // For local vaults, skip migration and config creation
-        return Ok(ctx);
-    }
-
     let _ = cerbo_core::migration::migrate_if_needed(&ctx)?;
     if !ctx.config_dir.join("vaults.toml").exists() {
         cerbo_core::config::save_config(&ctx, &cerbo_core::config::Config::default())?;
@@ -205,59 +210,20 @@ async fn main() -> Result<(), String> {
                     .map_err(|e| format!("Failed to create objects dir: {}", e))?;
 
                 // Create empty index.json
-                let index = cerbo_core::index::IndexJson::default();
                 let index_path = cerbo_dir.join("index.json");
-                let index_content = serde_json::to_string_pretty(&index)
+                let index_content = serde_json::to_string_pretty(&cerbo_core::index::IndexJson::default())
                     .map_err(|e| format!("Failed to serialize index: {}", e))?;
                 std::fs::write(&index_path, index_content)
                     .map_err(|e| format!("Failed to write index.json: {}", e))?;
 
                 // Create ontology-map.json with empty prefixes
-                let ontology_map = serde_json::json!({"prefixes": {}});
                 let map_path = cerbo_dir.join("ontology-map.json");
+                let ontology_map = serde_json::json!({ "prefixes": {} });
                 std::fs::write(&map_path, serde_json::to_string_pretty(&ontology_map).unwrap())
                     .map_err(|e| format!("Failed to write ontology-map.json: {}", e))?;
 
-                // Bundle Schema.org ontology
-                let schema_url = "https://schema.org/version/latest/schema.ttl";
-                match cerbo_core::object::object_import_ontology(&ctx, schema_url) {
-                    Ok(uuid) => {
-                        // Update ontology-map.json with "schema" prefix
-                        let mut map: serde_json::Value = serde_json::from_str(
-                            &std::fs::read_to_string(&map_path).unwrap_or_default()
-                        ).unwrap_or(serde_json::json!({"prefixes": {}}));
-                        if let Some(prefixes) = map.get_mut("prefixes") {
-                            prefixes["schema"] = serde_json::json!(uuid);
-                            std::fs::write(&map_path, serde_json::to_string_pretty(&map).unwrap()).ok();
-                        }
-                        if !json {
-                            println!("Bundled Schema.org ontology with UUID: {}", uuid);
-                        }
-                    },
-                    Err(e) => if !json { println!("Warning: Failed to bundle Schema.org: {}", e); },
-                }
-
-                // Bundle FOAF ontology
-                let foaf_url = "http://xmlns.com/foaf/spec/index.rdf";
-                match cerbo_core::object::object_import_ontology(&ctx, foaf_url) {
-                    Ok(uuid) => {
-                        // Update ontology-map.json with "foaf" prefix
-                        let mut map: serde_json::Value = serde_json::from_str(
-                            &std::fs::read_to_string(&map_path).unwrap_or_default()
-                        ).unwrap_or(serde_json::json!({"prefixes": {}}));
-                        if let Some(prefixes) = map.get_mut("prefixes") {
-                            prefixes["foaf"] = serde_json::json!(uuid);
-                            std::fs::write(&map_path, serde_json::to_string_pretty(&map).unwrap()).ok();
-                        }
-                        if !json {
-                            println!("Bundled FOAF ontology with UUID: {}", uuid);
-                        }
-                    },
-                    Err(e) => if !json { println!("Warning: Failed to bundle FOAF: {}", e); },
-                }
-
                 if json {
-                    print_json_success("Vault initialized with bundled ontologies");
+                    print_json_success("Vault initialized");
                 } else {
                     println!("Vault initialized in {}", cerbo_dir.display());
                 }
@@ -311,9 +277,19 @@ async fn main() -> Result<(), String> {
             PageCommands::List { json } => {
                 let pages = cerbo_core::page::page_list(&ctx)?;
                 if json {
-                    let pages_json: Vec<PageJson> = pages.into_iter().map(|p| PageJson {
-                        uuid: p.uuid,
-                        title: p.title,
+                    let pages_json: Vec<PageJson> = pages.into_iter().map(|p| {
+                        let u = p.uuid.clone();
+                        PageJson {
+                            uuid: u,
+                            title: p.title,
+                            path: p.uuid,
+                        }
+                    }).collect();
+                    print_json(&pages_json);
+                } else {
+                    println!("{:#?}", pages);
+                }
+            }
                     }).collect();
                     print_json(&pages_json);
                 } else {
@@ -352,39 +328,48 @@ async fn main() -> Result<(), String> {
                     println!("Deleted page");
                 }
             }
-        },
-        Commands::Resolve { uuid, json } => {
-            let obj_path = cerbo_core::object::object_path(&ctx, &uuid);
-            if !obj_path.exists() {
-                if json {
-                    print_json_error(&format!("Object not found: {}", uuid));
-                } else {
-                    eprintln!("Error: Object not found: {}", uuid);
+            PageCommands::Attachment { action } => match action {
+                AttachmentCommands::List { uuid, json } => {
+                    let files = cerbo_core::page::attachment_list(&ctx, uuid)?;
+                    if json {
+                        let files_json: Vec<AttachmentJson> = files.into_iter().map(|f| AttachmentJson {
+                            filename: f.clone(),
+                            path: f,
+                        }).collect();
+                        print_json(&files_json);
+                    } else {
+                        println!("{:#?}", files);
+                    }
                 }
-                std::process::exit(1);
-            }
-            if json {
-                print_json(&serde_json::json!({"path": obj_path.to_string_lossy().to_string()}));
-            } else {
-                println!("{}", obj_path.to_string_lossy());
-            }
+                AttachmentCommands::Add { page_uuid, path, json } => {
+                    let filename = cerbo_core::page::attachment_add(&ctx, page_uuid, path)?;
+                    if json {
+                        print_json(&serde_json::json!({"filename": filename}));
+                    } else {
+                        println!("Added attachment: {}", filename);
+                    }
+                }
+                AttachmentCommands::Delete { uuid, filename, json } => {
+                    cerbo_core::page::attachment_delete(&ctx, uuid, filename)?;
+                    if json {
+                        print_json_success("Attachment deleted");
+                    } else {
+                        println!("Deleted attachment");
+                    }
+                }
+            },
         },
-        Commands::Import { url, json } => {
-            let uuid = cerbo_core::object::object_import(&ctx, &url)?;
+        Commands::Watch { json } => {
             if json {
-                print_json(&serde_json::json!({"uuid": uuid, "url": url}));
+                println!("{}", serde_json::json!({"event": "start", "vault_id": "", "message": "Watching vaults for changes..."}));
             } else {
-                println!("Imported URL as Source object with UUID: {}", uuid);
+                println!("Watching vaults for changes...");
             }
-        },
-        Commands::ImportOntology { url, json } => {
-            let uuid = cerbo_core::object::object_import_ontology(&ctx, &url)?;
-            if json {
-                print_json(&serde_json::json!({"uuid": uuid, "url": url}));
-            } else {
-                println!("Imported ontology from {} with UUID: {}", url, uuid);
+            println!("Watch TBD for UUID model");
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             }
-        },
+        }
         Commands::Info { json } => {
             use cerbo_core::vault;
             use std::path::PathBuf;
@@ -441,6 +426,12 @@ async fn main() -> Result<(), String> {
 struct VaultJson {
     id: String,
     name: String,
+    path: String,
+}
+
+#[derive(Serialize)]
+struct AttachmentJson {
+    filename: String,
     path: String,
 }
 
