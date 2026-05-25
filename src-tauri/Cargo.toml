@@ -2,7 +2,7 @@
 name = "cerbo-desktop"
 
 
-version = "0.2.0"
+version = "0.1.0"
 description = "A local-first markdown wiki"
 authors = []
 edition = "2021"

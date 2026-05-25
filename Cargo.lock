@@ -472,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "cerbo"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "cerbo-core",
  "clap",
@@ -485,7 +485,7 @@ dependencies = [
 
 [[package]]
 name = "cerbo-core"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "chrono",
  "notify",
@@ -506,7 +506,7 @@ dependencies = [
 
 [[package]]
 name = "cerbo-desktop"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "cerbo-core",
  "clap",
@@ -2307,9 +2307,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.29"
+version = "0.4.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
+checksum = "616ec5685824bcc94416c6d4a7a446eea774a31efd7062c8480ba6fd06d7a6e5"
 
 [[package]]
 name = "markup5ever"
@@ -2781,9 +2781,9 @@ dependencies = [
 
 [[package]]
 name = "oxilangtag"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f3f87617a86af77fa3691e6350483e7154c2ead9f1261b75130e21ca0f8acb"
+checksum = "5d3b4eb570abd4a1dcb062c31fd37b832264d9dc7292c3e69acfe926c87b063f"
 dependencies = [
  "serde",
 ]
@@ -3907,9 +3907,9 @@ dependencies = [
 
 [[package]]
 name = "tao"
-version = "0.35.2"
+version = "0.35.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a33f7f9e486ade65fcf1e45c440f9236c904f5c1002cdc7fc6ae582777345ce4"
+checksum = "d1c93047acf68669466a34690ac58cca7010bd1b201e1ec86f1fd0a75d3dd4a9"
 dependencies = [
  "bitflags 2.11.1",
  "block2",

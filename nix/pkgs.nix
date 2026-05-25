@@ -4,7 +4,7 @@ let
     pname = "cerbo";
 
 
-    version = "0.2.0";
+    version = "0.1.0";
     src = ../.;
     cargoLock.lockFile = ../Cargo.lock;
     nativeBuildInputs = [ pkgs.pkg-config pkgs.mandown ];
@@ -30,7 +30,7 @@ let
     pname = "cerbo-frontend";
 
 
-    version = "0.2.0";
+    version = "0.1.0";
     src = ../.;
     nativeBuildInputs = [
       pkgs.bun
@@ -54,7 +54,7 @@ let
     pname = "cerbo-desktop";
 
 
-    version = "0.2.0";
+    version = "0.1.0";
     src = ../.;
     cargoLock.lockFile = ../Cargo.lock;
     buildAndTestFocus = "cerbo-desktop";
