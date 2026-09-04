@@ -21,10 +21,8 @@ cli/man/cerbo.1
 # direnv
 .direnv/
 
-# Beads / Dolt files (added by bd init)
-.dolt/
+# Local tool caches / indexes
 *.db
-.beads-credential-key
 .codanna
 .fastembed_cache
 .codannaignore
