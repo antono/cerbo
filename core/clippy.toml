@@ -1,0 +1,8 @@
+# Every vault write must go through `cerbo_core::fsio::write_atomic` (see the
+# durable-writes capability): a bare write can leave a note truncated or empty.
+# `fsio.rs` is the only module allowed near the raw APIs, and it uses neither of
+# these — it goes through `tempfile` and `File::open`.
+disallowed-methods = [
+  { path = "std::fs::write", reason = "use cerbo_core::fsio::write_atomic instead" },
+  { path = "std::fs::File::create", reason = "use cerbo_core::fsio::write_atomic instead" },
+]

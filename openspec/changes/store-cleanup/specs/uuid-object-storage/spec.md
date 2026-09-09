@@ -63,6 +63,33 @@ never be interpreted as a predicate, a type, or any other structural element.
 - **THEN** reading it after this change SHALL report its correct type and full title
 - **THEN** recovery SHALL NOT require rewriting the file or running a migration
 
+## MODIFIED Requirements
+
+### Requirement: Object Storage Layout
+The system SHALL store all objects (pages, attachments, ontologies) under
+`.cerbo/objects/<uuid>/` directory within the vault root. Each object MUST have a `meta.ttl`
+file. Pages and ontologies MUST have `page.md`. Attachments store their binary file. Objects
+MAY have `backrefs.ttl` and `annotations.ttl`.
+
+An object's type SHALL be recorded as one of exactly four values: `:Product` for a
+user-created page, `:Source` for imported read-only content, `:Attachment` for a binary file,
+and `:Ontology` for an imported ontology. `:Page` is not a type; pages are `:Product`.
+
+#### Scenario: Create new page object
+- **WHEN** user runs `cerbo create "My Page"`
+- **THEN** a new UUID is generated (v4)
+- **THEN** directory `.cerbo/objects/<uuid>/` is created
+- **THEN** `page.md` is created with `# My Page` as content
+- **THEN** `meta.ttl` is created recording the type `:Product`
+
+#### Scenario: Object directory structure
+- **WHEN** listing `.cerbo/objects/<uuid>/` contents
+- **THEN** `meta.ttl` MUST exist
+- **THEN** `page.md` exists for Product/Source/Ontology types
+- **THEN** binary file exists for Attachment type
+- **THEN** `backrefs.ttl` exists once anything has linked to the object
+- **THEN** `annotations.ttl` exists if object has HackMD annotations
+
 ## REMOVED Requirements
 
 ### Requirement: Index JSON as part of the object store contract
@@ -77,3 +104,15 @@ own key.
 be deleted by hand at any time; it is never read, so its presence or absence changes no
 behaviour. Title-to-UUID resolution is specified in the `slug-resolution` capability as a
 scan of object metadata, which is what the implementation already does.
+
+### Requirement: Relations TTL Structure
+**Reason**: This requirement contradicts the `backlinks` capability, which states that
+`backrefs.ttl` holds ONLY `:hasBacklink` predicates and that outgoing links live in `page.md`
+as `cerbo://<uuid>` with no tracking file. `backlinks` describes what the code does; this
+requirement's `:linksTo` and `:usesAttachment` triples were never written by `core`, and the
+only code that ever emitted `:linksTo` was the migrator this change deletes. Keeping both
+descriptions leaves the on-disk contract ambiguous.
+
+**Migration**: None. `backlinks` is the single authority for `backrefs.ttl`. A vault that
+somehow contains `:linksTo` or `:usesAttachment` triples is unaffected: they are ignored on
+read and disappear the next time the file is rebuilt by `cerbo index`.

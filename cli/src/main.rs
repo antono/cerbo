@@ -2,7 +2,6 @@ use cerbo_core::CerboContext;
 use cerbo_core::context::CoreContext;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
-use serde_json;
 
 fn print_json<T: Serialize>(value: &T) {
     println!("{}", serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()));
@@ -222,23 +221,39 @@ enum PageCommands {
     },
 }
 
-/// Ensure `/cerbo/` is present in `.gitignore` at the given repo root.
+/// Ensure the vault's ignore rules cover the symlink tree and the trash.
+///
+/// Missing entries are appended; existing content keeps its order, and an entry
+/// already covered by any equivalent spelling is left alone.
 fn ensure_gitignore(vault_root: &std::path::Path) -> Result<(), String> {
     let gitignore_path = vault_root.join(".gitignore");
-    let entry = "/cerbo/\n";
-
     let existing = std::fs::read_to_string(&gitignore_path).unwrap_or_default();
-    if existing.lines().any(|l| l == "/cerbo/" || l == "cerbo/") {
+
+    let wanted: [(&str, &[&str]); 2] = [
+        ("/cerbo/", &["/cerbo/", "cerbo/"]),
+        (
+            "/.cerbo/trash/",
+            &["/.cerbo/trash/", ".cerbo/trash/", "/.cerbo/", ".cerbo/"],
+        ),
+    ];
+
+    let mut content = existing.clone();
+    for (entry, aliases) in wanted {
+        if content.lines().any(|l| aliases.contains(&l.trim())) {
+            continue;
+        }
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(entry);
+        content.push('\n');
+    }
+
+    if content == existing {
         return Ok(());
     }
 
-    let mut content = existing;
-    if !content.is_empty() && !content.ends_with('\n') {
-        content.push('\n');
-    }
-    content.push_str(entry);
-
-    std::fs::write(&gitignore_path, content)
+    cerbo_core::fsio::write_atomic_str(&gitignore_path, &content)
         .map_err(|e| format!("Failed to write .gitignore: {}", e))
 }
 
@@ -334,7 +349,7 @@ async fn main() -> Result<(), String> {
     let mut cwd_vault_id = cwd_vault_root
         .as_deref()
         .and_then(|root| cerbo_core::vault::vault_id_from_path(&ctx, root));
-    if let (Some(ref root), None) = (cwd_vault_root.as_ref(), cwd_vault_id.as_ref()) {
+    if let (Some(root), None) = (cwd_vault_root.as_ref(), cwd_vault_id.as_ref()) {
         let _ = cerbo_core::vault::auto_vault_register(&ctx, root);
         cwd_vault_id = cerbo_core::vault::vault_id_from_path(&ctx, root);
     }
@@ -357,19 +372,14 @@ async fn main() -> Result<(), String> {
                 std::fs::create_dir_all(&objects_dir)
                     .map_err(|e| format!("Failed to create objects dir: {}", e))?;
 
-                // Create empty index.json
-                let index = cerbo_core::index::IndexJson::default();
-                let index_path = cerbo_dir.join("index.json");
-                let index_content = serde_json::to_string_pretty(&index)
-                    .map_err(|e| format!("Failed to serialize index: {}", e))?;
-                std::fs::write(&index_path, index_content)
-                    .map_err(|e| format!("Failed to write index.json: {}", e))?;
-
                 // Create ontology-map.json with empty prefixes
                 let ontology_map = serde_json::json!({"prefixes": {}});
                 let map_path = cerbo_dir.join("ontology-map.json");
-                std::fs::write(&map_path, serde_json::to_string_pretty(&ontology_map).unwrap())
-                    .map_err(|e| format!("Failed to write ontology-map.json: {}", e))?;
+                cerbo_core::fsio::write_atomic_str(
+                    &map_path,
+                    &serde_json::to_string_pretty(&ontology_map).unwrap(),
+                )
+                .map_err(|e| format!("Failed to write ontology-map.json: {}", e))?;
 
                 // Use a context rooted at the new local vault, not the global XDG ctx.
                 // get_context() falls back to XDG when .cerbo/ didn't exist at startup.
@@ -388,7 +398,11 @@ async fn main() -> Result<(), String> {
                         ).unwrap_or(serde_json::json!({"prefixes": {}}));
                         if let Some(prefixes) = map.get_mut("prefixes") {
                             prefixes["schema"] = serde_json::json!(uuid);
-                            std::fs::write(&map_path, serde_json::to_string_pretty(&map).unwrap()).ok();
+                            cerbo_core::fsio::write_atomic_str(
+                                &map_path,
+                                &serde_json::to_string_pretty(&map).unwrap(),
+                            )
+                            .ok();
                         }
                         if !json {
                             println!("Bundled Schema.org ontology with UUID: {}", uuid);
@@ -407,7 +421,11 @@ async fn main() -> Result<(), String> {
                         ).unwrap_or(serde_json::json!({"prefixes": {}}));
                         if let Some(prefixes) = map.get_mut("prefixes") {
                             prefixes["foaf"] = serde_json::json!(uuid);
-                            std::fs::write(&map_path, serde_json::to_string_pretty(&map).unwrap()).ok();
+                            cerbo_core::fsio::write_atomic_str(
+                                &map_path,
+                                &serde_json::to_string_pretty(&map).unwrap(),
+                            )
+                            .ok();
                         }
                         if !json {
                             println!("Bundled FOAF ontology with UUID: {}", uuid);
@@ -416,14 +434,16 @@ async fn main() -> Result<(), String> {
                     Err(e) => if !json { println!("Warning: Failed to bundle FOAF: {}", e); },
                 }
 
-                let _ = ensure_gitignore(&current_dir);
-
                 if json {
                     print_json_success("Vault initialized with bundled ontologies");
                 } else {
                     println!("Vault initialized in {}", cerbo_dir.display());
                 }
             }
+
+            // Idempotent, and runs on an already-initialised vault too so an
+            // existing one picks up any newly required ignore rule.
+            let _ = ensure_gitignore(&current_dir);
         }
         Commands::Vault { action } => match action {
             VaultCommands::List { json } => {
@@ -679,12 +699,16 @@ async fn main() -> Result<(), String> {
                 if !collisions.is_empty() {
                     eprintln!("Symlink collisions detected: {}", collisions.len());
                 }
-                if !stats.errors.is_empty() {
-                    eprintln!("Errors: {}", stats.errors.len());
-                    for err in &stats.errors {
-                        eprintln!("  {}: {}", err.page_uuid, err.error_message);
-                    }
+            }
+
+            // An object that could not be read or written leaves the index
+            // incomplete, so say which one and fail — in both output modes.
+            if !stats.errors.is_empty() {
+                eprintln!("Errors: {}", stats.errors.len());
+                for err in &stats.errors {
+                    eprintln!("  {}: {}", err.page_uuid, err.error_message);
                 }
+                std::process::exit(1);
             }
         },
         Commands::Symlink { vault, json } => {
@@ -778,14 +802,12 @@ async fn main() -> Result<(), String> {
         },
         Commands::Info { json } => {
             use cerbo_core::vault;
-            use std::path::PathBuf;
 
-            fn display_path(p: &PathBuf) -> String {
-                if let Ok(home) = std::env::var("HOME") {
-                    if let Some(rest) = p.to_str().and_then(|s| s.strip_prefix(&home)) {
+            fn display_path(p: &std::path::Path) -> String {
+                if let Ok(home) = std::env::var("HOME")
+                    && let Some(rest) = p.to_str().and_then(|s| s.strip_prefix(&home)) {
                         return format!("~{}", rest);
                     }
-                }
                 p.to_string_lossy().to_string()
             }
 

@@ -57,10 +57,8 @@ pub fn load_auto_vaults(ctx: &CerboContext) -> Result<VaultsFile, String> {
 
 pub fn save_auto_vaults(ctx: &CerboContext, registry: &VaultsFile) -> Result<(), String> {
     let p = config::auto_config_path(ctx)?;
-    let tmp = p.with_extension("toml.tmp");
     let raw = toml::to_string_pretty(registry).map_err(|e| format!("save_auto_vaults serialize: {e}"))?;
-    std::fs::write(&tmp, raw).map_err(|e| format!("save_auto_vaults write tmp: {e}"))?;
-    std::fs::rename(&tmp, &p).map_err(|e| format!("save_auto_vaults rename: {e}"))?;
+    crate::fsio::write_atomic_str(&p, &raw).map_err(|e| format!("save_auto_vaults write: {e}"))?;
     Ok(())
 }
 
@@ -70,7 +68,7 @@ pub fn list_all_vaults(ctx: &CerboContext) -> Result<Vec<Vault>, String> {
 }
 
 /// List all page UUIDs in a vault (scans vault_path/.cerbo/objects/)
-pub fn list_pages_in_vault(_ctx: &CerboContext, vault_path: &PathBuf) -> Result<Vec<String>, String> {
+pub fn list_pages_in_vault(_ctx: &CerboContext, vault_path: &Path) -> Result<Vec<String>, String> {
     let objects_dir = vault_path.join(".cerbo").join("objects");
 
     if !objects_dir.exists() {
@@ -86,7 +84,7 @@ pub fn list_pages_in_vault(_ctx: &CerboContext, vault_path: &PathBuf) -> Result<
         let entry = entry.map_err(|e| format!("list_pages_in_vault entry: {}", e))?;
         let path = entry.path();
 
-        if !path.is_dir() {
+        if !path.is_dir() || crate::fsio::is_temp_name(&entry.file_name().to_string_lossy()) {
             continue;
         }
 
@@ -100,7 +98,7 @@ pub fn list_pages_in_vault(_ctx: &CerboContext, vault_path: &PathBuf) -> Result<
 }
 
 /// List all objects in a vault with their UUID, title, and type
-pub fn list_vault_objects(_ctx: &CerboContext, vault_path: &PathBuf) -> Result<Vec<VaultObject>, String> {
+pub fn list_vault_objects(_ctx: &CerboContext, vault_path: &Path) -> Result<Vec<VaultObject>, String> {
     use crate::object::ObjectMeta;
 
     let objects_dir = vault_path.join(".cerbo").join("objects");
@@ -117,12 +115,11 @@ pub fn list_vault_objects(_ctx: &CerboContext, vault_path: &PathBuf) -> Result<V
     for entry in entries {
         let entry = entry.map_err(|e| format!("list_vault_objects entry: {}", e))?;
         let path = entry.path();
+        let uuid = entry.file_name().to_string_lossy().to_string();
 
-        if !path.is_dir() {
+        if !path.is_dir() || crate::fsio::is_temp_name(&uuid) {
             continue;
         }
-
-        let uuid = entry.file_name().to_string_lossy().to_string();
         let meta_path = path.join("meta.ttl");
 
         if let Ok(meta) = ObjectMeta::read_from_file(&meta_path) {
@@ -211,7 +208,7 @@ pub fn vault_list(ctx: &CerboContext) -> Result<VaultsFile, String> {
     for mut v in auto_file.vaults {
         v.is_auto = true;
         let canon = std::fs::canonicalize(&v.path).ok();
-        if canon.map_or(true, |c| !manual_paths.contains(&c)) {
+        if canon.is_none_or(|c| !manual_paths.contains(&c)) {
             manual.vaults.push(v);
         }
     }
@@ -299,6 +296,8 @@ fn vault_root(ctx: &CerboContext, vault_id: &str) -> Result<PathBuf, String> {
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
 #[cfg(test)]
+// Fixtures write files directly; the atomic-write rule guards vault code, not setup.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use crate::state;
@@ -411,7 +410,7 @@ mod tests {
 
         vault_add(&ctx, "Manual".into(), manual_dir.to_string_lossy().to_string()).unwrap();
 
-        let mut auto_file = VaultsFile {
+        let auto_file = VaultsFile {
             vaults: vec![Vault {
                 id: "auto-id".into(),
                 name: "Auto".into(),
@@ -419,7 +418,7 @@ mod tests {
                 is_auto: false,
             }],
         };
-        save_auto_vaults(&ctx, &mut auto_file).unwrap();
+        save_auto_vaults(&ctx, &auto_file).unwrap();
 
         let list = vault_list(&ctx).unwrap();
         assert_eq!(list.vaults.len(), 2);
@@ -669,6 +668,8 @@ pub fn validate_virtual_path(s: &str) -> Result<(), VirtualPathError> {
 }
 
 #[cfg(test)]
+// Fixtures write files directly; the atomic-write rule guards vault code, not setup.
+#[allow(clippy::disallowed_methods)]
 mod path_tests {
     use super::*;
     use tempfile::TempDir;

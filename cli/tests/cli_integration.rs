@@ -22,12 +22,9 @@ fn setup() -> TestContext {
     let xdg_dir = TempDir::new().unwrap();
     let config_dir = tmp_dir.path().join(".cerbo");
 
-    // The binary is in the workspace target/debug directory
-    let bin_path = std::path::PathBuf::from("/home/antono/Code/cerbo/target/debug/cerbo");
-
-    if !bin_path.exists() {
-        panic!("cerbo binary not found at {:?}. Run 'cargo build --package cerbo' first.", bin_path);
-    }
+    // Cargo builds the binary for us and hands us its path, so this works in any
+    // checkout and inside the Nix sandbox.
+    let bin_path = std::path::PathBuf::from(env!("CARGO_BIN_EXE_cerbo"));
 
     TestContext {
         tmp_dir,
@@ -50,7 +47,7 @@ fn test_init_creates_cerbo_directory() {
     assert!(output.status.success());
     assert!(ctx.config_dir.exists());
     assert!(ctx.config_dir.join("objects").exists());
-    assert!(ctx.config_dir.join("index.json").exists());
+    assert!(!ctx.config_dir.join("index.json").exists(), "index.json is no longer part of a vault");
     assert!(ctx.config_dir.join("ontology-map.json").exists());
 }
 
@@ -89,7 +86,7 @@ fn test_page_create_and_read() {
 
     // Create page
     let output = ctx.cmd()
-        .args(&["page", "create", "Test Page"])
+        .args(["page", "create", "Test Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -108,7 +105,7 @@ fn test_page_create_and_read() {
 
     // Read page
     let output = ctx.cmd()
-        .args(&["page", "read", &uuid])
+        .args(["page", "read", &uuid])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -129,7 +126,7 @@ fn test_page_write_and_read() {
         .output();
 
     let output = ctx.cmd()
-        .args(&["page", "create", "Editable Page"])
+        .args(["page", "create", "Editable Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -145,7 +142,7 @@ fn test_page_write_and_read() {
     // Write
     let new_content = "# Editable Page\n\nUpdated content here.";
     let output = ctx.cmd()
-        .args(&["page", "write", &uuid, new_content])
+        .args(["page", "write", &uuid, new_content])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -154,7 +151,7 @@ fn test_page_write_and_read() {
 
     // Read back
     let output = ctx.cmd()
-        .args(&["page", "read", &uuid])
+        .args(["page", "read", &uuid])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -174,7 +171,7 @@ fn test_page_delete() {
         .output();
 
     let output = ctx.cmd()
-        .args(&["page", "create", "Page to Delete"])
+        .args(["page", "create", "Page to Delete"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -189,7 +186,7 @@ fn test_page_delete() {
 
     // Delete
     let output = ctx.cmd()
-        .args(&["page", "delete", &uuid])
+        .args(["page", "delete", &uuid])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -210,14 +207,14 @@ fn test_page_list() {
 
     for i in 1..=3 {
         let _ = ctx.cmd()
-            .args(&["page", "create", &format!("Page {}", i)])
+            .args(["page", "create", &format!("Page {}", i)])
             .current_dir(ctx.tmp_dir.path())
             .output();
     }
 
     // List pages
     let output = ctx.cmd()
-        .args(&["page", "list"])
+        .args(["page", "list"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -240,7 +237,7 @@ fn test_resolve_command() {
         .output();
 
     let output = ctx.cmd()
-        .args(&["page", "create", "Resolvable Page"])
+        .args(["page", "create", "Resolvable Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -255,7 +252,7 @@ fn test_resolve_command() {
 
     // Resolve
     let output = ctx.cmd()
-        .args(&["resolve", &uuid])
+        .args(["resolve", &uuid])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -267,6 +264,7 @@ fn test_resolve_command() {
 }
 
 #[test]
+#[ignore = "requires network access; run with `cargo test -- --ignored`"]
 fn test_import_url_creates_source() {
     let ctx = setup();
 
@@ -278,7 +276,7 @@ fn test_import_url_creates_source() {
 
     // Import URL as Source
     let output = ctx.cmd()
-        .args(&["import", "https://example.com"])
+        .args(["import", "https://example.com"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -305,7 +303,7 @@ fn test_import_url_creates_source() {
 
     // Try to write - should fail
     let write_output = ctx.cmd()
-        .args(&["page", "write", &uuid, "Should fail"])
+        .args(["page", "write", &uuid, "Should fail"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -314,6 +312,7 @@ fn test_import_url_creates_source() {
 }
 
 #[test]
+#[ignore = "requires network access; run with `cargo test -- --ignored`"]
 fn test_import_ontology() {
     let ctx = setup();
 
@@ -332,7 +331,7 @@ fn test_import_ontology() {
 
     // Import a new ontology
     let output = ctx.cmd()
-        .args(&["import-ontology", "https://schema.org/version/latest/schema.ttl"])
+        .args(["import-ontology", "https://schema.org/version/latest/schema.ttl"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -359,7 +358,7 @@ fn test_old_vault_not_compatible() {
 
     // List pages - should NOT find "old-style-page"
     let output = ctx.cmd()
-        .args(&["page", "list"])
+        .args(["page", "list"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -386,14 +385,14 @@ fn test_index_full_vault_rebuild() {
 
     // Create two pages
     let output1 = ctx.cmd()
-        .args(&["page", "create", "Page 1"])
+        .args(["page", "create", "Page 1"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
     let uuid1 = extract_uuid(&output1.stdout);
 
     let output2 = ctx.cmd()
-        .args(&["page", "create", "Page 2"])
+        .args(["page", "create", "Page 2"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -436,7 +435,7 @@ fn test_index_single_page_incremental() {
 
     // Create page with annotation
     let output = ctx.cmd()
-        .args(&["page", "create", "Test Page"])
+        .args(["page", "create", "Test Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -448,7 +447,7 @@ fn test_index_single_page_incremental() {
 
     // Run incremental index on single page
     let output = ctx.cmd()
-        .args(&["index", "--page", &uuid])
+        .args(["index", "--page", &uuid])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -478,7 +477,7 @@ fn test_index_with_explicit_vault_path() {
 
     // Create page
     let output = ctx.cmd()
-        .args(&["page", "create", "Test Page"])
+        .args(["page", "create", "Test Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -486,7 +485,7 @@ fn test_index_with_explicit_vault_path() {
 
     // Run index from different directory with explicit --vault path
     let output = ctx.cmd()
-        .args(&["index", "--vault", ctx.tmp_dir.path().to_str().unwrap()])
+        .args(["index", "--vault", ctx.tmp_dir.path().to_str().unwrap()])
         .current_dir("/tmp")
         .output()
         .unwrap();
@@ -509,7 +508,7 @@ fn test_index_git_style_discovery_from_subdirectory() {
 
     // Create page
     let output = ctx.cmd()
-        .args(&["page", "create", "Test Page"])
+        .args(["page", "create", "Test Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -544,14 +543,14 @@ fn test_index_json_output() {
 
     // Create page
     ctx.cmd()
-        .args(&["page", "create", "Test Page"])
+        .args(["page", "create", "Test Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
 
     // Run index with --json
     let output = ctx.cmd()
-        .args(&["index", "--json"])
+        .args(["index", "--json"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -603,7 +602,7 @@ fn test_cwd_vault_registered_auto_discovery() {
 
     // Register the vault
     let add_out = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["vault", "add", "TestVault", ctx.tmp_dir.path().to_str().unwrap()])
+        .args(["vault", "add", "TestVault", ctx.tmp_dir.path().to_str().unwrap()])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -611,7 +610,7 @@ fn test_cwd_vault_registered_auto_discovery() {
 
     // Create a page
     let create_out = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["page", "create", "Discovery Page"])
+        .args(["page", "create", "Discovery Page"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -619,7 +618,7 @@ fn test_cwd_vault_registered_auto_discovery() {
 
     // List pages WITHOUT --vault — should auto-discover from CWD
     let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["page", "list", "--json"])
+        .args(["page", "list", "--json"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -651,7 +650,7 @@ fn test_explicit_vault_flag_overrides_cwd() {
 
     // Register vault-A
     let add_a = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["vault", "add", "VaultA", vault_a.path().to_str().unwrap()])
+        .args(["vault", "add", "VaultA", vault_a.path().to_str().unwrap()])
         .current_dir(vault_a.path())
         .output()
         .unwrap();
@@ -662,14 +661,14 @@ fn test_explicit_vault_flag_overrides_cwd() {
 
     // Register vault-B
     cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["vault", "add", "VaultB", vault_b.path().to_str().unwrap()])
+        .args(["vault", "add", "VaultB", vault_b.path().to_str().unwrap()])
         .current_dir(vault_b.path())
         .output()
         .unwrap();
 
     // Create a page in vault-A (from vault-A dir)
     let create_out = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["page", "create", "VaultA Page", "--json"])
+        .args(["page", "create", "VaultA Page", "--json"])
         .current_dir(vault_a.path())
         .output()
         .unwrap();
@@ -677,7 +676,7 @@ fn test_explicit_vault_flag_overrides_cwd() {
 
     // List pages with --vault vault-A-id from vault-B dir → should show vault-A's page
     let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["page", "list", "--vault", &vault_a_id, "--json"])
+        .args(["page", "list", "--vault", &vault_a_id, "--json"])
         .current_dir(vault_b.path())
         .output()
         .unwrap();
@@ -704,7 +703,7 @@ fn test_unregistered_cwd_vault_auto_registers_silently() {
 
     // page list should succeed and produce NO warning on stderr (auto-registered silently)
     let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["page", "list", "--json"])
+        .args(["page", "list", "--json"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -730,14 +729,14 @@ fn test_auto_registration_appears_in_vault_list() {
 
     // Run any command from inside the vault to trigger auto-registration
     cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["page", "list", "--json"])
+        .args(["page", "list", "--json"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
 
     // vault list --json should now show the vault with is_auto: true
     let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["vault", "list", "--json"])
+        .args(["vault", "list", "--json"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -762,14 +761,14 @@ fn test_auto_registration_is_idempotent() {
     // Run twice from the same vault
     for _ in 0..2 {
         cerbo_cmd(&ctx.bin_path, xdg.path())
-            .args(&["page", "list", "--json"])
+            .args(["page", "list", "--json"])
             .current_dir(ctx.tmp_dir.path())
             .output()
             .unwrap();
     }
 
     let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["vault", "list", "--json"])
+        .args(["vault", "list", "--json"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -790,14 +789,14 @@ fn test_vault_approve_promotes_auto_to_manual() {
 
     // Trigger auto-registration
     cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["page", "list", "--json"])
+        .args(["page", "list", "--json"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
 
     // Get the auto-registered vault ID
     let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["vault", "list", "--json"])
+        .args(["vault", "list", "--json"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -806,7 +805,7 @@ fn test_vault_approve_promotes_auto_to_manual() {
 
     // Approve it
     let approve_out = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["vault", "approve", &id, "--json"])
+        .args(["vault", "approve", &id, "--json"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -814,7 +813,7 @@ fn test_vault_approve_promotes_auto_to_manual() {
 
     // Subsequent vault list should show is_auto: false
     let list_out2 = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["vault", "list", "--json"])
+        .args(["vault", "list", "--json"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -836,14 +835,14 @@ fn test_vault_remove_works_on_auto_vault() {
 
     // Trigger auto-registration
     cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["page", "list", "--json"])
+        .args(["page", "list", "--json"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
 
     // Get ID
     let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["vault", "list", "--json"])
+        .args(["vault", "list", "--json"])
         .current_dir(ctx.tmp_dir.path())
         .output()
         .unwrap();
@@ -853,7 +852,7 @@ fn test_vault_remove_works_on_auto_vault() {
     // Remove it — run from a plain dir so it doesn't re-register during the command
     let plain = TempDir::new().unwrap();
     let remove_out = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["vault", "remove", &id, "--json"])
+        .args(["vault", "remove", &id, "--json"])
         .current_dir(plain.path())
         .output()
         .unwrap();
@@ -861,7 +860,7 @@ fn test_vault_remove_works_on_auto_vault() {
 
     // vault list should now be empty (running from plain dir)
     let list_out2 = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["vault", "list", "--json"])
+        .args(["vault", "list", "--json"])
         .current_dir(plain.path())
         .output()
         .unwrap();
@@ -878,7 +877,7 @@ fn test_no_vault_no_active_returns_error() {
     let plain_dir = TempDir::new().unwrap();
 
     let list_out = cerbo_cmd(&ctx.bin_path, xdg.path())
-        .args(&["page", "list"])
+        .args(["page", "list"])
         .current_dir(plain_dir.path())
         .output()
         .unwrap();

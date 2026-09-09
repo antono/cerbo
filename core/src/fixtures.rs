@@ -1,5 +1,4 @@
-use crate::{index::{self, IndexJson}, object, page, CerboContext};
-use std::path::Path;
+use crate::{object, page, CerboContext};
 use tempfile::TempDir;
 
 pub struct FixtureVault {
@@ -29,10 +28,6 @@ pub fn create_fixture_vault() -> Result<FixtureVault, String> {
     let objects_dir = config_dir.join("objects");
     std::fs::create_dir_all(&objects_dir).map_err(|e| e.to_string())?;
 
-    // Create index.json
-    let index = IndexJson::default();
-    index::index_save(&ctx, &index)?;
-
     // Create Page A
     let uuid_a = object::object_create(&ctx, None, object::ObjectType::Product, "Page A".into())?;
     page::page_write(&ctx, uuid_a.clone(), "# Page A\n\nLink to [[Page B]].".into())?;
@@ -51,11 +46,6 @@ pub fn create_fixture_vault() -> Result<FixtureVault, String> {
     // Create Page E (links to B and A)
     let uuid_e = object::object_create(&ctx, None, object::ObjectType::Product, "Page E".into())?;
     page::page_write(&ctx, uuid_e.clone(), "# Page E\n\nLinks to [[Page B]] and [[Page A]].".into())?;
-
-    // Update index with all pages
-    for (uuid, title) in &[(uuid_a.clone(), "Page A"), (uuid_b.clone(), "Page B"), (uuid_c.clone(), "Page C"), (uuid_e.clone(), "Page E")] {
-        index::index_add(&ctx, title, uuid)?;
-    }
 
     Ok(FixtureVault {
         ctx,

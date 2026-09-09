@@ -23,6 +23,8 @@ pub fn migrate_if_needed(ctx: &CerboContext) -> Result<bool, String> {
 }
 
 #[cfg(test)]
+// Fixtures write files directly; the atomic-write rule guards vault code, not setup.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use tempfile::TempDir;

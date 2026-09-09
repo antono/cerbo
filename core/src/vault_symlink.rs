@@ -179,11 +179,11 @@ fn build_plan(vault_root: &Path) -> Result<Vec<PlanEntry>, SymlinkError> {
     let entries = std::fs::read_dir(&objects_dir).map_err(SymlinkError::Io)?;
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_dir() {
+        let uuid = entry.file_name().to_string_lossy().to_string();
+        if !path.is_dir() || crate::fsio::is_temp_name(&uuid) {
             continue;
         }
 
-        let uuid = entry.file_name().to_string_lossy().to_string();
         let meta_path = path.join("meta.ttl");
         if !meta_path.exists() {
             continue;
@@ -267,7 +267,7 @@ fn validate_plan(plan: &[PlanEntry]) -> Result<(), SymlinkError> {
         collisions.sort_by(|a, b| a.path.cmp(&b.path));
         collisions.dedup_by(|a, b| {
             if a.path == b.path {
-                b.uuids.extend(a.uuids.drain(..));
+                b.uuids.append(&mut a.uuids);
                 b.uuids.sort();
                 b.uuids.dedup();
                 true
@@ -366,6 +366,8 @@ fn create_symlink(link_path: &Path, target: &Path) -> Result<(), SymlinkError> {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+// Fixtures write files directly; the atomic-write rule guards vault code, not setup.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
@@ -382,18 +384,18 @@ mod tests {
         fs::create_dir_all(&obj_dir).unwrap();
         fs::write(obj_dir.join("page.md"), format!("# {}", title)).unwrap();
 
-        let mut extra = String::new();
-        if let Some(s) = slug {
-            extra.push_str(&format!("\n    cerbo:slug \"{}\" .", s));
-        }
-        if let Some(vp) = vpath {
-            extra.push_str(&format!("\n    cerbo:virtualPath \"{}\" .", vp));
-        }
-
-        let ttl = format!(
-            "@prefix : <cerbo://ontology/> .\n@prefix schema: <cerbo://ontology/schema/> .\n@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\n<cerbo://objects/<uuid>>\n    :type :Product ;\n    :title \"{title}\" ;\n    schema:dateCreated \"2026-01-01T00:00:00Z\"^^xsd:dateTime ;\n    schema:dateModified \"2026-01-01T00:00:00Z\"^^xsd:dateTime .{extra}\n"
-        );
-        fs::write(obj_dir.join("meta.ttl"), ttl).unwrap();
+        let now = "2026-01-01T00:00:00Z".to_string();
+        let meta = ObjectMeta {
+            object_type: ObjectType::Product,
+            title: title.to_string(),
+            created: now.clone(),
+            modified: now,
+            original_url: None,
+            mime_type: None,
+            slug: slug.map(str::to_string),
+            virtual_path: vpath.map(str::to_string),
+        };
+        fs::write(obj_dir.join("meta.ttl"), meta.to_turtle(uuid)).unwrap();
     }
 
     #[test]
@@ -422,6 +424,38 @@ mod tests {
         // Verify it resolves to page.md, not the object directory
         let target = fs::canonicalize(&leaf).unwrap();
         assert!(target.ends_with("page.md"));
+    }
+
+    /// A non-empty trash must not produce symlinks, and must not make the
+    /// safe-wipe check refuse to rebuild.
+    #[test]
+    fn trash_is_invisible_to_the_symlink_tree() {
+        let temp = TempDir::new().unwrap();
+        let repo = make_repo(&temp);
+        make_object(&repo, "aaaa-1111", "Live Page", Some("live-page"), None);
+
+        // A deleted object, sitting in the trash exactly as object_delete leaves it.
+        let trashed = repo
+            .join(".cerbo")
+            .join("trash")
+            .join("20260904T000000.000000Z-bbbb-2222");
+        fs::create_dir_all(&trashed).unwrap();
+        fs::write(trashed.join("page.md"), "# Trashed Page").unwrap();
+        fs::write(trashed.join("meta.ttl"), "not even valid turtle").unwrap();
+
+        let report = materialize(&repo).expect("a non-empty trash must not be a problem");
+        assert_eq!(report.leaves_created, 1, "only the live page gets a symlink");
+
+        let leaves: Vec<String> = fs::read_dir(repo.join("cerbo"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(leaves, ["live-page.md"]);
+
+        // …and a second rebuild still succeeds, so the trash is not seen as
+        // foreign content by the safe-wipe check.
+        materialize(&repo).expect("rebuild with a non-empty trash must succeed");
     }
 
     #[test]

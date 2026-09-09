@@ -32,10 +32,8 @@ pub fn load_state(ctx: &CerboContext) -> Result<State, String> {
 
 pub fn save_state(ctx: &CerboContext, state: &State) -> Result<(), String> {
     let p = state_path(ctx)?;
-    let tmp = p.with_extension("toml.tmp");
     let raw = toml::to_string_pretty(state).map_err(|e| format!("save_state serialize: {e}"))?;
-    std::fs::write(&tmp, raw).map_err(|e| format!("save_state write tmp: {e}"))?;
-    std::fs::rename(&tmp, &p).map_err(|e| format!("save_state rename: {e}"))?;
+    crate::fsio::write_atomic_str(&p, &raw).map_err(|e| format!("save_state write: {e}"))?;
     Ok(())
 }
 

@@ -2,7 +2,6 @@
 ///
 /// This module provides functions to rebuild page metadata (backrefs.ttl and annotations.ttl)
 /// from page content. Used by the `cerbo index` CLI command.
-
 use crate::VaultContext;
 use uuid::Uuid;
 
@@ -22,13 +21,20 @@ pub fn index_all_pages(global_ctx: &crate::CerboContext) -> Result<IndexStats, S
     Ok(total_stats)
 }
 
-/// Index all pages within a specific vault (two-pass within vault scope)
+/// Rebuild every page's derived metadata in this vault.
+///
+/// One scan accumulates each target's complete backreference set, then each
+/// target is written exactly once. There is no clear-all phase: an interrupted
+/// reindex therefore leaves every `backrefs.ttl` holding either its previous or
+/// its newly computed content, never an empty file.
 pub fn index_vault(vault_ctx: &VaultContext) -> Result<IndexStats, String> {
+    use std::collections::{BTreeSet, HashMap};
+
     let mut stats = IndexStats::default();
 
-    // Phase 1: Get all pages in this vault, excluding :Ontology objects.
-    // Ontologies contain raw RDF/TTL content — backlink and annotation indexing
-    // is not meaningful for them, and they are also excluded from cerbo symlink.
+    // Phase 1: the live pages, excluding :Ontology objects. Ontologies contain
+    // raw RDF/TTL content — backlink and annotation indexing is not meaningful
+    // for them, and they are also excluded from cerbo symlink.
     let page_uuids: Vec<String> = crate::vault::list_pages_in_vault(&vault_ctx.global, &vault_ctx.vault_path)?
         .into_iter()
         .filter(|uuid| {
@@ -42,25 +48,69 @@ pub fn index_vault(vault_ctx: &VaultContext) -> Result<IndexStats, String> {
 
     eprintln!("Indexing {} pages...", total_pages);
 
-    // Phase 2: Clear all backrefs for pages in this vault
-    for uuid in &page_uuids {
-        if let Err(e) = crate::links::backrefs_clear_vault(vault_ctx, uuid) {
+    // Every live page starts with an empty set, so a page that lost all its
+    // inbound links still gets its stale backrefs.ttl replaced.
+    let mut inbound: HashMap<&str, BTreeSet<&str>> = page_uuids
+        .iter()
+        .map(|uuid| (uuid.as_str(), BTreeSet::new()))
+        .collect();
+
+    // Phase 2: one scan over the vault.
+    for (idx, uuid) in page_uuids.iter().enumerate() {
+        let page_md = vault_ctx.object_path(uuid).join("page.md");
+        let content = match std::fs::read_to_string(&page_md) {
+            Ok(c) => c,
+            Err(e) => {
+                stats.errors.push(IndexError {
+                    page_uuid: uuid.clone(),
+                    error_message: format!("Failed to read page.md: {}", e),
+                });
+                continue;
+            }
+        };
+
+        for target in crate::links::extract_cerbo_links(&content) {
+            stats.links_found += 1;
+            match inbound.get_mut(target.as_str()) {
+                Some(sources) => {
+                    sources.insert(uuid.as_str());
+                }
+                None => {
+                    if !crate::links::is_live_target_vault(vault_ctx, &target) {
+                        eprintln!(
+                            "Warning: Broken link in page {}: target {} does not exist",
+                            uuid, target
+                        );
+                    }
+                }
+            }
+        }
+
+        let annotations = crate::annotations::extract_annotations(&content);
+        stats.annotations_found += annotations.len();
+        if let Err(e) = crate::annotations::annotations_write_vault(vault_ctx, uuid, &annotations) {
             stats.errors.push(IndexError {
                 page_uuid: uuid.clone(),
-                error_message: format!("Failed to clear backrefs: {}", e),
+                error_message: format!("Failed to write annotations: {}", e),
             });
         }
-    }
 
-    // Phase 3: Rebuild all metadata
-    for (idx, uuid) in page_uuids.iter().enumerate() {
-        let page_stats = index_page(vault_ctx, uuid)?;
-        stats.merge(page_stats);
+        stats.pages_processed += 1;
 
-        // Progress reporting every 10 pages or at milestones
         let processed = idx + 1;
         if processed % 10 == 0 || processed == total_pages || processed == 1 {
             eprintln!("Processing {}/{} pages...", processed, total_pages);
+        }
+    }
+
+    // Phase 3: one write per target, with its complete set of sources.
+    for (target, sources) in &inbound {
+        let sources: Vec<String> = sources.iter().map(|s| s.to_string()).collect();
+        if let Err(e) = crate::links::backrefs_set_vault(vault_ctx, target, &sources) {
+            stats.errors.push(IndexError {
+                page_uuid: (*target).to_string(),
+                error_message: format!("Failed to write backrefs: {}", e),
+            });
         }
     }
 
@@ -169,7 +219,7 @@ pub fn backfill_slugs(vault_ctx: &VaultContext) -> Result<usize, String> {
         }
         let parsed_uuid = Uuid::parse_str(uuid).unwrap_or_else(|_| Uuid::new_v4());
         meta.slug = Some(crate::slug::slugify(&meta.title, parsed_uuid));
-        meta.write_to_file(&meta_path)
+        meta.write_to_file(&meta_path, uuid)
             .map_err(|e| format!("backfill_slugs write {}: {}", uuid, e))?;
         updated += 1;
     }
@@ -194,11 +244,10 @@ pub fn validate_virtual_paths(vault_ctx: &VaultContext) -> Vec<(String, String)>
         let Ok(meta) = crate::object::ObjectMeta::read_from_file(&meta_path) else {
             continue;
         };
-        if let Some(vp) = meta.virtual_path {
-            if let Err(e) = crate::vault::validate_virtual_path(&vp) {
+        if let Some(vp) = meta.virtual_path
+            && let Err(e) = crate::vault::validate_virtual_path(&vp) {
                 errors.push((uuid, format!("invalid virtualPath {:?}: {}", vp, e)));
             }
-        }
     }
 
     errors
@@ -239,6 +288,8 @@ pub fn detect_path_collisions(vault_ctx: &VaultContext) -> Vec<(String, Vec<Stri
 }
 
 #[cfg(test)]
+// Fixtures write files directly; the atomic-write rule guards vault code, not setup.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use crate::{CerboContext, VaultContext};
@@ -360,6 +411,107 @@ mod tests {
         let backrefs2 = fs::read_to_string(&backrefs_path).unwrap();
 
         assert_eq!(backrefs1, backrefs2, "Backrefs should be identical after reindex");
+    }
+
+    /// A hub with many inbound links is written once, not once per source.
+    #[test]
+    fn reindex_writes_each_target_once_with_every_backreference() {
+        let (_temp, vault_ctx) = setup_test_vault();
+
+        let hub = "00000000-0000-0000-0000-000000000001";
+        create_test_page(&vault_ctx, hub, "# Hub");
+
+        let sources: Vec<String> = (0..137)
+            .map(|i| format!("11111111-1111-1111-1111-{:012}", i))
+            .collect();
+        for uuid in &sources {
+            create_test_page(&vault_ctx, uuid, &format!("Link to cerbo://objects/{hub}"));
+        }
+
+        let hub_backrefs = vault_ctx.object_path(hub).join("backrefs.ttl");
+        let (stats, writes) = crate::fsio::audit::recording(|| index_vault(&vault_ctx).unwrap());
+
+        assert_eq!(stats.errors.len(), 0, "{:?}", stats.errors);
+        assert_eq!(
+            writes.iter().filter(|p| **p == hub_backrefs).count(),
+            1,
+            "the hub's backrefs.ttl must be written exactly once per reindex"
+        );
+
+        let backrefs = crate::links::backrefs_read_vault(&vault_ctx, hub).unwrap();
+        assert_eq!(backrefs.len(), 137, "every source must be recorded");
+    }
+
+    /// There is no clear-all phase any more, so an interrupted reindex can never
+    /// be observed with an emptied `backrefs.ttl`.
+    #[test]
+    fn reindex_never_empties_a_backrefs_file_midway() {
+        let (_temp, vault_ctx) = setup_test_vault();
+
+        let target = "22222222-2222-2222-2222-222222222222";
+        let source = "33333333-3333-3333-3333-333333333333";
+        create_test_page(&vault_ctx, target, "# Target");
+        create_test_page(&vault_ctx, source, &format!("cerbo://objects/{target}"));
+
+        index_vault(&vault_ctx).unwrap();
+        let settled =
+            std::fs::read_to_string(vault_ctx.object_path(target).join("backrefs.ttl")).unwrap();
+        assert!(settled.contains(source));
+
+        // Every write during a second pass carries the full computed set, so at
+        // no point between writes is the file empty.
+        let (_, writes) = crate::fsio::audit::recording(|| index_vault(&vault_ctx).unwrap());
+        let target_writes = writes
+            .iter()
+            .filter(|p| p.ends_with("backrefs.ttl") && p.starts_with(vault_ctx.object_path(target)))
+            .count();
+        assert_eq!(target_writes, 1, "one write means no cleared intermediate state");
+        assert_eq!(
+            std::fs::read_to_string(vault_ctx.object_path(target).join("backrefs.ttl")).unwrap(),
+            settled
+        );
+    }
+
+    /// A page that lost its last inbound link still gets its stale file replaced.
+    #[test]
+    fn reindex_clears_backrefs_that_no_longer_apply() {
+        let (_temp, vault_ctx) = setup_test_vault();
+
+        let target = "44444444-4444-4444-4444-444444444444";
+        let source = "55555555-5555-5555-5555-555555555555";
+        create_test_page(&vault_ctx, target, "# Target");
+        create_test_page(&vault_ctx, source, &format!("cerbo://objects/{target}"));
+        index_vault(&vault_ctx).unwrap();
+        assert_eq!(crate::links::backrefs_read_vault(&vault_ctx, target).unwrap().len(), 1);
+
+        create_test_page(&vault_ctx, source, "# Source with no links");
+        index_vault(&vault_ctx).unwrap();
+        assert!(crate::links::backrefs_read_vault(&vault_ctx, target).unwrap().is_empty());
+    }
+
+    /// Trash contents are outside the live object set.
+    #[test]
+    fn reindex_ignores_the_trash() {
+        let (_temp, vault_ctx) = setup_test_vault();
+
+        let live = "88888888-8888-8888-8888-888888888888";
+        create_test_page(&vault_ctx, live, "# Live");
+
+        let trashed = vault_ctx
+            .vault_path
+            .join(".cerbo")
+            .join("trash")
+            .join("20260904T000000.000000Z-99999999-9999-9999-9999-999999999999");
+        std::fs::create_dir_all(&trashed).unwrap();
+        std::fs::write(trashed.join("page.md"), "# Trashed [x]{schema:Thing}").unwrap();
+        std::fs::write(trashed.join("meta.ttl"), "not even valid turtle").unwrap();
+
+        let stats = index_vault(&vault_ctx).unwrap();
+
+        assert_eq!(stats.pages_processed, 1, "only live pages are indexed");
+        assert!(stats.errors.is_empty(), "trash must not be reported: {:?}", stats.errors);
+        assert!(!trashed.join("annotations.ttl").exists(), "nothing derived from trash");
+        assert!(!trashed.join("backrefs.ttl").exists(), "nothing derived from trash");
     }
 
     #[test]

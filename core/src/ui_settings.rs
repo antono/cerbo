@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct UiSettings {
     pub theme: Option<String>,
     pub font_size: Option<u8>,
@@ -20,17 +21,6 @@ pub struct WindowBounds {
     pub height: f64,
 }
 
-impl Default for UiSettings {
-    fn default() -> Self {
-        Self {
-            theme: None,
-            font_size: None,
-            sidebar_width: None,
-            right_sidebar_visible: None,
-            window_bounds: None,
-        }
-    }
-}
 
 fn ui_settings_path(ctx: &CerboContext) -> Result<PathBuf, String> {
     Ok(paths::config_dir(ctx.config_dir.clone())?.join("ui.toml"))
@@ -47,11 +37,9 @@ pub fn load_ui_settings(ctx: &CerboContext) -> Result<UiSettings, String> {
 
 pub fn save_ui_settings(ctx: &CerboContext, settings: &UiSettings) -> Result<(), String> {
     let p = ui_settings_path(ctx)?;
-    let tmp = p.with_extension("toml.tmp");
     let raw =
         toml::to_string_pretty(settings).map_err(|e| format!("save_ui_settings serialize: {e}"))?;
-    std::fs::write(&tmp, raw).map_err(|e| format!("save_ui_settings write tmp: {e}"))?;
-    std::fs::rename(&tmp, &p).map_err(|e| format!("save_ui_settings rename: {e}"))?;
+    crate::fsio::write_atomic_str(&p, &raw).map_err(|e| format!("save_ui_settings write: {e}"))?;
     Ok(())
 }
 

@@ -28,10 +28,8 @@ pub fn load_config(ctx: &CerboContext) -> Result<Config, String> {
 
 pub fn save_config(ctx: &CerboContext, config: &Config) -> Result<(), String> {
     let p = config_path(ctx)?;
-    let tmp = p.with_extension("toml.tmp");
     let raw = toml::to_string_pretty(config).map_err(|e| format!("save_config serialize: {e}"))?;
-    std::fs::write(&tmp, raw).map_err(|e| format!("save_config write tmp: {e}"))?;
-    std::fs::rename(&tmp, &p).map_err(|e| format!("save_config rename: {e}"))?;
+    crate::fsio::write_atomic_str(&p, &raw).map_err(|e| format!("save_config write: {e}"))?;
     Ok(())
 }
 

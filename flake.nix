@@ -52,6 +52,14 @@
           touch $out
         '';
 
+        # Every vault write must go through cerbo_core::fsio::write_atomic.
+        checks.atomic-writes = pkgs.runCommand "atomic-writes-check" {
+          nativeBuildInputs = [ pkgs.python3 ];
+        } ''
+          python3 ${src}/scripts/check-atomic-writes.py ${src}/core/src
+          touch $out
+        '';
+
         apps.release-workflow-check = {
           type = "app";
           program = "${releaseWorkflowCheck}/bin/release-workflow-check";

@@ -1,4 +1,4 @@
-#!/bin/bash
-# Run core tests sequentially to avoid state pollution
+#!/usr/bin/env bash
+# Run the cerbo-core test suite.
 cd "$(dirname "$0")/core"
-cargo test -- --test-threads=1
+cargo test

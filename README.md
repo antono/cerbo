@@ -70,8 +70,12 @@ nix build .#cerbo          # Build CLI Binary
   the link index and derived data.
 - **Vaults**: Each vault has a `.cerbo/` directory containing:
   - `objects/<uuid>/` - UUID-based object storage (type: Product, Source, Attachment, Ontology)
-  - `index.json` - Maps titles to UUIDs and vice versa
+  - `trash/<timestamp>-<uuid>/` - Deleted objects, kept until you remove them
   - `ontology-map.json` - Maps prefixes (e.g., "schema") to ontology UUIDs
+
+  Titles resolve by scanning the vault's `meta.ttl` files; there is no lookup
+  index on disk. See [docs/storage.md](docs/storage.md) for the full layout,
+  including the `cerbo/` symlink projection.
 
 ## Link Format
 
@@ -93,29 +97,10 @@ These are extracted to `annotations.ttl` in Turtle RDF format.
 
 ## Migration from Slug-Based Storage
 
-Cerbo now uses UUID-based storage (`.cerbo/objects/<uuid>/`). This is a **breaking change** from the previous slug-based model.
+Cerbo uses UUID-based storage (`.cerbo/objects/<uuid>/`). This is a **breaking change**
+from the previous slug-based model: old slug-based vaults are not compatible. Create a new
+vault and move your content across by hand, then build the derived data with:
 
-To migrate an existing vault:
-
-```bash
-# Dry run - see what would be migrated
-cargo run --package cerbo-migrate -- migrate --dry-run
-
-# Actual migration
-cargo run --package cerbo-migrate -- migrate
-
-# Verify migration
-cargo run --package cerbo-migrate -- verify
-```
-
-The migration tool will:
-- Copy `page.md` to `.cerbo/objects/<uuid>/page.md`
-- Copy `assets/` directory to `.cerbo/objects/<uuid>/assets/`
-- Copy any other files in the page directory
-- Generate new UUIDs for each page
-- Create `meta.ttl` with object metadata
-
-After migration, regenerate backlinks and annotations with:
 ```bash
 cerbo index
 ```

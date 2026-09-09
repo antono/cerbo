@@ -46,10 +46,8 @@ impl VaultContext {
             
             match current.parent() {
                 Some(parent) => current = parent,
-                None => return Err(format!(
-                    "Not inside a Cerbo vault (no .cerbo/ found). \
-                    Run 'cerbo vault init' or use --vault <path>"
-                )),
+                None => return Err("Not inside a Cerbo vault (no .cerbo/ found). \
+                    Run 'cerbo vault init' or use --vault <path>".to_string()),
             }
         }
     }
@@ -81,14 +79,15 @@ impl From<context::CoreContext> for CerboContext {
 
 pub mod config;
 pub mod context;
+pub mod fsio;
 pub mod annotations;
-pub mod index;
 pub mod metadata_index;
 pub mod links;
 pub mod migration;
 pub mod object;
 pub mod page;
 pub mod paths;
+pub mod rdf;
 pub mod slug;
 pub mod state;
 pub mod ui_settings;

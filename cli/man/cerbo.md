@@ -30,7 +30,9 @@ If the current directory is inside a vault that has not been registered with `ce
 
 ## init
 
-Initialize a new vault in the current directory. Creates a `.cerbo/` directory with the necessary structure, bundles standard ontologies (Schema.org, FOAF), and adds `/cerbo/` to `.gitignore`.
+Initialize a new vault in the current directory. Creates a `.cerbo/` directory with the necessary structure, bundles standard ontologies (Schema.org, FOAF), and adds `/cerbo/` and `/.cerbo/trash/` to `.gitignore`.
+
+Re-running `cerbo init` on an existing vault leaves it alone, but still tops up the `.gitignore` entries without duplicating or reordering anything.
 
 Usage: `cerbo init [OPTIONS]`
 
@@ -64,6 +66,14 @@ Usage: `cerbo page <SUBCOMMAND>`
 - `cerbo page read <UUID> [--json]` - Read the content of a page by its UUID
 - `cerbo page write <UUID> <CONTENT> [--json]` - Write content to a page
 - `cerbo page delete <UUID> [--json]` - Delete a page by its UUID
+
+**Delete moves the page to the trash.** `cerbo page delete` renames the object's directory to `.cerbo/trash/<timestamp>-<uuid>/` rather than removing it. Every file inside is preserved byte-for-byte, so a mistaken delete is recovered by moving the directory back to `.cerbo/objects/<uuid>/`. Deleting, recreating and deleting the same UUID again leaves two separate entries; neither overwrites the other.
+
+Trashed objects are outside the live set: they do not appear in `cerbo page list`, do not resolve, are not indexed, and get no symlink. A page that still links to a trashed object reports a broken link — the object is never resurrected.
+
+Nothing prunes the trash. Remove entries yourself when you are sure, for example with `rm -rf .cerbo/trash/<entry>`.
+
+Source-type (imported) objects are read-only and cannot be deleted; the refusal happens before anything is moved.
 
 ## resolve
 
@@ -125,16 +135,17 @@ Options:
 - `--json` - Output result as JSON with pages_processed, links_found, annotations_found, slugs_backfilled, path_errors, collisions, errors
 
 **Behavior:**
-- Without `--page`: Performs full vault rebuild (two-pass: clear all backrefs, then rebuild)
-- With `--page <UUID>`: Incremental indexing of a single page (faster, preserves other pages' metadata)
+- Without `--page`: Full vault rebuild. One scan accumulates every object's complete set of inbound links, then each object's `backrefs.ttl` is written exactly once. There is no clear-all phase, so an interrupted rebuild leaves every file holding either its previous or its newly computed content — never an empty one.
+- With `--page <UUID>`: Updates only the links and annotations declared by that one page.
 - Idempotent: Running twice produces identical results
-- Handles corrupted/missing files gracefully (logs errors, continues processing)
+- Continues past an object it cannot read or write, then reports every one of them by UUID on stderr
 
-**When to use:**
-- After manually editing `page.md` files outside of Cerbo
-- After bulk imports or vault migrations
-- If backlinks or annotations appear stale or missing
-- To verify metadata integrity after crashes or interruptions
+**Exit status:** `cerbo index` exits non-zero if any object could not be read or written, and names each on stderr. A run that exits zero has fully rebuilt the vault's metadata.
+
+**When to use `--page`:**
+- Immediately after your own edit to one page, to refresh just what that page declares
+
+`--page` cannot repair a vault. It only knows the links the named page contains now; it cannot discover a link that some *other* page used to have and no longer does, so stale backreferences elsewhere survive it. After manual edits outside Cerbo, after bulk imports or migrations, after a crash, or whenever backlinks look wrong, run a full-vault reindex (`cerbo index` with no `--page`).
 
 ## symlink
 
@@ -180,7 +191,7 @@ Cerbo uses a **UUID-based storage model** where all content is stored locally in
 ## Directory Structure
 
 ```
-.vault-path/
+<vault-path>/
   .cerbo/
     +-- objects/
     |   +-- <uuid>/
@@ -188,7 +199,8 @@ Cerbo uses a **UUID-based storage model** where all content is stored locally in
     |       +-- meta.ttl       # RDF metadata (Turtle format)
     |       +-- backrefs.ttl   # Backlinks to this object
     |       +-- annotations.ttl # HackMD-style annotations
-    +-- index.json             # Object index
+    +-- trash/
+    |   +-- <timestamp>-<uuid>/ # Deleted objects, kept until you remove them
     +-- vaults.toml           # Vault registry (manually registered)
     +-- vaults.auto.toml      # Auto-registered vaults (CWD discovery)
     +-- ontology-map.json      # Ontology prefix mappings

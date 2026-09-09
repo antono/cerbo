@@ -1,7 +1,7 @@
 use crate::{CerboContext, VaultContext, object};
 use regex::Regex;
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 
 // ── Annotation Extraction ──────────────────────────────────────
 
@@ -60,40 +60,53 @@ pub fn annotations_write_vault(vault_ctx: &VaultContext, uuid: &str, annotations
     annotations_write_to_path(&vault_ctx.global, &obj_dir, uuid, annotations)
 }
 
-fn annotations_write_to_path(ctx: &CerboContext, obj_dir: &PathBuf, _uuid: &str, annotations: &[Annotation]) -> Result<(), String> {
-    let annotations_path = obj_dir.join("annotations.ttl");
+fn annotations_write_to_path(
+    ctx: &CerboContext,
+    obj_dir: &Path,
+    uuid: &str,
+    annotations: &[Annotation],
+) -> Result<(), String> {
+    use crate::rdf;
+    use oxrdf::{BlankNode, Literal, NamedNode, Term, Triple};
 
-    let mut lines = vec![
-        "@prefix : <cerbo://ontology/> .".to_string(),
-        "".to_string(),
-        "<cerbo://objects/<uuid>>".to_string(),
-    ];
+    let subject = rdf::object_iri(uuid);
+    let mut triples = Vec::with_capacity(annotations.len() * 4);
 
     for (i, ann) in annotations.iter().enumerate() {
-        // Resolve prefix to full URI using ontology-map.json
+        // Deterministic blank-node labels keep the document byte-stable.
+        let node = BlankNode::new_unchecked(format!("a{i}"));
         let type_uri = resolve_prefix_to_uri(ctx, &ann.prefix, &ann.type_name);
 
-        lines.push(format!(
-            "    :annotation [ :concept \"{}\" ; :type <{}> ; :position \"{},{}\" ] ;",
-            ann.text, type_uri, ann.line, ann.column
+        triples.push(Triple::new(
+            subject.clone(),
+            rdf::cerbo("annotation"),
+            Term::from(node.clone()),
         ));
-
-        if i == annotations.len() - 1 {
-            // Last one gets the period
-            if let Some(last) = lines.last_mut() {
-                *last = last.replace(" ;", " .");
-            }
-        }
+        triples.push(Triple::new(
+            node.clone(),
+            rdf::cerbo("concept"),
+            Term::from(Literal::new_simple_literal(&ann.text)),
+        ));
+        triples.push(Triple::new(
+            node.clone(),
+            rdf::cerbo("type"),
+            Term::from(NamedNode::new_unchecked(type_uri)),
+        ));
+        triples.push(Triple::new(
+            node,
+            rdf::cerbo("position"),
+            Term::from(Literal::new_simple_literal(format!(
+                "{},{}",
+                ann.line, ann.column
+            ))),
+        ));
     }
 
-    if annotations.is_empty() {
-        lines.push("    :annotation [ :concept \"none\" ] .".to_string());
-    }
-
-    let content = lines.join("\n") + "\n";
-
-    fs::write(&annotations_path, content)
-        .map_err(|e| format!("Failed to write annotations.ttl: {}", e))
+    crate::fsio::write_atomic_str(
+        &obj_dir.join("annotations.ttl"),
+        &rdf::serialize(&triples),
+    )
+    .map_err(|e| format!("Failed to write annotations.ttl: {}", e))
 }
 
 /// Read annotations.ttl (placeholder - full parsing not implemented)
@@ -197,6 +210,51 @@ mod tests {
         let content = "This is plain text.";
         let annotations = extract_annotations(content);
         assert_eq!(annotations.len(), 0);
+    }
+
+    #[test]
+    fn annotations_ttl_parses_and_keeps_every_blank_node() {
+        use oxrdf::Term;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let obj_dir = tmp.path().join("objects").join("aaaaaaaa-0000-0000-0000-000000000137");
+        std::fs::create_dir_all(&obj_dir).unwrap();
+        let ctx = crate::CerboContext {
+            config_dir: tmp.path().to_path_buf(),
+            cache_dir: tmp.path().join("cache"),
+        };
+
+        let annotations = extract_annotations(
+            "[Bob]{schema:Person} met [Alice]{foaf:Person} at [Acme]{schema:Organization}.",
+        );
+        assert_eq!(annotations.len(), 3);
+
+        annotations_write_to_path(&ctx, &obj_dir, "aaaaaaaa-0000-0000-0000-000000000137", &annotations)
+            .unwrap();
+
+        let content = std::fs::read_to_string(obj_dir.join("annotations.ttl")).unwrap();
+        let triples = crate::rdf::parse(&content).expect("annotations.ttl must be valid Turtle");
+
+        // One link from the object plus three predicates per annotation.
+        assert_eq!(triples.len(), 12, "{content}");
+
+        let concepts: Vec<&str> = triples
+            .iter()
+            .filter(|t| t.predicate == crate::rdf::cerbo("concept"))
+            .filter_map(|t| match &t.object {
+                Term::Literal(l) => Some(l.value()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(concepts, ["Bob", "Alice", "Acme"]);
+
+        for predicate in ["concept", "type", "position"] {
+            let count = triples
+                .iter()
+                .filter(|t| t.predicate == crate::rdf::cerbo(predicate))
+                .count();
+            assert_eq!(count, 3, "every annotation keeps its {predicate}:\n{content}");
+        }
     }
 
     #[test]

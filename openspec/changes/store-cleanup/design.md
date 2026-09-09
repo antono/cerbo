@@ -249,6 +249,11 @@ bricked by a `:type`-injected title recover on next read with no user action.
   plain directory the user manages with `mv`? The `object-trash` spec deliberately fixes the
   on-disk contract and not the CLI surface, so this can be answered when `cerbo fsck` is
   designed without reopening any spec here.
-- Whether the CI guard should be a grep or a clippy `disallowed_methods` lint. Same effect;
-  the lint is cleaner but needs `clippy.toml` and only covers method paths it can name.
-  Decide while implementing step 2.
+- ~~Whether the CI guard should be a grep or a clippy `disallowed_methods` lint.~~
+  **Resolved: both, for different reasons.** `core/clippy.toml` denies
+  `std::fs::write` and `std::fs::File::create` for the `cerbo-core` crate only, which is
+  the precise guard — it distinguishes production code from test fixtures (the five test
+  modules that write fixtures directly carry an explicit
+  `#[allow(clippy::disallowed_methods)]`). `scripts/check-atomic-writes.py`, wired in as
+  `checks.atomic-writes`, is the same rule as a grep that strips `#[cfg(test)]` modules by
+  brace matching; it needs no network and no compile, so CI can run it on its own.

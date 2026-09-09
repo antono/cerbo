@@ -24,7 +24,7 @@ fn main() {
         use cerbo_core::vault;
         use cerbo_core::CerboContext;
 
-        fn display_path(p: &std::path::PathBuf) -> String {
+        fn display_path(p: &std::path::Path) -> String {
             if let Ok(home) = std::env::var("HOME") {
                 if let Some(rest) = p.to_str().and_then(|s| s.strip_prefix(&home)) {
                     return format!("~{}", rest);

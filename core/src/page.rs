@@ -68,7 +68,7 @@ pub fn page_update_title(ctx: &CerboContext, uuid: String, new_title: String) ->
     let mut meta = ObjectMeta::read_from_file(&meta_path)
         .map_err(|e| format!("page_update_title: read meta.ttl: {e}"))?;
     meta.title = new_title.clone();
-    meta.write_to_file(&meta_path)
+    meta.write_to_file(&meta_path, &uuid)
         .map_err(|e| format!("page_update_title: write meta.ttl: {e}"))?;
 
     // Update first H1 in page.md
@@ -87,7 +87,7 @@ pub fn page_update_title(ctx: &CerboContext, uuid: String, new_title: String) ->
         } else {
             content
         };
-        std::fs::write(&page_path, updated)
+        crate::fsio::write_atomic_str(&page_path, &updated)
             .map_err(|e| format!("page_update_title: write page.md: {e}"))?;
     }
 
@@ -109,32 +109,26 @@ pub fn page_list(ctx: &CerboContext) -> Result<Vec<PageMeta>, String> {
     for entry in entries {
         let entry = entry.map_err(|e| format!("page_list entry: {}", e))?;
         let path = entry.path();
+        let uuid = entry.file_name().to_string_lossy().to_string();
+        // Leftovers from an interrupted atomic write are not objects.
+        if crate::fsio::is_temp_name(&uuid) {
+            continue;
+        }
         if !path.is_dir() {
             continue;
         }
-
-        let uuid = entry.file_name().to_string_lossy().to_string();
         let page_md = path.join("page.md");
         if !page_md.exists() {
             continue;
         }
 
-        // Read title from meta.ttl
-        let meta_path = path.join("meta.ttl");
-        let title = if meta_path.exists() {
-            // TODO: Parse meta.ttl properly
-            // For now, try to extract from page.md
-            std::fs::read_to_string(&page_md)
-                .ok()
-                .and_then(|content| {
-                    content.lines()
-                        .find(|l| l.trim().starts_with("# "))
-                        .map(|l| l.trim_start_matches("# ").to_string())
-                })
-                .unwrap_or_else(|| "Untitled".to_string())
-        } else {
-            "Untitled".to_string()
-        };
+        // `meta.ttl` is the title's only home; the H1 in `page.md` is a copy the
+        // user may have edited outside Cerbo, and is never consulted here.
+        let title = ObjectMeta::read_from_file(&path.join("meta.ttl"))
+            .ok()
+            .map(|meta| meta.title)
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "Untitled".to_string());
 
         pages.push(PageMeta { uuid, title });
     }
@@ -196,11 +190,98 @@ pub fn humanize_slug(_slug: &str) -> String { String::new() }
 pub fn ensure_page_has_h1(_path: &Path, _slug: &str) -> Result<bool, String> { Ok(false) }
 
 #[cfg(test)]
+// Fixtures write files directly; the atomic-write rule guards vault code, not setup.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+    use crate::object::{object_create, ObjectType};
+
+    fn test_context() -> (tempfile::TempDir, CerboContext) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().to_path_buf();
+        std::fs::create_dir_all(dir.join("objects")).unwrap();
+        let ctx = CerboContext {
+            config_dir: dir.clone(),
+            cache_dir: dir.join("cache"),
+        };
+        (tmp, ctx)
+    }
 
     #[test]
-    fn test_page_list_empty() {
-        // TODO: Add proper test with fixtures
+    fn page_list_empty_vault() {
+        let (_tmp, ctx) = test_context();
+        assert!(page_list(&ctx).unwrap().is_empty());
+    }
+
+    #[test]
+    fn page_list_takes_the_title_from_meta_not_the_body() {
+        let (_tmp, ctx) = test_context();
+        let uuid = object_create(&ctx, None, ObjectType::Product, "Recorded Title".into()).unwrap();
+
+        // Someone edited the H1 outside Cerbo.
+        let page_md = object_path(&ctx, &uuid).join("page.md");
+        std::fs::write(&page_md, "# Edited Elsewhere\n\nbody\n").unwrap();
+
+        let pages = page_list(&ctx).unwrap();
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].title, "Recorded Title");
+    }
+
+    #[test]
+    fn page_list_does_not_read_page_md() {
+        let (_tmp, ctx) = test_context();
+        let uuid = object_create(&ctx, None, ObjectType::Product, "Only In Meta".into()).unwrap();
+
+        // An unreadable body must not stop the page from being listed.
+        let page_md = object_path(&ctx, &uuid).join("page.md");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&page_md, std::fs::Permissions::from_mode(0o000)).unwrap();
+        }
+
+        let pages = page_list(&ctx).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&page_md, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].title, "Only In Meta");
+    }
+
+    #[test]
+    fn renaming_to_a_quoted_title_keeps_meta_valid() {
+        let (_tmp, ctx) = test_context();
+        let uuid = object_create(&ctx, None, ObjectType::Product, "Before".into()).unwrap();
+
+        let new_title = r#"He said "hi""#.to_string();
+        page_update_title(&ctx, uuid.clone(), new_title.clone()).unwrap();
+
+        let meta_path = object_path(&ctx, &uuid).join("meta.ttl");
+        let content = std::fs::read_to_string(&meta_path).unwrap();
+        assert!(crate::rdf::parse(&content).is_ok(), "meta.ttl must stay valid Turtle:\n{content}");
+
+        assert_eq!(ObjectMeta::read_from_file(&meta_path).unwrap().title, new_title);
+        assert_eq!(page_list(&ctx).unwrap()[0].title, new_title);
+    }
+
+    #[test]
+    fn page_list_skips_leftover_temp_files() {
+        let (_tmp, ctx) = test_context();
+        let uuid = object_create(&ctx, None, ObjectType::Product, "Real Page".into()).unwrap();
+
+        // A crash between write and rename can leave either of these behind.
+        let objects = crate::object::objects_dir(&ctx);
+        std::fs::write(objects.join(format!("{}stray", crate::fsio::TEMP_PREFIX)), "junk").unwrap();
+        let stray_dir = objects.join(format!("{}stray-dir", crate::fsio::TEMP_PREFIX));
+        std::fs::create_dir_all(&stray_dir).unwrap();
+        std::fs::write(stray_dir.join("page.md"), "# Ghost\n").unwrap();
+
+        let pages = page_list(&ctx).unwrap();
+        assert_eq!(pages.len(), 1, "temp leftovers must not be listed: {pages:?}");
+        assert_eq!(pages[0].uuid, uuid);
     }
 }

@@ -3,16 +3,12 @@ use cerbo_core::object::ObjectMeta;
 use std::path::PathBuf;
 use tauri::{AppHandle, State};
 
+#[derive(Default)]
 pub struct WatcherState {
     #[allow(dead_code)]
     pub watcher: Option<notify::RecommendedWatcher>,
 }
 
-impl Default for WatcherState {
-    fn default() -> Self {
-        Self { watcher: None }
-    }
-}
 
 #[derive(serde::Serialize)]
 pub struct BacklinkEntry {
