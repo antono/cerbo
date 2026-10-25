@@ -69,6 +69,7 @@ let
       pkgs.wrapGAppsHook3
       pkgs.gobject-introspection
       pkgs.jq
+      pkgs.desktop-file-utils
     ];
     buildInputs = tauri-deps ++ [ pkgs.gtk3 pkgs.gsettings-desktop-schemas pkgs.adwaita-icon-theme ];
 
@@ -84,9 +85,12 @@ let
     postInstall = ''
       rm -f $out/bin/cerbo
 
-      # Install desktop file
+      # Install desktop file. Its basename and StartupWMClass must equal the
+      # program name (Wayland app_id and X11 WM_CLASS are both "cerbo-desktop"),
+      # otherwise shells cannot match running windows to this entry and icon.
       mkdir -p $out/share/applications
       cp src-tauri/cerbo-desktop.desktop $out/share/applications/
+      desktop-file-validate $out/share/applications/cerbo-desktop.desktop
 
       # Install icons
       mkdir -p $out/share/icons/hicolor/scalable/apps
@@ -97,6 +101,9 @@ let
         mkdir -p $out/share/icons/hicolor/''${size}x''${size}/apps
         cp src-tauri/icons/''${size}x''${size}.png $out/share/icons/hicolor/''${size}x''${size}/apps/cerbo-desktop.png
       done
+      mkdir -p $out/share/icons/hicolor/256x256/apps $out/share/icons/hicolor/512x512/apps
+      cp src-tauri/icons/128x128@2x.png $out/share/icons/hicolor/256x256/apps/cerbo-desktop.png
+      cp src-tauri/icons/icon.png $out/share/icons/hicolor/512x512/apps/cerbo-desktop.png
     '';
   };
 in
