@@ -1,19 +1,21 @@
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <g fill="white" transform="translate(36, 36)">
-    <!-- Letter C: Geometric open square, line weight 120, total size 440 -->
-    <path d="M 0 0 H 440 V 120 H 120 V 320 H 440 V 440 H 0 Z" />
-    
-    <!-- 
-      Square point inside C:
-      Inner area of C is 120 to 440 (width 320) and 120 to 320 (height 200).
-      Square size: 120x120.
-      Padding: 
-        Vertical: (200 - 120) / 2 = 40px (top and bottom)
-        Horizontal (left of square): 40px
-      Square Position:
-        x = 120 (inner edge of C) + 40 (padding) = 160
-        y = 120 (inner top edge of C) + 40 (padding) = 160
-    -->
-    <rect x="160" y="160" width="120" height="120" />
+  <rect x="16" y="16" width="480" height="480" rx="104" fill="#0f172a"/>
+  <!-- Chip pins: 4 per side, the wires the brain is plugged into -->
+  <g fill="#94a3b8">
+    <rect x="166" y="64" width="20" height="56" rx="6"/><rect x="216" y="64" width="20" height="56" rx="6"/><rect x="276" y="64" width="20" height="56" rx="6"/><rect x="326" y="64" width="20" height="56" rx="6"/>
+    <rect x="166" y="392" width="20" height="56" rx="6"/><rect x="216" y="392" width="20" height="56" rx="6"/><rect x="276" y="392" width="20" height="56" rx="6"/><rect x="326" y="392" width="20" height="56" rx="6"/>
+    <rect x="64" y="166" width="56" height="20" rx="6"/><rect x="64" y="216" width="56" height="20" rx="6"/><rect x="64" y="276" width="56" height="20" rx="6"/><rect x="64" y="326" width="56" height="20" rx="6"/>
+    <rect x="392" y="166" width="56" height="20" rx="6"/><rect x="392" y="216" width="56" height="20" rx="6"/><rect x="392" y="276" width="56" height="20" rx="6"/><rect x="392" y="326" width="56" height="20" rx="6"/>
+  </g>
+  <!-- Chip package -->
+  <rect x="112" y="112" width="288" height="288" rx="40" fill="#3b82f6"/>
+  <!-- Brain on the die: two hemispheres, folds drawn as circuit traces ending in pads -->
+  <g fill="none" stroke="#ffffff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M250 162 C226 146 192 152 182 178 C156 184 148 212 158 230 C140 250 146 284 168 294 C166 322 192 346 220 340 C232 360 250 358 250 346 Z"/>
+    <path d="M262 162 C286 146 320 152 330 178 C356 184 364 212 354 230 C372 250 366 284 344 294 C346 322 320 346 292 340 C280 360 262 358 262 346 Z"/>
+    <path d="M250 206 H222 L206 222"/><path d="M250 270 H216 L200 286"/><path d="M262 206 H290 L306 222"/><path d="M262 270 H296 L312 286"/>
+  </g>
+  <g fill="#ffffff">
+    <circle cx="206" cy="222" r="11"/><circle cx="200" cy="286" r="11"/><circle cx="306" cy="222" r="11"/><circle cx="312" cy="286" r="11"/>
   </g>
 </svg>
