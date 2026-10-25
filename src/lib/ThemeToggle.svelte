@@ -1,7 +1,7 @@
 <script lang="ts">
   import { mode, setMode } from 'mode-watcher';
   import { Sun, Moon } from 'lucide-svelte';
-  import { app, saveUiSettings } from '$lib/stores.svelte';
+  import { app, saveUiSettings } from '#lib/stores.svelte.js';
 
   function toggleTheme() {
     const next = mode.current === 'light' ? 'dark' : 'light';

@@ -4,14 +4,14 @@
   import { ModeWatcher, mode, setMode } from 'mode-watcher';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { ChevronDown, HelpCircle, Moon, Plus, Sun, Vault } from 'lucide-svelte';
-  import { app, loadVaults, loadUiSettings, saveUiSettings, openVault, quickAddVault, quitApp, closeAllDialogs, openNextPage, openPrevPage, triggerRename, triggerDelete, goBack, goForward } from '$lib/stores.svelte';
-  import PageList from '$lib/PageList.svelte';
-  import GlobalSearch from '$lib/GlobalSearch.svelte';
-  import NewPageDialog from '$lib/NewPageDialog.svelte';
-  import RenamePageDialog from '$lib/RenamePageDialog.svelte';
-  import KeyboardHelp from '$lib/KeyboardHelp.svelte';
-  import ExitConfirmation from '$lib/ExitConfirmation.svelte';
-  import { isModKey, isInputFocused } from '$lib/hotkeys';
+  import { app, loadVaults, loadUiSettings, saveUiSettings, openVault, quickAddVault, quitApp, closeAllDialogs, openNextPage, openPrevPage, triggerRename, triggerDelete, goBack, goForward } from '#lib/stores.svelte.js';
+  import PageList from '#lib/PageList.svelte';
+  import GlobalSearch from '#lib/GlobalSearch.svelte';
+  import NewPageDialog from '#lib/NewPageDialog.svelte';
+  import RenamePageDialog from '#lib/RenamePageDialog.svelte';
+  import KeyboardHelp from '#lib/KeyboardHelp.svelte';
+  import ExitConfirmation from '#lib/ExitConfirmation.svelte';
+  import { isModKey, isInputFocused } from '#lib/hotkeys.js';
   import '../app.css';
 
   let { children } = $props();

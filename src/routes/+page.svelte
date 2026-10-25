@@ -1,9 +1,9 @@
 <script lang="ts">
   import { List, Pencil } from 'lucide-svelte';
-  import { app, activeVault, quickAddVault, saveUiSettings } from '$lib/stores.svelte';
-  import PageEditor from '$lib/PageEditor.svelte';
-  import RightSidebarPanel from '$lib/RightSidebarPanel.svelte';
-  import AttachmentsPanel from '$lib/AttachmentsPanel.svelte';
+  import { app, activeVault, quickAddVault, saveUiSettings } from '#lib/stores.svelte.js';
+  import PageEditor from '#lib/PageEditor.svelte';
+  import RightSidebarPanel from '#lib/RightSidebarPanel.svelte';
+  import AttachmentsPanel from '#lib/AttachmentsPanel.svelte';
 
   // ── State ─────────────────────────────────────────────────────────────────────
 
