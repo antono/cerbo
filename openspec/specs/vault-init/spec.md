@@ -21,20 +21,6 @@ The system SHALL provide `cerbo init` command that initializes a new vault in th
 - **THEN** `ontology-map.json` SHALL map "schema" to Schema.org UUID
 - **THEN** `ontology-map.json` SHALL map "foaf" to FOAF UUID
 
-### Requirement: Index JSON
-The system SHALL create `.cerbo/index.json` on `cerbo init` and update it when objects are created/deleted. The file SHALL contain `title_to_uuid` (title→UUID map) and `uuid_to_path` (UUID→relative path map).
-
-#### Scenario: Initial index.json
-- **WHEN** `cerbo init` completes
-- **THEN** `.cerbo/index.json` SHALL exist
-- **THEN** it SHALL contain empty `title_to_uuid` object
-- **THEN** it SHALL contain empty `uuid_to_path` object
-
-#### Scenario: Update index on object creation
-- **WHEN** a new page object is created with title "My Page" and UUID `<uuid-1>`
-- **THEN** `index.json` `title_to_uuid` SHALL map "My Page" to `<uuid-1>`
-- **THEN** `index.json` `uuid_to_path` SHALL map `<uuid-1>` to `objects/<uuid-1>/`
-
 ### Requirement: Idempotent Init
 The `cerbo init` command SHALL be idempotent. Running it on an already-initialized vault SHALL NOT overwrite existing data.
 
