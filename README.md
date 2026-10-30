@@ -69,9 +69,13 @@ nix build .#cerbo          # Build CLI Binary
 - **Cache**: `$XDG_CACHE_HOME/cerbo/` (defaults to `~/.cache/cerbo/`). Stores
   the link index and derived data.
 - **Vaults**: Each vault has a `.cerbo/` directory containing:
-  - `objects/<uuid>/` - UUID-based object storage (type: Product, Source, Attachment, Ontology)
+  - `objects/<uuid>/` - UUID-based object storage. Each `meta.ttl` records the
+    object's class as `rdf:type` with a schema.org class: Product
+    (`schema:NoteDigitalDocument`), Source (`schema:WebPage`), Attachment
+    (`schema:MediaObject`) or Ontology (`schema:DefinedTermSet`)
   - `trash/<timestamp>-<uuid>/` - Deleted objects, kept until you remove them
-  - `ontology-map.json` - Maps prefixes (e.g., "schema") to ontology UUIDs
+  - `ontology-map.json` - Maps annotation prefixes (e.g., "ex") to namespace IRIs
+    and ontology UUIDs
 
   Titles resolve by scanning the vault's `meta.ttl` files; there is no lookup
   index on disk. See [docs/storage.md](docs/storage.md) for the full layout,
@@ -93,7 +97,35 @@ Cerbo supports HackMD-style semantic annotations:
 [Bob]{schema:Person} works at [Acme Corp]{schema:Organization}.
 ```
 
-These are extracted to `annotations.ttl` in Turtle RDF format.
+These are extracted to `annotations.ttl` in Turtle RDF format, as entities the
+page mentions, using the standard schema.org vocabulary:
+
+```turtle
+<cerbo://objects/<uuid>> schema:mentions _:m0 .
+_:m0 schema:name "Bob" ;
+	a schema:Person ;
+	cerbo:position "1:0" .
+```
+
+The prefixes `schema`, `foaf`, `dcterms`, `skos`, `rdf`, `rdfs`, `owl` and `xsd`
+are built in. Other prefixes are registered per vault with
+`cerbo import-ontology --prefix --namespace`. An annotation with an unknown prefix
+is kept as `cerbo:unresolvedType` and reported as a warning.
+
+## Upgrading the RDF Vocabulary
+
+Older Cerbo builds wrote metadata with Cerbo's private terms (`cerbo:type`,
+`cerbo:title`, `schema:` bound to `cerbo://ontology/schema/`). These files are
+still read, and every save writes the standard schema.org terms. To rewrite a
+whole vault at once:
+
+```bash
+cerbo migrate vocabulary --dry-run   # show what would change
+cerbo migrate vocabulary             # rewrite every registered vault
+```
+
+**Upgrade Cerbo on every device that syncs the vault first:** older builds cannot
+read migrated files.
 
 ## Migration from Slug-Based Storage
 
@@ -201,6 +233,9 @@ cerbo import https://example.com/article
 
 # Import an ontology
 cerbo import-ontology https://schema.org/version/latest/schemaorg-current-https.jsonld
+
+# Import an ontology and register its annotation prefix ([Bob]{ex:Person})
+cerbo import-ontology https://example.org/vocab.ttl --prefix ex --namespace https://example.org/vocab#
 ```
 
 ### Vault Management

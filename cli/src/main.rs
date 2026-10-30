@@ -118,9 +118,15 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Import ontology (creates type: Ontology object)
+    /// Import ontology (creates an Ontology object, rdf:type schema:DefinedTermSet)
     ImportOntology {
         url: String,
+        /// Annotation prefix to register for this ontology (needs --namespace)
+        #[arg(long, requires = "namespace")]
+        prefix: Option<String>,
+        /// Namespace IRI the prefix expands to (needs --prefix)
+        #[arg(long, requires = "prefix")]
+        namespace: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -138,6 +144,11 @@ enum Commands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+    },
+    /// Rewrite stored metadata into the current format
+    Migrate {
+        #[command(subcommand)]
+        action: MigrateCommands,
     },
     /// Build the human-readable symlink tree at <repo-root>/cerbo/
     Symlink {
@@ -179,6 +190,22 @@ enum VaultCommands {
     /// Promote an auto-registered vault to the manual registry
     Approve {
         id: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum MigrateCommands {
+    /// Rewrite meta.ttl and annotations.ttl into the schema.org vocabulary
+    Vocabulary {
+        /// Vault ID or path to migrate (default: every registered vault)
+        #[arg(long)]
+        vault: Option<String>,
+        /// Report what would change without writing anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Print only {"scanned", "rewritten", "errors"} as JSON
         #[arg(long)]
         json: bool,
     },
@@ -255,6 +282,39 @@ fn ensure_gitignore(vault_root: &std::path::Path) -> Result<(), String> {
 
     cerbo_core::fsio::write_atomic_str(&gitignore_path, &content)
         .map_err(|e| format!("Failed to write .gitignore: {}", e))
+}
+
+/// The vaults `cerbo migrate vocabulary` works on, as (label, root) pairs.
+///
+/// `--vault` takes a registered vault ID or a vault path. Without it, every
+/// registered vault is migrated; one whose directory is missing is skipped with
+/// a warning, since there is nothing there to rewrite.
+fn migration_targets(
+    ctx: &CerboContext,
+    explicit: Option<&str>,
+) -> Result<Vec<(String, std::path::PathBuf)>, String> {
+    use cerbo_core::vault;
+
+    if let Some(target) = explicit {
+        if let Some(path) = vault::get_vault_path(ctx, target) {
+            return Ok(vec![(target.to_string(), path)]);
+        }
+        let path = std::path::PathBuf::from(target);
+        if path.join(".cerbo").is_dir() {
+            return Ok(vec![(path.display().to_string(), path)]);
+        }
+        return Err(format!("vault not found: {} (neither a vault ID nor a path containing .cerbo/)", target));
+    }
+
+    let mut targets = Vec::new();
+    for v in vault::vault_list(ctx)?.vaults {
+        if v.path.join(".cerbo").is_dir() {
+            targets.push((v.id, v.path));
+        } else {
+            eprintln!("Warning: skipping vault {} ({}): no .cerbo/ directory", v.id, v.path.display());
+        }
+    }
+    Ok(targets)
 }
 
 /// Always returns the XDG global context used for vault registry operations.
@@ -372,14 +432,8 @@ async fn main() -> Result<(), String> {
                 std::fs::create_dir_all(&objects_dir)
                     .map_err(|e| format!("Failed to create objects dir: {}", e))?;
 
-                // Create ontology-map.json with empty prefixes
-                let ontology_map = serde_json::json!({"prefixes": {}});
-                let map_path = cerbo_dir.join("ontology-map.json");
-                cerbo_core::fsio::write_atomic_str(
-                    &map_path,
-                    &serde_json::to_string_pretty(&ontology_map).unwrap(),
-                )
-                .map_err(|e| format!("Failed to write ontology-map.json: {}", e))?;
+                // Create an empty v2 ontology-map.json
+                cerbo_core::prefix_map::PrefixMap::default().save(&cerbo_dir)?;
 
                 // Use a context rooted at the new local vault, not the global XDG ctx.
                 // get_context() falls back to XDG when .cerbo/ didn't exist at startup.
@@ -388,50 +442,21 @@ async fn main() -> Result<(), String> {
                     cache_dir: current_dir.join(".cache"),
                 };
 
-                // Bundle Schema.org ontology
-                let schema_url = "https://schema.org/version/latest/schema.ttl";
-                match cerbo_core::object::object_import_ontology(&local_ctx, schema_url) {
-                    Ok(uuid) => {
-                        // Update ontology-map.json with "schema" prefix
-                        let mut map: serde_json::Value = serde_json::from_str(
-                            &std::fs::read_to_string(&map_path).unwrap_or_default()
-                        ).unwrap_or(serde_json::json!({"prefixes": {}}));
-                        if let Some(prefixes) = map.get_mut("prefixes") {
-                            prefixes["schema"] = serde_json::json!(uuid);
-                            cerbo_core::fsio::write_atomic_str(
-                                &map_path,
-                                &serde_json::to_string_pretty(&map).unwrap(),
-                            )
-                            .ok();
-                        }
-                        if !json {
-                            println!("Bundled Schema.org ontology with UUID: {}", uuid);
-                        }
-                    },
-                    Err(e) => if !json { println!("Warning: Failed to bundle Schema.org: {}", e); },
-                }
-
-                // Bundle FOAF ontology
-                let foaf_url = "http://xmlns.com/foaf/spec/index.rdf";
-                match cerbo_core::object::object_import_ontology(&local_ctx, foaf_url) {
-                    Ok(uuid) => {
-                        // Update ontology-map.json with "foaf" prefix
-                        let mut map: serde_json::Value = serde_json::from_str(
-                            &std::fs::read_to_string(&map_path).unwrap_or_default()
-                        ).unwrap_or(serde_json::json!({"prefixes": {}}));
-                        if let Some(prefixes) = map.get_mut("prefixes") {
-                            prefixes["foaf"] = serde_json::json!(uuid);
-                            cerbo_core::fsio::write_atomic_str(
-                                &map_path,
-                                &serde_json::to_string_pretty(&map).unwrap(),
-                            )
-                            .ok();
-                        }
-                        if !json {
-                            println!("Bundled FOAF ontology with UUID: {}", uuid);
-                        }
-                    },
-                    Err(e) => if !json { println!("Warning: Failed to bundle FOAF: {}", e); },
+                // Bundle Schema.org and FOAF. Both prefixes are built in, so the
+                // map entry only records which object documents the namespace.
+                let bundled = [
+                    ("Schema.org", "schema", "https://schema.org/version/latest/schema.ttl"),
+                    ("FOAF", "foaf", "http://xmlns.com/foaf/spec/index.rdf"),
+                ];
+                for (name, prefix, url) in bundled {
+                    let namespace = cerbo_core::prefix_map::builtin_namespace(prefix)
+                        .expect("bundled prefixes are built in");
+                    match cerbo_core::object::object_import_ontology(&local_ctx, url, Some((prefix, namespace))) {
+                        Ok(uuid) => if !json {
+                            println!("Bundled {} ontology with UUID: {}", name, uuid);
+                        },
+                        Err(e) => if !json { println!("Warning: Failed to bundle {}: {}", name, e); },
+                    }
                 }
 
                 if json {
@@ -625,18 +650,34 @@ async fn main() -> Result<(), String> {
                 println!("Imported URL as Source object with UUID: {}", uuid);
             }
         },
-        Commands::ImportOntology { url, json } => {
+        Commands::ImportOntology { url, prefix, namespace, json } => {
             let eff_ctx = resolve_vault_ctx(
                 &ctx,
                 None,
                 cwd_vault_id.as_deref(),
                 cwd_vault_root.as_deref(),
             )?;
-            let uuid = cerbo_core::object::object_import_ontology(&eff_ctx, &url)?;
+            // clap guarantees both flags or neither.
+            let registration = prefix.as_deref().zip(namespace.as_deref());
+            let uuid = cerbo_core::object::object_import_ontology(&eff_ctx, &url, registration)?;
+            if registration.is_none() {
+                eprintln!(
+                    "Warning: ontology-map.json was not changed; annotations cannot use this \
+                     ontology until it is registered with --prefix and --namespace"
+                );
+            }
             if json {
-                print_json(&serde_json::json!({"uuid": uuid, "url": url}));
+                print_json(&serde_json::json!({
+                    "uuid": uuid,
+                    "url": url,
+                    "prefix": prefix,
+                    "namespace": namespace,
+                }));
             } else {
                 println!("Imported ontology from {} with UUID: {}", url, uuid);
+                if let (Some(prefix), Some(namespace)) = (&prefix, &namespace) {
+                    println!("Registered prefix {}: <{}>", prefix, namespace);
+                }
             }
         },
         Commands::Index { page, vault, no_backfill_slug, json } => {
@@ -652,7 +693,7 @@ async fn main() -> Result<(), String> {
                 return Err("not inside a cerbo vault (or any parent up to mount point); use --vault <path>".to_string());
             };
 
-            let stats = if let Some(page_uuid) = page {
+            let mut stats = if let Some(page_uuid) = page {
                 metadata_index::index_page(&vault_ctx, &page_uuid)?
             } else {
                 metadata_index::index_vault(&vault_ctx)?
@@ -660,7 +701,14 @@ async fn main() -> Result<(), String> {
 
             // Backfill missing slugs (full index only, unless --no-backfill-slug)
             let slugs_backfilled = if !no_backfill_slug {
-                metadata_index::backfill_slugs(&vault_ctx).unwrap_or(0)
+                let backfill = metadata_index::backfill_slugs(&vault_ctx)?;
+                // A page the index already reported is not reported twice.
+                for err in backfill.errors {
+                    if !stats.errors.iter().any(|e| e.page_uuid == err.page_uuid) {
+                        stats.errors.push(err);
+                    }
+                }
+                backfill.updated
             } else {
                 0
             };
@@ -709,6 +757,63 @@ async fn main() -> Result<(), String> {
                     eprintln!("  {}: {}", err.page_uuid, err.error_message);
                 }
                 std::process::exit(1);
+            }
+        },
+        Commands::Migrate { action } => match action {
+            MigrateCommands::Vocabulary { vault, dry_run, json } => {
+                use cerbo_core::VaultContext;
+                use cerbo_core::vocabulary_migration::migrate_vocabulary;
+
+                let (mut scanned, mut rewritten, mut errors) = (0usize, 0usize, 0usize);
+                for (label, root) in migration_targets(&ctx, vault.as_deref())? {
+                    let report = match VaultContext::from_path(root).and_then(|v| migrate_vocabulary(&v, dry_run)) {
+                        Ok(report) => report,
+                        Err(e) => {
+                            // A vault that cannot be migrated at all is one error;
+                            // the other vaults still go ahead.
+                            eprintln!("Error: vault {}: {}", label, e);
+                            errors += 1;
+                            continue;
+                        }
+                    };
+
+                    for warning in &report.warnings {
+                        eprintln!("Warning: {}", warning);
+                    }
+                    for err in &report.errors {
+                        eprintln!("Error: object {}: {}", err.uuid, err.message);
+                    }
+                    if !json {
+                        let verb = if dry_run { "would rewrite" } else { "rewrote" };
+                        println!(
+                            "Vault {}: scanned {} objects, {} {} files, {} errors",
+                            label, report.scanned, verb, report.rewritten, report.errors.len()
+                        );
+                        for file in &report.files {
+                            println!("  {} {}", verb, file.display());
+                        }
+                    }
+
+                    scanned += report.scanned;
+                    rewritten += report.rewritten;
+                    errors += report.errors.len();
+                }
+
+                if json {
+                    print_json(&serde_json::json!({
+                        "scanned": scanned,
+                        "rewritten": rewritten,
+                        "errors": errors
+                    }));
+                } else {
+                    let verb = if dry_run { "Would rewrite" } else { "Rewrote" };
+                    println!("Scanned {} objects. {} {} files. {} errors.", scanned, verb, rewritten, errors);
+                }
+
+                // Unreadable objects were left untouched; say so with the exit code.
+                if errors > 0 {
+                    std::process::exit(1);
+                }
             }
         },
         Commands::Symlink { vault, json } => {

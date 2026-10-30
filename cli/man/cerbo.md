@@ -110,15 +110,21 @@ Options:
 
 ## import-ontology
 
-Import an ontology file and create a type:Ontology object.
+Import an ontology file and create an Ontology object (`rdf:type schema:DefinedTermSet`).
 
-Usage: `cerbo import-ontology <URL> [--json]`
+With `--prefix` and `--namespace`, the vault's `.cerbo/ontology-map.json` then maps the prefix to the namespace IRI and the new object's UUID, so `[Text]{prefix:Type}` annotations resolve to `<namespace>Type`. The two flags must be given together; with only one of them the command fails and creates nothing. Without them the object is created, the map is not changed, and a warning says that annotations cannot use the ontology until it is registered.
+
+The built-in prefixes (`schema`, `foaf`, `dcterms`, `skos`, `rdf`, `rdfs`, `owl`, `xsd`) resolve without any registration; register one only to bind it to a different namespace.
+
+Usage: `cerbo import-ontology <URL> [--prefix <PREFIX> --namespace <IRI>] [--json]`
 
 Arguments:
 - `URL` - The URL of the ontology file (e.g., Schema.org or FOAF)
 
 Options:
-- `--json` - Output result as JSON with uuid and url fields
+- `--prefix <PREFIX>` - Annotation prefix to register (requires `--namespace`)
+- `--namespace <IRI>` - Namespace IRI the prefix expands to, e.g. `https://example.org/vocab#` (requires `--prefix`)
+- `--json` - Output result as JSON with uuid, url, prefix and namespace fields
 
 ## index
 
@@ -138,7 +144,7 @@ Options:
 - Without `--page`: Full vault rebuild. One scan accumulates every object's complete set of inbound links, then each object's `backrefs.ttl` is written exactly once. There is no clear-all phase, so an interrupted rebuild leaves every file holding either its previous or its newly computed content — never an empty one.
 - With `--page <UUID>`: Updates only the links and annotations declared by that one page.
 - Idempotent: Running twice produces identical results
-- Continues past an object it cannot read or write, then reports every one of them by UUID on stderr
+- Continues past an object it cannot read or write, then reports every one of them by UUID on stderr. An object whose `meta.ttl` names more than one object class is reported and left untouched: it is neither indexed nor given a slug.
 
 **Exit status:** `cerbo index` exits non-zero if any object could not be read or written, and names each on stderr. A run that exits zero has fully rebuilt the vault's metadata.
 
@@ -146,6 +152,28 @@ Options:
 - Immediately after your own edit to one page, to refresh just what that page declares
 
 `--page` cannot repair a vault. It only knows the links the named page contains now; it cannot discover a link that some *other* page used to have and no longer does, so stale backreferences elsewhere survive it. After manual edits outside Cerbo, after bulk imports or migrations, after a crash, or whenever backlinks look wrong, run a full-vault reindex (`cerbo index` with no `--page`).
+
+## migrate vocabulary
+
+Rewrite stored metadata from Cerbo's old private RDF terms into the standard schema.org vocabulary, so an old vault holds exactly what new writes produce. Cerbo reads the old terms anyway, so this is never required for a vault to open.
+
+Usage: `cerbo migrate vocabulary [OPTIONS]`
+
+Options:
+- `--vault <ID|PATH>` - Migrate only this vault, given by registered vault ID or by path (default: every registered vault)
+- `--dry-run` - List the files that would be rewritten and write nothing
+- `--json` - Print only a JSON object with the numeric fields scanned, rewritten and errors
+
+**Behavior:**
+- `meta.ttl`: a file that uses an old term (`cerbo:type`, `cerbo:Product`/`Source`/`Attachment`/`Ontology`, `cerbo:title`, `cerbo:original-url`, `cerbo:mime-type`, or `schema:` bound to `cerbo://ontology/schema/`) is rewritten with `rdf:type` and the schema.org class, `schema:name`, `schema:url` and `schema:encodingFormat`. Values (title, dates, slug, virtual path) and any other triples are kept, and the file is written exactly as a save writes it (for example `schema:url` as an IRI).
+- `annotations.ttl`: a file that uses an old term (or does not parse) is regenerated from `page.md` with the vault's prefix map, so `cerbo:annotation`/`cerbo:concept` become `schema:mentions`/`schema:name` and types that lost their prefix are re-derived from the page text. A file already in the standard form is left alone; a page with no `annotations.ttl` does not get one. Saving the page or `cerbo index` brings either up to date. Ontology objects are skipped, as in `cerbo index`.
+- Each file is written atomically, and only when its new content differs from what is on disk. A second run rewrites nothing and changes no modification time.
+- Objects in `.cerbo/trash/` are not touched.
+- An object that cannot be read (for example a `meta.ttl` that does not parse, or one with two object classes) is named by UUID on stderr and left untouched; the other objects are still migrated.
+
+**Exit status:** non-zero if any object or vault could not be migrated.
+
+**Warning:** older Cerbo builds cannot read migrated files. Upgrade Cerbo on every device that syncs the vault before migrating, and run `--dry-run` first.
 
 ## symlink
 
@@ -203,25 +231,31 @@ Cerbo uses a **UUID-based storage model** where all content is stored locally in
     |   +-- <timestamp>-<uuid>/ # Deleted objects, kept until you remove them
     +-- vaults.toml           # Vault registry (manually registered)
     +-- vaults.auto.toml      # Auto-registered vaults (CWD discovery)
-    +-- ontology-map.json      # Ontology prefix mappings
+    +-- ontology-map.json      # Annotation prefix -> namespace IRI map
     +-- ui.toml               # UI settings
     +-- state.toml            # Application state
 ```
 
 ## Object Types
 
-- **Product** - Default type for pages created by users
-- **Source** - Imported URLs (read-only references)
-- **Attachment** - File attachments (future)
-- **Ontology** - Ontology definitions (Schema.org, FOAF bundled by default)
+Each object's `meta.ttl` records its type as `rdf:type` with a schema.org class (`schema:` is `https://schema.org/`):
+
+- **Product** (`schema:NoteDigitalDocument`) - Default type for pages created by users
+- **Source** (`schema:WebPage`) - Imported URLs (read-only references); the address is in `schema:url`
+- **Attachment** (`schema:MediaObject`) - File attachments (future); the MIME type is in `schema:encodingFormat`
+- **Ontology** (`schema:DefinedTermSet`) - Ontology definitions (Schema.org, FOAF bundled by default)
+
+The title is `schema:name`; dates are `schema:dateCreated` and `schema:dateModified`. Further `rdf:type` values are ignored. An object carrying two or more of the four classes above is refused with an error naming its UUID. Files written by older Cerbo builds (`cerbo:type`, `cerbo:title`, ...) are still read; see `migrate vocabulary`.
 
 ## Links and Annotations
 
 Links between objects use the format: `cerbo://<uuid>`
 
-Annotations use HackMD syntax: `[Text]{prefix:Type}` where prefix maps to an ontology UUID via `ontology-map.json`.
+Annotations use HackMD syntax: `[Text]{prefix:Type}`. The prefix is resolved with the vault's own `.cerbo/ontology-map.json`, which maps each prefix to a namespace IRI (and optionally the ontology object documenting it); the type becomes the namespace IRI followed by `Type`. The prefixes `schema`, `foaf`, `dcterms`, `skos`, `rdf`, `rdfs`, `owl` and `xsd` are built in and need no entry; a map entry for one of them takes precedence. An annotation with an unknown prefix is kept with `cerbo:unresolvedType "prefix:Type"` and a warning.
 
-Example: `[Alice]{foaf:Person}` - references the FOAF Person type
+`annotations.ttl` is rewritten whenever the page is saved (`cerbo page write` or the desktop editor) and by `cerbo index`; a page saved without annotations keeps no `schema:mentions`. Each annotation is stored in `annotations.ttl` as an entity the page mentions: `<page> schema:mentions [ a <type IRI> ; schema:name "Text" ; cerbo:position "line:column" ]`.
+
+Example: `[Alice]{foaf:Person}` - the page mentions a `http://xmlns.com/foaf/0.1/Person` named "Alice"
 
 # EXAMPLES
 
@@ -253,6 +287,17 @@ cerbo page read 550e8400-e29b-41d4-a716-446655440000 --json
 Import a webpage as a source:
 ```
 cerbo import https://example.com/article
+```
+
+Import an ontology and register its annotation prefix:
+```
+cerbo import-ontology https://example.org/vocab.ttl --prefix ex --namespace https://example.org/vocab#
+```
+
+Preview, then run, the vocabulary migration of one vault:
+```
+cerbo migrate vocabulary --vault /path/to/my/vault --dry-run
+cerbo migrate vocabulary --vault /path/to/my/vault
 ```
 
 Show configuration info:

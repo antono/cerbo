@@ -29,8 +29,10 @@ pub fn backlinks_get(
     for backref_uuid in backref_uuids {
         let obj_dir = cerbo_core::object::object_path(&ctx, &backref_uuid);
         let meta_path = obj_dir.join("meta.ttl");
-        if let Ok(meta) = ObjectMeta::read_from_file(&meta_path) {
-            entries.push(BacklinkEntry { uuid: backref_uuid, title: meta.title });
+        match ObjectMeta::read_from_file(&meta_path) {
+            Ok(meta) => entries.push(BacklinkEntry { uuid: backref_uuid, title: meta.title }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => eprintln!("Warning: skipping backlink from {backref_uuid}: {e}"),
         }
     }
     Ok(entries)

@@ -122,12 +122,16 @@ pub fn list_vault_objects(_ctx: &CerboContext, vault_path: &Path) -> Result<Vec<
         }
         let meta_path = path.join("meta.ttl");
 
-        if let Ok(meta) = ObjectMeta::read_from_file(&meta_path) {
-            objects.push(VaultObject {
+        match ObjectMeta::read_from_file(&meta_path) {
+            Ok(meta) => objects.push(VaultObject {
                 uuid,
                 title: meta.title,
                 object_type: meta.object_type.as_str().to_string(),
-            });
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            // An object with two object classes is neither; it is left out, but
+            // never silently.
+            Err(e) => eprintln!("Warning: skipping object {uuid}: {e}"),
         }
     }
 

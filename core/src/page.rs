@@ -44,12 +44,15 @@ pub fn page_read(ctx: &CerboContext, uuid: String) -> Result<String, String> {
 
 /// Write page content by UUID. Fails if type is Source (read-only).
 /// Returns the content on success (for compatibility with old API).
+///
+/// Every save — from the CLI or the desktop editor — refreshes the page's
+/// backreferences and its `annotations.ttl`.
 pub fn page_write(
     ctx: &CerboContext,
     uuid: String,
     content: String,
 ) -> Result<String, String> {
-    crate::links::page_write_with_links(ctx, &uuid, &content)?;
+    crate::annotations::page_write_with_annotations(ctx, &uuid, &content)?;
     Ok(content)
 }
 
@@ -124,11 +127,18 @@ pub fn page_list(ctx: &CerboContext) -> Result<Vec<PageMeta>, String> {
 
         // `meta.ttl` is the title's only home; the H1 in `page.md` is a copy the
         // user may have edited outside Cerbo, and is never consulted here.
-        let title = ObjectMeta::read_from_file(&path.join("meta.ttl"))
-            .ok()
-            .map(|meta| meta.title)
-            .filter(|t| !t.is_empty())
-            .unwrap_or_else(|| "Untitled".to_string());
+        let title = match ObjectMeta::read_from_file(&path.join("meta.ttl")) {
+            Ok(meta) => Some(meta.title),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            // An object with two object classes is neither a page nor anything
+            // else until the user fixes it; say so rather than list it.
+            Err(e) => {
+                eprintln!("Warning: skipping object {uuid}: {e}");
+                continue;
+            }
+        }
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| "Untitled".to_string());
 
         pages.push(PageMeta { uuid, title });
     }
@@ -266,6 +276,73 @@ mod tests {
 
         assert_eq!(ObjectMeta::read_from_file(&meta_path).unwrap().title, new_title);
         assert_eq!(page_list(&ctx).unwrap()[0].title, new_title);
+    }
+
+    fn annotations_of(ctx: &CerboContext, uuid: &str) -> String {
+        std::fs::read_to_string(object_path(ctx, uuid).join("annotations.ttl")).unwrap()
+    }
+
+    #[test]
+    fn saving_a_page_writes_its_annotations() {
+        let (_tmp, ctx) = test_context();
+        let uuid = object_create(&ctx, None, ObjectType::Product, "Trip".into()).unwrap();
+
+        page_write(&ctx, uuid.clone(), "I visited [Berlin]{schema:Place}.\n".into()).unwrap();
+        let doc = annotations_of(&ctx, &uuid);
+        assert!(doc.contains("schema:mentions") && doc.contains("\"Berlin\""), "{doc}");
+        assert!(doc.contains("schema:Place") && doc.contains("\"1:10\""), "{doc}");
+
+        // An annotation added later shows up without an index run.
+        page_write(
+            &ctx,
+            uuid.clone(),
+            "I visited [Berlin]{schema:Place} with [Alice]{foaf:Person}.\n".into(),
+        )
+        .unwrap();
+        let doc = annotations_of(&ctx, &uuid);
+        assert!(doc.contains("<http://xmlns.com/foaf/0.1/Person>"), "{doc}");
+    }
+
+    #[test]
+    fn saving_a_page_without_annotations_leaves_no_mentions() {
+        let (_tmp, ctx) = test_context();
+        let uuid = object_create(&ctx, None, ObjectType::Product, "Trip".into()).unwrap();
+        page_write(&ctx, uuid.clone(), "I visited [Berlin]{schema:Place}.\n".into()).unwrap();
+
+        page_write(&ctx, uuid.clone(), "I visited Berlin.\n".into()).unwrap();
+
+        let doc = annotations_of(&ctx, &uuid);
+        let triples = crate::rdf::parse(&doc).unwrap();
+        assert!(
+            triples.iter().all(|t| t.predicate != crate::rdf::schema("mentions")),
+            "{doc}"
+        );
+        assert!(!doc.contains("Berlin"), "{doc}");
+    }
+
+    #[test]
+    fn saving_an_ontology_writes_no_annotations() {
+        let (_tmp, ctx) = test_context();
+        let uuid = object_create(&ctx, None, ObjectType::Ontology, "Vocab".into()).unwrap();
+
+        page_write(&ctx, uuid.clone(), "[Thing]{schema:Thing}\n".into()).unwrap();
+
+        assert!(!object_path(&ctx, &uuid).join("annotations.ttl").exists());
+    }
+
+    #[test]
+    fn page_list_skips_an_object_with_two_classes() {
+        let (_tmp, ctx) = test_context();
+        let good = object_create(&ctx, None, ObjectType::Product, "Fine".into()).unwrap();
+        let bad = object_create(&ctx, None, ObjectType::Product, "Both".into()).unwrap();
+        let meta_path = object_path(&ctx, &bad).join("meta.ttl");
+        let mut content = std::fs::read_to_string(&meta_path).unwrap();
+        content.push_str(&format!("<cerbo://objects/{bad}> a <https://schema.org/WebPage> .\n"));
+        std::fs::write(&meta_path, content).unwrap();
+
+        let pages = page_list(&ctx).unwrap();
+        assert_eq!(pages.len(), 1, "{pages:?}");
+        assert_eq!(pages[0].uuid, good);
     }
 
     #[test]

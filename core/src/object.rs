@@ -28,7 +28,8 @@ impl ObjectType {
         matches!(self, ObjectType::Source)
     }
 
-    /// The inverse of [`ObjectType::as_str`]: the local name of a `cerbo:` type IRI.
+    /// The inverse of [`ObjectType::as_str`]: the local name of a legacy `cerbo:`
+    /// class, as found in `meta.ttl` written before the schema.org switch.
     pub fn from_local(local: &str) -> Option<Self> {
         match local {
             "Product" => Some(ObjectType::Product),
@@ -37,6 +38,29 @@ impl ObjectType {
             "Ontology" => Some(ObjectType::Ontology),
             _ => None,
         }
+    }
+
+    /// The schema.org class recorded as this object's `rdf:type`.
+    pub fn class_iri(&self) -> oxrdf::NamedNode {
+        crate::rdf::schema(match self {
+            ObjectType::Product => "NoteDigitalDocument",
+            ObjectType::Source => "WebPage",
+            ObjectType::Attachment => "MediaObject",
+            ObjectType::Ontology => "DefinedTermSet",
+        })
+    }
+
+    /// The inverse of [`ObjectType::class_iri`]. Any other class — a user's own
+    /// `schema:Recipe`, say — is not an object class and yields `None`.
+    pub fn from_class_iri(iri: &str) -> Option<Self> {
+        [
+            ObjectType::Product,
+            ObjectType::Source,
+            ObjectType::Attachment,
+            ObjectType::Ontology,
+        ]
+        .into_iter()
+        .find(|t| t.class_iri().as_str() == iri)
     }
 }
 
@@ -65,20 +89,47 @@ pub fn is_valid_slug(s: &str) -> bool {
 
 impl ObjectMeta {
     /// Write `meta.ttl` for the object with this UUID.
+    ///
+    /// Triples in the file on disk that Cerbo does not model — a user's own
+    /// `rdf:type schema:Recipe`, a statement about a linked resource — are
+    /// carried over, so a save never deletes what a hand edit or the vocabulary
+    /// migration put there.
     pub fn write_to_file(&self, meta_path: &Path, uuid: &str) -> io::Result<()> {
-        crate::fsio::write_atomic_str(meta_path, &self.to_turtle(uuid))
+        let extra = fs::read_to_string(meta_path)
+            .ok()
+            .and_then(|content| crate::rdf::parse(&content).ok())
+            .map(|triples| Self::unmodelled_triples(&triples, Some(uuid)))
+            .unwrap_or_default();
+        crate::fsio::write_atomic_str(meta_path, &self.to_turtle_with(uuid, &extra))
     }
 
     /// Read `meta.ttl` from Turtle.
+    ///
+    /// A file that records more than one object class is refused with
+    /// `InvalidData`: guessing could make a note read-only or vice versa.
     pub fn read_from_file(meta_path: &Path) -> io::Result<Self> {
         let content = fs::read_to_string(meta_path)?;
-        Self::from_turtle(&content)
+        // The directory is the object's UUID; it names the object in errors
+        // when the file's own subject does not.
+        let dir_uuid = meta_path
+            .parent()
+            .and_then(Path::file_name)
+            .map(|n| n.to_string_lossy().into_owned());
+        Self::from_turtle(&content, dir_uuid.as_deref())
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     /// Serialise as Turtle, with the object's own IRI as the subject.
     pub fn to_turtle(&self, uuid: &str) -> String {
+        self.to_turtle_with(uuid, &[])
+    }
+
+    /// [`Self::to_turtle`], followed by `extra` — triples Cerbo does not model,
+    /// as [`Self::unmodelled_triples`] returns them — in their original order,
+    /// each written once.
+    pub(crate) fn to_turtle_with(&self, uuid: &str, extra: &[oxrdf::Triple]) -> String {
         use crate::rdf;
-        use oxrdf::{Literal, Term, Triple};
+        use oxrdf::{Literal, NamedNode, Term, Triple};
 
         let subject = rdf::object_iri(uuid);
         let text = |v: &str| Term::from(Literal::new_simple_literal(v));
@@ -86,10 +137,10 @@ impl ObjectMeta {
         let mut triples = vec![
             Triple::new(
                 subject.clone(),
-                rdf::cerbo("type"),
-                Term::from(rdf::cerbo(self.object_type.as_str())),
+                rdf::rdf_type(),
+                Term::from(self.object_type.class_iri()),
             ),
-            Triple::new(subject.clone(), rdf::cerbo("title"), text(&self.title)),
+            Triple::new(subject.clone(), rdf::schema("name"), text(&self.title)),
             Triple::new(
                 subject.clone(),
                 rdf::schema("dateCreated"),
@@ -103,28 +154,55 @@ impl ObjectMeta {
         ];
 
         // Optional fields keep a fixed order so an unchanged rewrite is byte-stable.
-        for (local, value) in [
-            ("original-url", self.original_url.as_deref()),
-            ("mime-type", self.mime_type.as_deref()),
-            ("slug", self.slug.as_deref()),
-            ("virtualPath", self.virtual_path.as_deref()),
+        if let Some(url) = self.original_url.as_deref() {
+            // `schema:url` is an IRI. A URL that is not a valid IRI is still the
+            // user's source, so it is kept as a literal rather than dropped.
+            let object = NamedNode::new(url).map(Term::from).unwrap_or_else(|_| text(url));
+            triples.push(Triple::new(subject.clone(), rdf::schema("url"), object));
+        }
+        for (predicate, value) in [
+            (rdf::schema("encodingFormat"), self.mime_type.as_deref()),
+            (rdf::cerbo("slug"), self.slug.as_deref()),
+            (rdf::cerbo("virtualPath"), self.virtual_path.as_deref()),
         ] {
             if let Some(v) = value {
-                triples.push(Triple::new(subject.clone(), rdf::cerbo(local), text(v)));
+                triples.push(Triple::new(subject.clone(), predicate, text(v)));
             }
         }
+
+        // A file holding both the legacy and the standard spelling of a fact
+        // upgrades into the same triple twice; it is written once.
+        let mut seen = std::collections::HashSet::new();
+        triples.extend(extra.iter().filter(|t| seen.insert(*t)).cloned());
 
         rdf::serialize(&triples)
     }
 
-    fn from_turtle(content: &str) -> io::Result<Self> {
+    /// The triples of a parsed `meta.ttl` that [`Self::from_triples`] does not
+    /// turn into a field: anything about another subject, and, about the object
+    /// itself, every predicate other than its object class, `schema:name`, the
+    /// dates, `schema:url`, `schema:encodingFormat`, `cerbo:slug` and
+    /// `cerbo:virtualPath`. Writers carry these over unchanged.
+    pub(crate) fn unmodelled_triples(
+        triples: &[oxrdf::Triple],
+        dir_uuid: Option<&str>,
+    ) -> Vec<oxrdf::Triple> {
+        let own = own_subject(triples, dir_uuid);
+        triples
+            .iter()
+            .filter(|t| own.as_ref() != Some(&t.subject) || !is_modelled(t))
+            .cloned()
+            .collect()
+    }
+
+    fn from_turtle(content: &str, dir_uuid: Option<&str>) -> Result<Self, String> {
         match crate::rdf::parse(content) {
-            Ok(triples) => Ok(Self::from_triples(&triples)),
+            Ok(triples) => Self::from_triples(&triples, dir_uuid),
             // Vaults written before this change hold `meta.ttl` that is not valid
             // Turtle: `cerbo:` was used without being declared, and the optional
             // predicates dangle after a statement terminator. Those files must keep
             // opening; they are rewritten valid on the object's next save.
-            Err(_) => Ok(Self::from_legacy_lines(content)),
+            Err(_) => Self::from_legacy_lines(content, dir_uuid),
         }
     }
 
@@ -143,71 +221,114 @@ impl ObjectMeta {
 
     /// Interpret parsed triples. A value is only ever read as a value, so no title
     /// can present itself as a type.
-    fn from_triples(triples: &[oxrdf::Triple]) -> Self {
-        use oxrdf::Term;
+    ///
+    /// [`crate::rdf::parse`] has already rewritten legacy spellings, so only the
+    /// standard vocabulary is matched here.
+    ///
+    /// Only statements about the object itself are read (see [`own_subject`]):
+    /// a user's triple about a linked resource — `<https://example.org/137> a
+    /// schema:WebPage` — neither changes the object's class nor its title.
+    pub(crate) fn from_triples(triples: &[oxrdf::Triple], dir_uuid: Option<&str>) -> Result<Self, String> {
+        use crate::rdf::{NS_CERBO, NS_SCHEMA};
+        use oxrdf::{NamedOrBlankNode, Term};
 
         let mut meta = Self::empty();
+        let mut classes: Vec<ObjectType> = Vec::new();
+        let own = own_subject(triples, dir_uuid);
+        let subject_uuid = match &own {
+            Some(NamedOrBlankNode::NamedNode(n)) => crate::rdf::uuid_from_object_iri(n.as_str()),
+            _ => None,
+        };
 
-        for triple in triples {
-            let Some((ns, local)) = split_namespace(triple.predicate.as_str()) else {
-                continue;
-            };
+        for triple in triples.iter().filter(|t| own.as_ref() == Some(&t.subject)) {
+            let predicate = triple.predicate.as_str();
             let literal = match &triple.object {
                 Term::Literal(l) => Some(l.value()),
                 _ => None,
             };
 
-            match (ns, local) {
-                (Namespace::Cerbo, "type") => {
-                    if let Term::NamedNode(n) = &triple.object
-                        && let Some((Namespace::Cerbo, name)) = split_namespace(n.as_str())
-                        && let Some(t) = ObjectType::from_local(name)
-                    {
-                        meta.object_type = t;
+            if triple.predicate == oxrdf::vocab::rdf::TYPE {
+                if let Term::NamedNode(n) = &triple.object
+                    && let Some(t) = ObjectType::from_class_iri(n.as_str())
+                    && !classes.contains(&t)
+                {
+                    classes.push(t);
+                }
+                continue;
+            }
+
+            if let Some(local) = predicate.strip_prefix(NS_SCHEMA) {
+                match local {
+                    "name" => {
+                        if let Some(v) = literal {
+                            meta.title = v.to_string();
+                        }
                     }
-                }
-                (Namespace::Cerbo, "title") => {
-                    if let Some(v) = literal {
-                        meta.title = v.to_string();
+                    // An IRI since the schema.org switch; a literal before it.
+                    "url" => {
+                        meta.original_url = match &triple.object {
+                            Term::NamedNode(n) => Some(n.as_str().to_string()),
+                            _ => literal.map(str::to_string),
+                        };
                     }
-                }
-                (Namespace::Cerbo, "original-url") => {
-                    meta.original_url = literal.map(str::to_string);
-                }
-                (Namespace::Cerbo, "mime-type") => {
-                    meta.mime_type = literal.map(str::to_string);
-                }
-                (Namespace::Cerbo, "slug") => {
-                    meta.slug = literal.filter(|v| is_valid_slug(v)).map(str::to_string);
-                }
-                (Namespace::Cerbo, "virtualPath") => {
-                    meta.virtual_path = literal
-                        .filter(|v| crate::vault::validate_virtual_path(v).is_ok())
-                        .map(str::to_string);
-                }
-                (Namespace::Schema, "dateCreated") => {
-                    if let Some(v) = literal {
-                        meta.created = v.to_string();
+                    "encodingFormat" => meta.mime_type = literal.map(str::to_string),
+                    "dateCreated" => {
+                        if let Some(v) = literal {
+                            meta.created = v.to_string();
+                        }
                     }
-                }
-                (Namespace::Schema, "dateModified") => {
-                    if let Some(v) = literal {
-                        meta.modified = v.to_string();
+                    "dateModified" => {
+                        if let Some(v) = literal {
+                            meta.modified = v.to_string();
+                        }
                     }
+                    _ => {}
                 }
-                _ => {}
+            } else if let Some(local) = predicate.strip_prefix(NS_CERBO) {
+                match local {
+                    "slug" => {
+                        meta.slug = literal.filter(|v| is_valid_slug(v)).map(str::to_string);
+                    }
+                    "virtualPath" => {
+                        meta.virtual_path = literal
+                            .filter(|v| crate::vault::validate_virtual_path(v).is_ok())
+                            .map(str::to_string);
+                    }
+                    _ => {}
+                }
             }
         }
 
-        meta
+        meta.object_type = single_class(&classes, subject_uuid.or(dir_uuid))?;
+        Ok(meta)
+    }
+
+    /// [`Self::from_legacy_lines`] for callers that must not mistake an arbitrary
+    /// broken file for an empty note: `None` unless a line names one of the four
+    /// legacy object classes, as every file the old writer produced did.
+    pub(crate) fn from_legacy_lines_checked(
+        content: &str,
+        dir_uuid: Option<&str>,
+    ) -> Option<Result<Self, String>> {
+        let names_a_class = content.lines().any(|line| {
+            line.trim()
+                .split_once(char::is_whitespace)
+                .is_some_and(|(predicate, rest)| {
+                    legacy_local_name(predicate) == Some("type")
+                        && ObjectType::from_local(legacy_iri_local(rest)).is_some()
+                })
+        });
+        names_a_class.then(|| Self::from_legacy_lines(content, dir_uuid))
     }
 
     /// Reader for `meta.ttl` written before this change, which is not valid Turtle.
     ///
     /// The predicate is matched at the start of the line, never anywhere inside it,
-    /// so a title like `RDF :type :Source notes` stays a title.
-    fn from_legacy_lines(content: &str) -> Self {
+    /// so a title like `RDF :type :Source notes` stays a title. Two different
+    /// classes are refused, exactly as in a Turtle file.
+    fn from_legacy_lines(content: &str, dir_uuid: Option<&str>) -> Result<Self, String> {
         let mut meta = Self::empty();
+        let mut classes: Vec<ObjectType> = Vec::new();
 
         for line in content.lines() {
             let line = line.trim();
@@ -220,8 +341,10 @@ impl ObjectMeta {
 
             match local {
                 "type" => {
-                    if let Some(t) = ObjectType::from_local(legacy_iri_local(rest)) {
-                        meta.object_type = t;
+                    if let Some(t) = ObjectType::from_local(legacy_iri_local(rest))
+                        && !classes.contains(&t)
+                    {
+                        classes.push(t);
                     }
                 }
                 "title" => meta.title = legacy_quoted(rest),
@@ -245,25 +368,70 @@ impl ObjectMeta {
             }
         }
 
-        meta
+        meta.object_type = single_class(&classes, dir_uuid)?;
+        Ok(meta)
     }
 }
 
-/// The two namespaces Cerbo mints predicates in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Namespace {
-    Cerbo,
-    Schema,
+/// The object's class from the classes a `meta.ttl` names: none means a note,
+/// as it always has; two or more is refused with an error naming the UUID and
+/// every class, because guessing could make a note read-only or vice versa.
+fn single_class(classes: &[ObjectType], uuid: Option<&str>) -> Result<ObjectType, String> {
+    match classes {
+        [] => Ok(ObjectType::Product),
+        [only] => Ok(*only),
+        several => {
+            let names: Vec<String> = several
+                .iter()
+                .map(|t| format!("<{}>", t.class_iri().as_str()))
+                .collect();
+            Err(format!(
+                "object {} has more than one object class in meta.ttl: {}",
+                uuid.unwrap_or("<unknown>"),
+                names.join(", ")
+            ))
+        }
+    }
 }
 
-/// Split a predicate IRI into its namespace and local name. `NS_SCHEMA` nests
-/// inside `NS_CERBO`, so it has to be tested first.
-fn split_namespace(iri: &str) -> Option<(Namespace, &str)> {
-    if let Some(local) = iri.strip_prefix(crate::rdf::NS_SCHEMA) {
-        Some((Namespace::Schema, local))
-    } else {
-        iri.strip_prefix(crate::rdf::NS_CERBO)
-            .map(|local| (Namespace::Cerbo, local))
+/// The subject a parsed `meta.ttl` describes the object under: the IRI of the
+/// directory's UUID when the file uses it, otherwise the first subject in the
+/// object store (a copied object keeps its old IRI until its next write).
+fn own_subject(triples: &[oxrdf::Triple], dir_uuid: Option<&str>) -> Option<oxrdf::NamedOrBlankNode> {
+    use oxrdf::NamedOrBlankNode;
+
+    if let Some(uuid) = dir_uuid {
+        let iri = NamedOrBlankNode::from(crate::rdf::object_iri(uuid));
+        if triples.iter().any(|t| t.subject == iri) {
+            return Some(iri);
+        }
+    }
+    triples
+        .iter()
+        .find(|t| match &t.subject {
+            NamedOrBlankNode::NamedNode(n) => crate::rdf::uuid_from_object_iri(n.as_str()).is_some(),
+            _ => false,
+        })
+        .map(|t| t.subject.clone())
+}
+
+/// Whether [`ObjectMeta::from_triples`] reads this triple, about the object
+/// itself, into a field — and [`ObjectMeta::to_turtle`] therefore rewrites it.
+fn is_modelled(triple: &oxrdf::Triple) -> bool {
+    use crate::rdf::{NS_CERBO, NS_SCHEMA};
+
+    if triple.predicate == oxrdf::vocab::rdf::TYPE {
+        return matches!(&triple.object, oxrdf::Term::NamedNode(n)
+            if ObjectType::from_class_iri(n.as_str()).is_some());
+    }
+    let predicate = triple.predicate.as_str();
+    match (predicate.strip_prefix(NS_SCHEMA), predicate.strip_prefix(NS_CERBO)) {
+        (Some(local), _) => matches!(
+            local,
+            "name" | "dateCreated" | "dateModified" | "url" | "encodingFormat"
+        ),
+        (_, Some(local)) => matches!(local, "slug" | "virtualPath"),
+        _ => false,
     }
 }
 
@@ -467,7 +635,7 @@ fn unique_trash_entry(trash: &Path, uuid: &str) -> PathBuf {
 }
 
 /// Import a URL as a Source object (read-only)
-/// Fetches content from URL and creates type: Source object
+/// Fetches content from URL and creates a Source object (`rdf:type schema:WebPage`)
 pub fn object_import(ctx: &CerboContext, url: &str) -> Result<String, String> {
     // Fetch content (use reqwest blocking client)
     let body = fetch_url_content(url)?;
@@ -510,8 +678,21 @@ pub fn object_import(ctx: &CerboContext, url: &str) -> Result<String, String> {
 }
 
 /// Import an ontology URL as an Ontology object
-/// Fetches content and creates type: Ontology object
-pub fn object_import_ontology(ctx: &CerboContext, url: &str) -> Result<String, String> {
+/// Fetches content and creates an Ontology object (`rdf:type schema:DefinedTermSet`)
+///
+/// With `registration = Some((prefix, namespace))`, the vault's
+/// `ontology-map.json` (in `ctx.config_dir`) then maps `prefix` to `namespace`
+/// and the new object's UUID. Without it the map is left alone. The prefix and
+/// namespace are checked before anything is fetched or created.
+pub fn object_import_ontology(
+    ctx: &CerboContext,
+    url: &str,
+    registration: Option<(&str, &str)>,
+) -> Result<String, String> {
+    if let Some((prefix, namespace)) = registration {
+        crate::prefix_map::validate_registration(prefix, namespace)?;
+    }
+
     // Fetch content
     let body = fetch_url_content(url)?;
 
@@ -543,71 +724,11 @@ pub fn object_import_ontology(ctx: &CerboContext, url: &str) -> Result<String, S
     crate::fsio::write_atomic_str(&page_path, &body)
         .map_err(|e| format!("Failed to write page.md: {}", e))?;
 
-
-    // Update ontology-map.json with prefix→uuid mapping
-    update_ontology_map(ctx, &uuid, url)?;
+    if let Some((prefix, namespace)) = registration {
+        crate::prefix_map::register_prefix(&ctx.config_dir, prefix, namespace, Some(&uuid))?;
+    }
 
     Ok(uuid)
-}
-
-/// Update ontology-map.json with new prefix→UUID mapping
-fn update_ontology_map(ctx: &CerboContext, uuid: &str, url: &str) -> Result<(), String> {
-    let map_path = ctx.config_dir.join("ontology-map.json");
-    
-    let mut map: std::collections::HashMap<String, String> = if map_path.exists() {
-        let content = fs::read_to_string(&map_path)
-            .map_err(|e| format!("Failed to read ontology-map.json: {}", e))?;
-        
-        // Handle both {"prefixes": {}} and actual map formats
-        if content.trim().starts_with("{") {
-            // Try to parse as a map directly
-            match serde_json::from_str::<std::collections::HashMap<String, String>>(&content) {
-                Ok(m) => m,
-                Err(_) => {
-                    // Try to parse as {"prefixes": {...}}
-                    #[derive(Serialize, Deserialize)]
-                    struct OntologyMap { prefixes: std::collections::HashMap<String, String> }
-                    match serde_json::from_str::<OntologyMap>(&content) {
-                        Ok(om) => om.prefixes,
-                        Err(e) => return Err(format!("Failed to parse ontology-map.json: {}", e)),
-                    }
-                }
-            }
-        } else {
-            std::collections::HashMap::new()
-        }
-    } else {
-        std::collections::HashMap::new()
-    };
-
-    // Extract prefix from URL (e.g., "schema.org" → "schema")
-    let prefix = extract_prefix_from_url(url);
-    map.insert(prefix, uuid.to_string());
-
-    // Write back in {"prefixes": {...}} format
-    #[derive(Serialize)]
-    struct OntologyMap<'a> { prefixes: &'a std::collections::HashMap<String, String> }
-    let om = OntologyMap { prefixes: &map };
-    
-    let content = serde_json::to_string_pretty(&om)
-        .map_err(|e| format!("Failed to serialize ontology-map.json: {}", e))?;
-    
-    crate::fsio::write_atomic_str(&map_path, &content)
-        .map_err(|e| format!("Failed to write ontology-map.json: {}", e))
-}
-
-/// Extract prefix from ontology URL
-fn extract_prefix_from_url(url: &str) -> String {
-    // Simple extraction: get last part of domain
-    // e.g., "https://schema.org/" → "schema"
-    // e.g., "https://xmlns.com/foaf/0.1/" → "foaf"
-    if let Some(domain) = url.split("://").nth(1) {
-        let domain = domain.split('/').next().unwrap_or(domain);
-        if let Some(name) = domain.split('.').next() {
-            return name.to_lowercase();
-        }
-    }
-    "unknown".to_string()
 }
 
 /// Fetch URL content using curl (more compatible with tokio)
@@ -971,9 +1092,10 @@ mod tests {
         assert!(meta_path.exists());
 
         let content = fs::read_to_string(&meta_path).unwrap();
-        assert!(content.contains("cerbo:type cerbo:Product"), "{content}");
-        assert!(content.contains(r#"cerbo:title "Meta Test""#), "{content}");
+        assert!(content.contains("schema:NoteDigitalDocument"), "{content}");
+        assert!(content.contains(r#"schema:name "Meta Test""#), "{content}");
         assert!(content.contains("schema:dateModified"), "{content}");
+        assert!(content.contains("@prefix schema: <https://schema.org/>"), "{content}");
         assert!(crate::rdf::parse(&content).is_ok(), "meta.ttl must be valid Turtle:\n{content}");
 
         let _ = object_delete(&ctx, &uuid);
@@ -1311,6 +1433,312 @@ mod tests {
         assert_eq!(meta.created, "2024-01-01T00:00:00Z");
 
         assert_eq!(before, fs::read(&path).unwrap(), "reading must not rewrite the file");
+    }
+
+    // ── Standard vocabulary ───────────────────────────────────────────────
+
+    const UUID_137: &str = "aaaaaaaa-0000-0000-0000-000000000137";
+
+    /// The `rdf:type` objects and the triples of `meta.ttl` as parsed.
+    fn parsed_meta(content: &str) -> (Vec<String>, Vec<oxrdf::Triple>) {
+        let triples = crate::rdf::parse(content).expect("meta.ttl must be valid Turtle");
+        let types = triples
+            .iter()
+            .filter(|t| t.predicate == crate::rdf::rdf_type())
+            .map(|t| match &t.object {
+                oxrdf::Term::NamedNode(n) => n.as_str().to_string(),
+                other => panic!("rdf:type must be an IRI, got {other:?}"),
+            })
+            .collect();
+        (types, triples)
+    }
+
+    fn object_of(triples: &[oxrdf::Triple], predicate: &str) -> Option<oxrdf::Term> {
+        triples
+            .iter()
+            .find(|t| t.predicate.as_str() == predicate)
+            .map(|t| t.object.clone())
+    }
+
+    /// Write `content` as the `meta.ttl` of an object directory named `uuid`.
+    fn meta_file(ctx: &CerboContext, uuid: &str, content: &str) -> PathBuf {
+        let dir = object_path(ctx, uuid);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("meta.ttl");
+        fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn page_meta_uses_schema_org_classes_and_properties() {
+        let (_tmp, ctx) = create_test_context();
+        let uuid = object_create(&ctx, None, ObjectType::Product, "Index".into()).unwrap();
+        let content = fs::read_to_string(object_path(&ctx, &uuid).join("meta.ttl")).unwrap();
+        let (types, triples) = parsed_meta(&content);
+
+        assert_eq!(types, ["https://schema.org/NoteDigitalDocument"], "{content}");
+        assert!(
+            types.iter().all(|t| !t.starts_with(crate::rdf::NS_CERBO)),
+            "no cerbo:// class may be written:\n{content}"
+        );
+        assert_eq!(
+            object_of(&triples, "https://schema.org/name"),
+            Some(oxrdf::Term::from(oxrdf::Literal::new_simple_literal("Index")))
+        );
+        for date in ["dateCreated", "dateModified"] {
+            match object_of(&triples, &format!("https://schema.org/{date}")) {
+                Some(oxrdf::Term::Literal(l)) => {
+                    assert_eq!(l.datatype(), crate::rdf::xsd("dateTime").as_ref(), "{date}")
+                }
+                other => panic!("{date} must be an xsd:dateTime literal, got {other:?}"),
+            }
+        }
+        // The subject is the page, so `?s a schema:NoteDigitalDocument ; schema:name ?n`
+        // finds it with standard tools.
+        assert!(
+            triples
+                .iter()
+                .all(|t| t.subject.to_string() == format!("<cerbo://objects/{uuid}>")),
+            "{content}"
+        );
+    }
+
+    #[test]
+    fn source_meta_is_a_read_only_web_page_with_a_url() {
+        let mut meta = ObjectMeta::empty();
+        meta.object_type = ObjectType::Source;
+        meta.title = "Imported".into();
+        meta.original_url = Some("https://example.org/137".into());
+        let content = meta.to_turtle(UUID_137);
+        let (types, triples) = parsed_meta(&content);
+
+        assert_eq!(types, ["https://schema.org/WebPage"]);
+        assert_eq!(
+            object_of(&triples, "https://schema.org/url"),
+            Some(oxrdf::Term::from(oxrdf::NamedNode::new_unchecked("https://example.org/137"))),
+            "schema:url must be an IRI:\n{content}"
+        );
+        let read = roundtrip(&meta);
+        assert_eq!(read.object_type, ObjectType::Source);
+        assert!(read.object_type.is_readonly());
+        assert_eq!(read.original_url.as_deref(), Some("https://example.org/137"));
+    }
+
+    #[test]
+    fn attachment_meta_is_a_media_object_with_an_encoding_format() {
+        let mut meta = ObjectMeta::empty();
+        meta.object_type = ObjectType::Attachment;
+        meta.title = "image.png".into();
+        meta.mime_type = Some("image/png".into());
+        let content = meta.to_turtle(UUID_137);
+        let (types, triples) = parsed_meta(&content);
+
+        assert_eq!(types, ["https://schema.org/MediaObject"]);
+        assert_eq!(
+            object_of(&triples, "https://schema.org/encodingFormat"),
+            Some(oxrdf::Term::from(oxrdf::Literal::new_simple_literal("image/png")))
+        );
+        assert_eq!(roundtrip(&meta).mime_type.as_deref(), Some("image/png"));
+    }
+
+    #[test]
+    fn ontology_meta_is_a_defined_term_set() {
+        let mut meta = ObjectMeta::empty();
+        meta.object_type = ObjectType::Ontology;
+        let (types, _) = parsed_meta(&meta.to_turtle(UUID_137));
+        assert_eq!(types, ["https://schema.org/DefinedTermSet"]);
+        assert_eq!(roundtrip(&meta).object_type, ObjectType::Ontology);
+    }
+
+    #[test]
+    fn a_url_literal_is_accepted_on_read() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("meta.ttl");
+        fs::write(
+            &path,
+            format!(
+                "<cerbo://objects/{UUID_137}> a <https://schema.org/WebPage> ;\n  <https://schema.org/url> \"https://example.org/137\" .\n"
+            ),
+        )
+        .unwrap();
+        let meta = ObjectMeta::read_from_file(&path).unwrap();
+        assert_eq!(meta.object_type, ObjectType::Source);
+        assert_eq!(meta.original_url.as_deref(), Some("https://example.org/137"));
+    }
+
+    /// `test-vault/.cerbo/objects/ba079793-…/meta.ttl` as written before the
+    /// vocabulary change, verbatim.
+    const TEST_VAULT_LEGACY_META: &str = concat!(
+        "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+        "@prefix schema: <cerbo://ontology/schema/> .\n",
+        "@prefix cerbo: <cerbo://ontology/> .\n",
+        "<cerbo://objects/ba079793-b2ff-4ca6-ba88-8764ce6668c3> cerbo:type cerbo:Product ;\n",
+        "\tcerbo:title \"Index\" ;\n",
+        "\tschema:dateCreated \"2026-10-25T13:17:54.772697296+00:00\"^^xsd:dateTime ;\n",
+        "\tschema:dateModified \"2026-10-25T13:18:16.608529895+00:00\"^^xsd:dateTime ;\n",
+        "\tcerbo:slug \"index\" .\n",
+    );
+
+    #[test]
+    fn legacy_test_vault_meta_reads_with_the_same_type_title_and_dates() {
+        let (_tmp, ctx) = create_test_context();
+        let uuid = "ba079793-b2ff-4ca6-ba88-8764ce6668c3";
+        let path = meta_file(&ctx, uuid, TEST_VAULT_LEGACY_META);
+
+        let meta = ObjectMeta::read_from_file(&path).unwrap();
+        assert_eq!(meta.object_type, ObjectType::Product);
+        assert_eq!(meta.title, "Index");
+        assert_eq!(meta.created, "2026-10-25T13:17:54.772697296+00:00");
+        assert_eq!(meta.modified, "2026-10-25T13:18:16.608529895+00:00");
+        assert_eq!(meta.slug.as_deref(), Some("index"));
+
+        // The next write uses only the standard forms.
+        meta.write_to_file(&path, uuid).unwrap();
+        let rewritten = fs::read_to_string(&path).unwrap();
+        for legacy in ["cerbo:type", "cerbo:title", "cerbo:Product", "cerbo://ontology/schema/"] {
+            assert!(!rewritten.contains(legacy), "{legacy} written back:\n{rewritten}");
+        }
+        let (types, _) = parsed_meta(&rewritten);
+        assert_eq!(types, ["https://schema.org/NoteDigitalDocument"]);
+
+        let reread = ObjectMeta::read_from_file(&path).unwrap();
+        assert_eq!(reread.title, meta.title);
+        assert_eq!(reread.created, meta.created);
+        assert_eq!(reread.modified, meta.modified);
+        assert_eq!(reread.slug, meta.slug);
+    }
+
+    #[test]
+    fn ambiguous_object_class_is_refused_and_names_the_uuid_and_classes() {
+        let (_tmp, ctx) = create_test_context();
+        let uuid = object_create(&ctx, Some(UUID_137.into()), ObjectType::Product, "Both".into())
+            .unwrap();
+        let path = object_path(&ctx, &uuid).join("meta.ttl");
+        let mut content = fs::read_to_string(&path).unwrap();
+        content.push_str(&format!(
+            "<cerbo://objects/{uuid}> a <https://schema.org/WebPage> .\n"
+        ));
+        fs::write(&path, &content).unwrap();
+        let page_before = fs::read(object_path(&ctx, &uuid).join("page.md")).unwrap();
+
+        let err = ObjectMeta::read_from_file(&path).unwrap_err().to_string();
+        assert!(err.contains(&uuid), "error must name the UUID: {err}");
+        assert!(err.contains("https://schema.org/NoteDigitalDocument"), "{err}");
+        assert!(err.contains("https://schema.org/WebPage"), "{err}");
+
+        // Neither class wins: the object is not written.
+        let write = object_write(&ctx, &uuid, "# changed\n").unwrap_err();
+        assert!(write.contains(&uuid), "{write}");
+        assert_eq!(fs::read(object_path(&ctx, &uuid).join("page.md")).unwrap(), page_before);
+        assert_eq!(fs::read_to_string(&path).unwrap(), content, "meta.ttl must be untouched");
+    }
+
+    #[test]
+    fn ambiguity_counts_legacy_and_standard_spellings_of_the_same_class_once() {
+        let (_tmp, ctx) = create_test_context();
+        let path = meta_file(
+            &ctx,
+            UUID_137,
+            &format!(
+                "<cerbo://objects/{UUID_137}> a <https://schema.org/NoteDigitalDocument> ;\n  <cerbo://ontology/type> <cerbo://ontology/Product> .\n"
+            ),
+        );
+        assert_eq!(ObjectMeta::read_from_file(&path).unwrap().object_type, ObjectType::Product);
+    }
+
+    #[test]
+    fn extra_unrelated_class_keeps_a_note_a_note() {
+        let (_tmp, ctx) = create_test_context();
+        let uuid = object_create(&ctx, Some(UUID_137.into()), ObjectType::Product, "Soup".into())
+            .unwrap();
+        let path = object_path(&ctx, &uuid).join("meta.ttl");
+        let mut content = fs::read_to_string(&path).unwrap();
+        content.push_str(&format!("<cerbo://objects/{uuid}> a <https://schema.org/Recipe> .\n"));
+        fs::write(&path, content).unwrap();
+
+        let meta = ObjectMeta::read_from_file(&path).unwrap();
+        assert_eq!(meta.object_type, ObjectType::Product);
+        assert_eq!(meta.title, "Soup");
+        object_write(&ctx, &uuid, "# Soup\n\nstill a note\n").unwrap();
+    }
+
+    #[test]
+    fn saving_keeps_the_triples_cerbo_does_not_model() {
+        let (_tmp, ctx) = create_test_context();
+        let uuid = object_create(&ctx, Some(UUID_137.into()), ObjectType::Product, "Soup".into())
+            .unwrap();
+        let path = object_path(&ctx, &uuid).join("meta.ttl");
+        let mut content = fs::read_to_string(&path).unwrap();
+        content.push_str(&format!(
+            "<cerbo://objects/{uuid}> a <https://schema.org/Recipe> ;\n  <https://example.org/rating> \"137\" .\n\
+             <https://example.org/137> <https://schema.org/name> \"Linked\" .\n"
+        ));
+        fs::write(&path, content).unwrap();
+
+        object_write(&ctx, &uuid, "# Soup\n\nedited\n").unwrap();
+        crate::page::page_update_title(&ctx, uuid.clone(), "Stew".into()).unwrap();
+
+        let (types, triples) = parsed_meta(&fs::read_to_string(&path).unwrap());
+        assert!(types.contains(&"https://schema.org/Recipe".to_string()), "{types:?}");
+        assert!(types.contains(&"https://schema.org/NoteDigitalDocument".to_string()));
+        assert!(
+            triples.iter().any(|t| t.predicate.as_str() == "https://example.org/rating"),
+            "unmodelled triple lost: {triples:?}"
+        );
+        assert!(
+            triples.iter().any(|t| t.object == oxrdf::Literal::new_simple_literal("Linked").into()),
+            "triple about another resource lost: {triples:?}"
+        );
+        let meta = ObjectMeta::read_from_file(&path).unwrap();
+        assert_eq!(meta.title, "Stew");
+
+        // Carrying them over is still byte-stable.
+        let first = fs::read(&path).unwrap();
+        meta.write_to_file(&path, &uuid).unwrap();
+        assert_eq!(first, fs::read(&path).unwrap());
+    }
+
+    #[test]
+    fn a_class_given_to_another_resource_is_not_the_objects_class() {
+        let (_tmp, ctx) = create_test_context();
+        let uuid = object_create(&ctx, Some(UUID_137.into()), ObjectType::Product, "Links".into())
+            .unwrap();
+        let path = object_path(&ctx, &uuid).join("meta.ttl");
+        let mut content = fs::read_to_string(&path).unwrap();
+        content.push_str(
+            "<https://example.org/137> a <https://schema.org/WebPage> ;\n  <https://schema.org/name> \"Elsewhere\" .\n",
+        );
+        fs::write(&path, content).unwrap();
+
+        let meta = ObjectMeta::read_from_file(&path).unwrap();
+        assert_eq!(meta.object_type, ObjectType::Product);
+        assert_eq!(meta.title, "Links");
+        object_write(&ctx, &uuid, "# Links\n").unwrap();
+    }
+
+    #[test]
+    fn a_pre_turtle_meta_with_two_classes_is_refused() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join(UUID_137);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("meta.ttl");
+        fs::write(
+            &path,
+            concat!(
+                "@prefix : <cerbo://ontology/> .\n",
+                "<cerbo://objects/placeholder>\n",
+                "    :type :Source ;\n",
+                "    :type :Product ;\n",
+                "    :title \"Both\" .\n",
+                "    cerbo:slug \"both\" .\n",
+            ),
+        )
+        .unwrap();
+
+        let err = ObjectMeta::read_from_file(&path).unwrap_err().to_string();
+        assert!(err.contains(UUID_137), "{err}");
+        assert!(err.contains("https://schema.org/WebPage"), "{err}");
+        assert!(err.contains("https://schema.org/NoteDigitalDocument"), "{err}");
     }
 
 }

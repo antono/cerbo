@@ -23,7 +23,7 @@ my-vault/
 │   │   └── ...
 │   ├── trash/                   # Deleted objects, kept until you remove them
 │   │   └── <timestamp>-<uuid>/  # One entry per deletion, contents intact
-│   ├── ontology-map.json        # Prefix → UUID mapping for ontologies
+│   ├── ontology-map.json        # Annotation prefix → namespace IRI (+ ontology UUID)
 │   └── ...
 ├── cerbo/                       # Symlink projection, rebuilt by `cerbo symlink`
 │   ├── rust-ownership.md -> ../.cerbo/objects/<uuid>/page.md
@@ -35,6 +35,21 @@ my-vault/
 ```
 
 ## Object Types
+
+Each object's class is recorded in `meta.ttl` as `rdf:type` with a schema.org
+class. The class decides how Cerbo treats the object:
+
+| Type | `rdf:type` | Behaviour |
+|------|------------|-----------|
+| Product | `schema:NoteDigitalDocument` | editable note |
+| Source | `schema:WebPage` | read-only |
+| Attachment | `schema:MediaObject` | binary file |
+| Ontology | `schema:DefinedTermSet` | ontology documentation |
+
+An object may carry further `rdf:type` values (for example `schema:Recipe` on a
+note); Cerbo ignores them. An object that carries two or more of the four classes
+above is refused with an error naming its UUID and both classes: Cerbo neither
+reads nor rewrites it until one class is removed by hand.
 
 ### 1. Product (Page)
 - **Directory**: `.cerbo/objects/<uuid>/`
@@ -116,21 +131,48 @@ every literal is escaped, so any character a title can hold round-trips exactly.
 
 ### meta.ttl (Turtle RDF)
 ```turtle
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
-@prefix schema: <cerbo://ontology/schema/> .
+@prefix schema: <https://schema.org/> .
 @prefix cerbo: <cerbo://ontology/> .
-<cerbo://objects/f7e435db-9740-4a2a-8e57-b439c4f8bb18> cerbo:type cerbo:Product ;
-	cerbo:title "My Page" ;
+<cerbo://objects/f7e435db-9740-4a2a-8e57-b439c4f8bb18> a schema:NoteDigitalDocument ;
+	schema:name "My Page" ;
 	schema:dateCreated "2024-01-01T00:00:00Z"^^xsd:dateTime ;
 	schema:dateModified "2024-01-01T00:00:00Z"^^xsd:dateTime ;
 	cerbo:slug "my-page" ;
 	cerbo:virtualPath "notes/rust" .
 ```
 
-The subject is the object's own IRI. `cerbo:original-url` appears only on Source
-objects and `cerbo:mime-type` only on Attachments. `cerbo:title` is the **only**
-home of a page's title: the H1 in `page.md` is a convenience copy, and Cerbo never
-reads it back.
+The subject is the object's own IRI. `schema:url` appears only on Source objects
+and holds the imported address as an IRI (`schema:url <https://example.com/>`);
+`schema:encodingFormat` (the MIME type) appears only on Attachments.
+`schema:name` is the **only** home of a page's title: the H1 in `page.md` is a
+convenience copy, and Cerbo never reads it back.
+
+`schema:` is the real schema.org namespace, `https://schema.org/`. Terms that
+have no schema.org equivalent stay in Cerbo's own namespace: `cerbo:slug`,
+`cerbo:virtualPath`, `cerbo:position`, `cerbo:unresolvedType` and
+`cerbo:hasBacklink`.
+
+#### Legacy vocabulary
+
+Vaults written by older Cerbo builds use Cerbo's private terms. They are still
+read: the parser rewrites them to the standard terms as it reads, and every write
+uses only the standard ones.
+
+| Legacy (read only) | Standard (read and write) |
+|---|---|
+| `cerbo:type` | `rdf:type` (`a`) |
+| `cerbo:Product` / `Source` / `Attachment` / `Ontology` | `schema:NoteDigitalDocument` / `WebPage` / `MediaObject` / `DefinedTermSet` |
+| `cerbo:title` | `schema:name` |
+| `cerbo:original-url` (literal) | `schema:url` (IRI; a literal is still read) |
+| `cerbo:mime-type` | `schema:encodingFormat` |
+| `<cerbo://ontology/schema/x>` | `<https://schema.org/x>` |
+| `cerbo:annotation` / `cerbo:concept` | `schema:mentions` / `schema:name` |
+
+`cerbo migrate vocabulary` rewrites a vault's files into the standard form once
+(see [Migrating an old vault](#migrating-an-old-vault)). Saving an object also
+rewrites its `meta.ttl` in the standard form.
 
 ### backrefs.ttl (Turtle RDF)
 ```turtle
@@ -145,26 +187,67 @@ write per target. An object with no inbound links has a `backrefs.ttl` holding n
 that does not exist.
 
 ### annotations.ttl (Turtle RDF)
+
+Each annotation becomes an entity the page mentions. For a `page.md` whose third
+line is `I visited [Berlin]{schema:Place} with [Bob]{ex:Person}.` and a vault
+with no `ex` prefix registered:
+
 ```turtle
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix schema: <https://schema.org/> .
 @prefix cerbo: <cerbo://ontology/> .
-<cerbo://objects/<uuid>> cerbo:annotation _:a0 , _:a1 .
-_:a0 cerbo:concept "Bob" ;
-	cerbo:type <cerbo://objects/<uuid-schema>/Person> ;
-	cerbo:position "5,10" .
-_:a1 cerbo:concept "Alice" ;
-	cerbo:type <cerbo://objects/<uuid-foaf>/Person> ;
-	cerbo:position "15,20" .
+<cerbo://objects/<uuid>> schema:mentions _:m0 .
+_:m0 schema:name "Berlin" ;
+	a schema:Place ;
+	cerbo:position "3:10" .
+<cerbo://objects/<uuid>> schema:mentions _:m1 .
+_:m1 schema:name "Bob" ;
+	cerbo:unresolvedType "ex:Person" ;
+	cerbo:position "3:38" .
 ```
 
+- `rdf:type` is the full type IRI: the prefix's namespace followed by the local
+  name. Types outside `schema:` are written as full IRIs, for example
+  `a <http://xmlns.com/foaf/0.1/Person>`.
+- `cerbo:position` is `"line:column"`: the 1-based line and the 0-based character
+  offset of the opening `[` on that line.
+- An annotation whose prefix cannot be resolved (unknown, or missing as in
+  `[Bob]{Person}`) is kept with `cerbo:unresolvedType "prefix:Type"` and no
+  `rdf:type`, and indexing prints a warning naming the prefix. Once the prefix is
+  registered, `cerbo index` turns it into a real type.
+- The file is rewritten on every index of the page. A page whose last annotation
+  was removed gets a file with no `schema:mentions` statements.
+
 ### ontology-map.json
+
+The vault's own `.cerbo/ontology-map.json` maps each annotation prefix to a
+namespace IRI and, optionally, to the ontology object that documents it:
+
 ```json
 {
+  "version": 2,
   "prefixes": {
-    "schema": "123e4567-e89b-12d3-a456-426614174000",
-    "foaf": "987fcdeb-51a2-43d1-b234-567890123456"
+    "ex": {
+      "namespace": "https://example.org/vocab#",
+      "ontology": "123e4567-e89b-12d3-a456-426614174000"
+    }
   }
 }
 ```
+
+- Built-in prefixes need no entry: `schema` (`https://schema.org/`), `foaf`,
+  `dcterms`, `skos`, `rdf`, `rdfs`, `owl` and `xsd`, each with its usual
+  namespace. A vault entry for one of them wins over the built-in one.
+- Entries are added by `cerbo import-ontology <url> --prefix ex --namespace
+  https://example.org/vocab#`. `cerbo init` writes an empty map
+  (`{"version": 2, "prefixes": {}}`), plus entries for the bundled Schema.org and
+  FOAF ontologies when it could fetch them.
+- A version 1 map (`"prefix": "<uuid>"`, no namespace) is still read. Such an
+  entry resolves only for a built-in prefix; register any other prefix again with
+  `--prefix` and `--namespace`.
+- Only the vault's own map is used. Two vaults may bind the same prefix to
+  different namespaces.
 
 ## Link Format
 
@@ -186,9 +269,29 @@ lookup index on disk to fall out of date.
 ```
 
 Examples:
-- `[Bob]{schema:Person}` → Annotation with concept "Bob", type Person from schema ontology
-- `[Alice]{foaf:Person}` → Annotation with concept "Alice", type Person from FOAF ontology
-- `[Product X]{Product}` → Annotation with no prefix (uses default ontology)
+- `[Bob]{schema:Person}` → the page mentions a `https://schema.org/Person` named "Bob"
+- `[Alice]{foaf:Person}` → the page mentions a `http://xmlns.com/foaf/0.1/Person` named "Alice"
+- `[Product X]{Product}` → no prefix: kept as `cerbo:unresolvedType "Product"`, with a warning
+
+## Migrating an old vault
+
+Old files stay readable, so migration is optional, but it makes the files on
+disk match what standard RDF tools expect:
+
+```bash
+cerbo migrate vocabulary --dry-run      # list what would change
+cerbo migrate vocabulary                # rewrite every registered vault
+cerbo migrate vocabulary --vault ~/notes  # or just one vault
+```
+
+The command rewrites a `meta.ttl` only when it uses a legacy term (writing it
+exactly as a save would), regenerates an existing `annotations.ttl` from
+`page.md` only when it uses a legacy term, writes each file atomically and
+only when its bytes change, and skips the trash. A second run changes nothing.
+An object it cannot read is named by UUID and left as it was.
+
+**Upgrade Cerbo on every device that syncs the vault before migrating.** Older
+builds cannot read the migrated files.
 
 ## Key Differences from Slug-Based Model
 

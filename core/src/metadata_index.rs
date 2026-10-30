@@ -34,16 +34,17 @@ pub fn index_vault(vault_ctx: &VaultContext) -> Result<IndexStats, String> {
 
     // Phase 1: the live pages, excluding :Ontology objects. Ontologies contain
     // raw RDF/TTL content — backlink and annotation indexing is not meaningful
-    // for them, and they are also excluded from cerbo symlink.
-    let page_uuids: Vec<String> = crate::vault::list_pages_in_vault(&vault_ctx.global, &vault_ctx.vault_path)?
-        .into_iter()
-        .filter(|uuid| {
-            let meta_path = vault_ctx.object_path(uuid).join("meta.ttl");
-            crate::object::ObjectMeta::read_from_file(&meta_path)
-                .map(|m| m.object_type != crate::object::ObjectType::Ontology)
-                .unwrap_or(true)
-        })
-        .collect();
+    // for them, and they are also excluded from cerbo symlink. An object whose
+    // meta.ttl cannot be read — two object classes, say — is reported and left
+    // untouched rather than indexed as a note.
+    let mut page_uuids: Vec<String> = Vec::new();
+    for uuid in crate::vault::list_pages_in_vault(&vault_ctx.global, &vault_ctx.vault_path)? {
+        match indexable(vault_ctx, &uuid) {
+            Ok(true) => page_uuids.push(uuid),
+            Ok(false) => {}
+            Err(error_message) => stats.errors.push(IndexError { page_uuid: uuid, error_message }),
+        }
+    }
     let total_pages = page_uuids.len();
 
     eprintln!("Indexing {} pages...", total_pages);
@@ -88,11 +89,16 @@ pub fn index_vault(vault_ctx: &VaultContext) -> Result<IndexStats, String> {
 
         let annotations = crate::annotations::extract_annotations(&content);
         stats.annotations_found += annotations.len();
-        if let Err(e) = crate::annotations::annotations_write_vault(vault_ctx, uuid, &annotations) {
-            stats.errors.push(IndexError {
+        match crate::annotations::annotations_write_vault(vault_ctx, uuid, &annotations) {
+            Ok(warnings) => {
+                for warning in warnings {
+                    eprintln!("Warning: {}", warning);
+                }
+            }
+            Err(e) => stats.errors.push(IndexError {
                 page_uuid: uuid.clone(),
                 error_message: format!("Failed to write annotations: {}", e),
-            });
+            }),
         }
 
         stats.pages_processed += 1;
@@ -117,9 +123,29 @@ pub fn index_vault(vault_ctx: &VaultContext) -> Result<IndexStats, String> {
     Ok(stats)
 }
 
+/// Whether this object's links and annotations are indexed: a page that is not
+/// an ontology. A page without `meta.ttl` is still a note; one whose `meta.ttl`
+/// cannot be read is an error naming the UUID, never a guess.
+fn indexable(vault_ctx: &VaultContext, uuid: &str) -> Result<bool, String> {
+    let meta_path = vault_ctx.object_path(uuid).join("meta.ttl");
+    match crate::object::ObjectMeta::read_from_file(&meta_path) {
+        Ok(meta) => Ok(meta.object_type != crate::object::ObjectType::Ontology),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(e) => Err(format!("Failed to read meta.ttl of {}: {}", uuid, e)),
+    }
+}
+
 /// Index a single page (incremental: update only this page's links and annotations)
 pub fn index_page(vault_ctx: &VaultContext, page_uuid: &str) -> Result<IndexStats, String> {
     let mut stats = IndexStats::default();
+
+    if let Err(error_message) = indexable(vault_ctx, page_uuid) {
+        stats.errors.push(IndexError {
+            page_uuid: page_uuid.to_string(),
+            error_message,
+        });
+        return Ok(stats);
+    }
 
     let page_dir = vault_ctx.object_path(page_uuid);
     let page_md = page_dir.join("page.md");
@@ -165,11 +191,16 @@ pub fn index_page(vault_ctx: &VaultContext, page_uuid: &str) -> Result<IndexStat
     let annotations = crate::annotations::extract_annotations(&content);
     stats.annotations_found = annotations.len();
 
-    if let Err(e) = crate::annotations::annotations_write_vault(vault_ctx, page_uuid, &annotations) {
-        stats.errors.push(IndexError {
+    match crate::annotations::annotations_write_vault(vault_ctx, page_uuid, &annotations) {
+        Ok(warnings) => {
+            for warning in warnings {
+                eprintln!("Warning: {}", warning);
+            }
+        }
+        Err(e) => stats.errors.push(IndexError {
             page_uuid: page_uuid.to_string(),
             error_message: format!("Failed to write annotations: {}", e),
-        });
+        }),
     }
 
     stats.pages_processed = 1;
@@ -201,30 +232,53 @@ pub struct IndexError {
     pub error_message: String,
 }
 
+/// Outcome of [`backfill_slugs`].
+#[derive(Debug, Default)]
+pub struct SlugBackfill {
+    /// Pages that got a `cerbo:slug`.
+    pub updated: usize,
+    /// Pages that could not be read or written; each is left as it was.
+    pub errors: Vec<IndexError>,
+}
+
 /// Backfill `cerbo:slug` into meta.ttl for every page that lacks one.
-/// Returns the count of pages updated.
-pub fn backfill_slugs(vault_ctx: &VaultContext) -> Result<usize, String> {
+///
+/// One page that fails — a `meta.ttl` with two object classes, say — is
+/// reported by UUID and skipped; the rest of the vault is still backfilled.
+pub fn backfill_slugs(vault_ctx: &VaultContext) -> Result<SlugBackfill, String> {
     let page_uuids = crate::vault::list_pages_in_vault(&vault_ctx.global, &vault_ctx.vault_path)?;
-    let mut updated = 0;
+    let mut report = SlugBackfill::default();
 
     for uuid in &page_uuids {
         let meta_path = vault_ctx.object_path(uuid).join("meta.ttl");
         if !meta_path.exists() {
             continue;
         }
-        let mut meta = crate::object::ObjectMeta::read_from_file(&meta_path)
-            .map_err(|e| format!("backfill_slugs read {}: {}", uuid, e))?;
+        let mut meta = match crate::object::ObjectMeta::read_from_file(&meta_path) {
+            Ok(meta) => meta,
+            Err(e) => {
+                report.errors.push(IndexError {
+                    page_uuid: uuid.clone(),
+                    error_message: format!("Failed to read meta.ttl: {}", e),
+                });
+                continue;
+            }
+        };
         if meta.object_type == crate::object::ObjectType::Ontology || meta.slug.is_some() {
             continue;
         }
         let parsed_uuid = Uuid::parse_str(uuid).unwrap_or_else(|_| Uuid::new_v4());
         meta.slug = Some(crate::slug::slugify(&meta.title, parsed_uuid));
-        meta.write_to_file(&meta_path, uuid)
-            .map_err(|e| format!("backfill_slugs write {}: {}", uuid, e))?;
-        updated += 1;
+        match meta.write_to_file(&meta_path, uuid) {
+            Ok(()) => report.updated += 1,
+            Err(e) => report.errors.push(IndexError {
+                page_uuid: uuid.clone(),
+                error_message: format!("Failed to write slug to meta.ttl: {}", e),
+            }),
+        }
     }
 
-    Ok(updated)
+    Ok(report)
 }
 
 /// Validate virtual paths across all pages in a vault.
@@ -306,7 +360,7 @@ mod tests {
         fs::create_dir_all(&objects_dir).unwrap();
 
         // Create ontology-map.json
-        let map = serde_json::json!({"prefixes": {}});
+        let map = serde_json::json!({"version": 2, "prefixes": {}});
         fs::write(cerbo_dir.join("ontology-map.json"), serde_json::to_string(&map).unwrap()).unwrap();
 
         let global = CerboContext {
@@ -379,6 +433,32 @@ mod tests {
 
         let annotations_content = fs::read_to_string(&annotations_path).unwrap();
         assert!(annotations_content.contains("knowledge"), "annotations should contain concept text");
+        assert!(annotations_content.contains("schema:Thing"), "{annotations_content}");
+    }
+
+    #[test]
+    fn test_index_page_resolves_prefixes_with_the_vault_map() {
+        let (_temp, vault_ctx) = setup_test_vault();
+        let map = serde_json::json!({
+            "version": 2,
+            "prefixes": {"ex": {"namespace": "https://example.org/vocab#"}}
+        });
+        fs::write(
+            vault_ctx.cerbo_dir().join("ontology-map.json"),
+            serde_json::to_string(&map).unwrap(),
+        )
+        .unwrap();
+
+        let page_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-000000000137";
+        create_test_page(&vault_ctx, page_uuid, "[Alice]{ex:Person} and [Thing]{zz:Widget}");
+
+        let stats = index_page(&vault_ctx, page_uuid).unwrap();
+        assert_eq!(stats.annotations_found, 2);
+        assert!(stats.errors.is_empty(), "an unknown prefix is a warning, not an error");
+
+        let content = fs::read_to_string(vault_ctx.object_path(page_uuid).join("annotations.ttl")).unwrap();
+        assert!(content.contains("<https://example.org/vocab#Person>"), "{content}");
+        assert!(content.contains("cerbo:unresolvedType \"zz:Widget\""), "{content}");
     }
 
     #[test]
@@ -512,6 +592,86 @@ mod tests {
         assert!(stats.errors.is_empty(), "trash must not be reported: {:?}", stats.errors);
         assert!(!trashed.join("annotations.ttl").exists(), "nothing derived from trash");
         assert!(!trashed.join("backrefs.ttl").exists(), "nothing derived from trash");
+    }
+
+    /// Give an indexed page's `meta.ttl` a second object class by hand.
+    fn make_ambiguous(vault_ctx: &VaultContext, uuid: &str) {
+        let meta_path = vault_ctx.object_path(uuid).join("meta.ttl");
+        fs::write(
+            &meta_path,
+            format!(
+                "<cerbo://objects/{uuid}> a <https://schema.org/NoteDigitalDocument> , \
+                 <https://schema.org/WebPage> ;\n  <https://schema.org/name> \"Both\" .\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn an_object_with_two_classes_is_reported_and_not_indexed() {
+        let (_temp, vault_ctx) = setup_test_vault();
+
+        let ambiguous = "13713713-0000-4000-8000-000000000137";
+        let target = "13713713-0000-4000-8000-000000000001";
+        create_test_page(&vault_ctx, target, "# Target");
+        create_test_page(
+            &vault_ctx,
+            ambiguous,
+            &format!("[Berlin]{{schema:Place}} cerbo://objects/{target}"),
+        );
+        make_ambiguous(&vault_ctx, ambiguous);
+
+        let (stats, writes) = crate::fsio::audit::recording(|| index_vault(&vault_ctx).unwrap());
+
+        assert_eq!(stats.pages_processed, 1, "only the readable page");
+        assert_eq!(stats.errors.len(), 1, "{:?}", stats.errors);
+        assert_eq!(stats.errors[0].page_uuid, ambiguous);
+        assert!(stats.errors[0].error_message.contains(ambiguous), "{:?}", stats.errors);
+        let dir = vault_ctx.object_path(ambiguous);
+        assert!(
+            writes.iter().all(|p| !p.starts_with(&dir)),
+            "wrote into the ambiguous object: {writes:?}"
+        );
+        assert!(!dir.join("annotations.ttl").exists());
+        // Its links are not counted as backreferences either.
+        assert!(crate::links::backrefs_read_vault(&vault_ctx, target).unwrap().is_empty());
+
+        let single = index_page(&vault_ctx, ambiguous).unwrap();
+        assert_eq!(single.pages_processed, 0);
+        assert_eq!(single.errors.len(), 1);
+        assert!(!dir.join("annotations.ttl").exists());
+    }
+
+    #[test]
+    fn slug_backfill_reports_an_ambiguous_page_and_carries_on() {
+        let (_temp, vault_ctx) = setup_test_vault();
+
+        let uuids: Vec<String> = (0..137)
+            .map(|n| format!("13700000-0000-4000-8000-{n:012}"))
+            .collect();
+        for uuid in &uuids {
+            create_test_page(&vault_ctx, uuid, "# Page");
+        }
+        let ambiguous = &uuids[0];
+        make_ambiguous(&vault_ctx, ambiguous);
+        let ambiguous_before = fs::read(vault_ctx.object_path(ambiguous).join("meta.ttl")).unwrap();
+
+        let report = backfill_slugs(&vault_ctx).unwrap();
+
+        assert_eq!(report.updated, 136);
+        assert_eq!(report.errors.len(), 1, "{:?}", report.errors);
+        assert_eq!(&report.errors[0].page_uuid, ambiguous);
+        assert_eq!(
+            fs::read(vault_ctx.object_path(ambiguous).join("meta.ttl")).unwrap(),
+            ambiguous_before
+        );
+        for uuid in uuids.iter().skip(1) {
+            let meta = crate::object::ObjectMeta::read_from_file(
+                &vault_ctx.object_path(uuid).join("meta.ttl"),
+            )
+            .unwrap();
+            assert!(meta.slug.is_some(), "{uuid} got no slug");
+        }
     }
 
     #[test]

@@ -48,7 +48,12 @@ fn test_init_creates_cerbo_directory() {
     assert!(ctx.config_dir.exists());
     assert!(ctx.config_dir.join("objects").exists());
     assert!(!ctx.config_dir.join("index.json").exists(), "index.json is no longer part of a vault");
-    assert!(ctx.config_dir.join("ontology-map.json").exists());
+    let map: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(ctx.config_dir.join("ontology-map.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(map["version"], 2, "{map}");
+    assert!(map["prefixes"].is_object(), "{map}");
 }
 
 #[test]
@@ -299,7 +304,7 @@ fn test_import_url_creates_source() {
     assert!(obj_dir.exists());
     let meta_path = obj_dir.join("meta.ttl");
     let meta_content = std::fs::read_to_string(&meta_path).unwrap();
-    assert!(meta_content.contains(":type :Source"));
+    assert!(meta_content.contains("schema:WebPage"), "{meta_content}");
 
     // Try to write - should fail
     let write_output = ctx.cmd()
@@ -322,12 +327,12 @@ fn test_import_ontology() {
         .current_dir(ctx.tmp_dir.path())
         .output();
 
-    // Verify ontologies were bundled
+    // Verify ontologies were bundled and registered with their namespaces
     let map_path = ctx.config_dir.join("ontology-map.json");
-    assert!(map_path.exists());
-    let map_content = std::fs::read_to_string(&map_path).unwrap();
-    assert!(map_content.contains("schema"));
-    assert!(map_content.contains("foaf"));
+    let map: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&map_path).unwrap()).unwrap();
+    assert_eq!(map["prefixes"]["schema"]["namespace"], "https://schema.org/");
+    assert_eq!(map["prefixes"]["foaf"]["namespace"], "http://xmlns.com/foaf/0.1/");
 
     // Import a new ontology
     let output = ctx.cmd()
@@ -339,6 +344,124 @@ fn test_import_ontology() {
     assert!(output.status.success());
     let output_str = String::from_utf8(output.stdout).unwrap();
     assert!(output_str.contains("UUID:"));
+}
+
+/// A vault made by hand (no network-bound `cerbo init`) with an empty v2 map,
+/// plus a local ontology document reachable through a `file://` URL.
+fn setup_offline_vault() -> (TestContext, String) {
+    let ctx = setup();
+    std::fs::create_dir_all(ctx.config_dir.join("objects")).unwrap();
+    std::fs::write(
+        ctx.config_dir.join("ontology-map.json"),
+        r#"{"version":2,"prefixes":{}}"#,
+    )
+    .unwrap();
+    let doc = ctx.tmp_dir.path().join("vocab.ttl");
+    std::fs::write(&doc, "@prefix ex: <https://example.org/vocab#> .\nex:Person a <http://www.w3.org/2000/01/rdf-schema#Class> .\n").unwrap();
+    let url = format!("file://{}", doc.display());
+    (ctx, url)
+}
+
+fn object_count(ctx: &TestContext) -> usize {
+    std::fs::read_dir(ctx.config_dir.join("objects")).unwrap().count()
+}
+
+#[test]
+fn test_import_ontology_registers_prefix_and_namespace() {
+    let (ctx, url) = setup_offline_vault();
+
+    let output = ctx.cmd()
+        .args(["import-ontology", &url, "--prefix", "ex", "--namespace", "https://example.org/vocab#", "--json"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let out: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let uuid = out["uuid"].as_str().unwrap().to_string();
+
+    let map: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(ctx.config_dir.join("ontology-map.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(map["version"], 2);
+    assert_eq!(map["prefixes"]["ex"]["namespace"], "https://example.org/vocab#");
+    assert_eq!(map["prefixes"]["ex"]["ontology"], uuid.as_str());
+
+    // A page that uses the prefix now resolves to the full IRI.
+    let page_uuid = "aaaaaaaa-0000-0000-0000-000000000137";
+    let page_dir = ctx.config_dir.join("objects").join(page_uuid);
+    std::fs::create_dir_all(&page_dir).unwrap();
+    std::fs::write(page_dir.join("page.md"), "[Alice]{ex:Person}").unwrap();
+    std::fs::write(
+        page_dir.join("meta.ttl"),
+        format!(
+            "<cerbo://objects/{page_uuid}> a <https://schema.org/NoteDigitalDocument> ; \
+             <https://schema.org/name> \"Alice\" ."
+        ),
+    )
+    .unwrap();
+    let output = ctx.cmd()
+        .args(["index", "--page", page_uuid])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let ttl = std::fs::read_to_string(page_dir.join("annotations.ttl")).unwrap();
+    assert!(ttl.contains("<https://example.org/vocab#Person>"), "{ttl}");
+}
+
+#[test]
+fn test_import_ontology_without_namespace_leaves_map_alone() {
+    let (ctx, url) = setup_offline_vault();
+    let map_path = ctx.config_dir.join("ontology-map.json");
+    let map_before = std::fs::read_to_string(&map_path).unwrap();
+
+    let output = ctx.cmd()
+        .args(["import-ontology", &url])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("UUID:"));
+    assert_eq!(object_count(&ctx), 1, "the ontology object is created");
+
+    assert_eq!(std::fs::read_to_string(&map_path).unwrap(), map_before);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--prefix") && stderr.contains("--namespace"), "{stderr}");
+}
+
+#[test]
+fn test_import_ontology_with_only_one_flag_fails() {
+    let (ctx, url) = setup_offline_vault();
+    let map_path = ctx.config_dir.join("ontology-map.json");
+    let map_before = std::fs::read_to_string(&map_path).unwrap();
+
+    for args in [
+        vec!["import-ontology", url.as_str(), "--prefix", "ex"],
+        vec!["import-ontology", url.as_str(), "--namespace", "https://example.org/vocab#"],
+    ] {
+        let output = ctx.cmd()
+            .args(&args)
+            .current_dir(ctx.tmp_dir.path())
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{args:?} must fail");
+        assert_eq!(object_count(&ctx), 0, "{args:?} must create no object");
+        assert_eq!(std::fs::read_to_string(&map_path).unwrap(), map_before);
+    }
+}
+
+#[test]
+fn test_import_ontology_rejects_an_invalid_namespace_before_creating_anything() {
+    let (ctx, url) = setup_offline_vault();
+
+    let output = ctx.cmd()
+        .args(["import-ontology", &url, "--prefix", "ex", "--namespace", "not an iri"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(object_count(&ctx), 0);
 }
 
 #[test]
@@ -888,4 +1011,375 @@ fn test_no_vault_no_active_returns_error() {
         stderr.contains("vault") || stdout.contains("vault"),
         "expected vault-related error, got stderr={} stdout={}", stderr, stdout
     );
+}
+
+// ── cerbo migrate vocabulary ──────────────────────────────────────────────────
+
+const MIGRATE_PAGE: &str = "ba079793-b2ff-4ca6-ba88-8764ce6668c3";
+const MIGRATE_SCHEMA_ONTOLOGY: &str = "5c1e0137-0000-4000-8000-000000000137";
+
+/// A `meta.ttl` as Cerbo wrote it before the schema.org switch.
+fn legacy_meta(uuid: &str, title: &str) -> String {
+    format!(
+        concat!(
+            "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n",
+            "@prefix schema: <cerbo://ontology/schema/> .\n",
+            "@prefix cerbo: <cerbo://ontology/> .\n",
+            "<cerbo://objects/{uuid}> cerbo:type cerbo:Product ;\n",
+            "\tcerbo:title \"{title}\" ;\n",
+            "\tschema:dateCreated \"2026-10-25T13:17:54.772697296+00:00\"^^xsd:dateTime ;\n",
+            "\tschema:dateModified \"2026-10-29T11:44:53.954037862+00:00\"^^xsd:dateTime ;\n",
+            "\tcerbo:slug \"index\" ;\n",
+            "\tcerbo:virtualPath \"notes/index\" .\n",
+        ),
+        uuid = uuid,
+        title = title
+    )
+}
+
+fn put_object_file(vault: &Path, uuid: &str, file: &str, content: &str) -> std::path::PathBuf {
+    let dir = vault.join(".cerbo").join("objects").join(uuid);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(file);
+    std::fs::write(&path, content).unwrap();
+    path
+}
+
+/// A vault holding one legacy page with a legacy annotation, registered under
+/// `name`. Returns the vault ID.
+fn legacy_vault(ctx: &TestContext, root: &Path, name: &str) -> String {
+    std::fs::create_dir_all(root.join(".cerbo").join("objects")).unwrap();
+    std::fs::write(
+        root.join(".cerbo").join("ontology-map.json"),
+        format!(
+            r#"{{"version":2,"prefixes":{{"schema":{{"namespace":"https://schema.org/","ontology":"{MIGRATE_SCHEMA_ONTOLOGY}"}}}}}}"#
+        ),
+    )
+    .unwrap();
+    put_object_file(root, MIGRATE_PAGE, "meta.ttl", &legacy_meta(MIGRATE_PAGE, "Index"));
+    put_object_file(root, MIGRATE_PAGE, "page.md", "# Index\nI visited [Berlin]{schema:Place}.\n");
+    put_object_file(
+        root,
+        MIGRATE_PAGE,
+        "annotations.ttl",
+        &format!(
+            concat!(
+                "@prefix cerbo: <cerbo://ontology/> .\n",
+                "<cerbo://objects/{page}> cerbo:annotation [\n",
+                "    cerbo:concept \"Berlin\" ;\n",
+                "    cerbo:type <cerbo://objects/{ontology}/Place> ;\n",
+                "    cerbo:position \"2,11\" ] .\n",
+            ),
+            page = MIGRATE_PAGE,
+            ontology = MIGRATE_SCHEMA_ONTOLOGY
+        ),
+    );
+
+    let output = ctx.cmd()
+        .args(["vault", "add", name, root.to_str().unwrap(), "--json"])
+        .current_dir(ctx.xdg_dir.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let vault: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    vault["id"].as_str().unwrap().to_string()
+}
+
+/// Run `cerbo migrate vocabulary <args>` from outside any vault.
+fn migrate(ctx: &TestContext, args: &[&str]) -> std::process::Output {
+    ctx.cmd()
+        .args(["migrate", "vocabulary"])
+        .args(args)
+        .current_dir(ctx.xdg_dir.path())
+        .output()
+        .unwrap()
+}
+
+fn json_summary(output: &std::process::Output) -> serde_json::Value {
+    let summary: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {}", String::from_utf8_lossy(&output.stdout)));
+    for field in ["scanned", "rewritten", "errors"] {
+        assert!(summary[field].is_u64(), "{field} is not a number: {summary}");
+    }
+    summary
+}
+
+/// Every file under `dir` with its bytes and modification time.
+fn snapshot(dir: &Path) -> std::collections::BTreeMap<std::path::PathBuf, (Vec<u8>, std::time::SystemTime)> {
+    let mut files = std::collections::BTreeMap::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+                files.insert(path.clone(), (std::fs::read(&path).unwrap(), mtime));
+            }
+        }
+    }
+    files
+}
+
+#[test]
+fn test_migrate_vocabulary_rewrites_legacy_meta() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    legacy_vault(&ctx, root, "Legacy");
+
+    let output = migrate(&ctx, &[]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+    let meta = std::fs::read_to_string(
+        root.join(".cerbo/objects").join(MIGRATE_PAGE).join("meta.ttl"),
+    )
+    .unwrap();
+    assert!(meta.contains("a schema:NoteDigitalDocument"), "{meta}");
+    assert!(meta.contains("@prefix schema: <https://schema.org/>"), "{meta}");
+    assert!(meta.contains("schema:name \"Index\""), "{meta}");
+    assert!(meta.contains("schema:dateCreated"), "{meta}");
+    for legacy in ["cerbo:Product", "cerbo:type", "cerbo:title", "cerbo://ontology/schema/"] {
+        assert!(!meta.contains(legacy), "{legacy} survived:\n{meta}");
+    }
+    // Values are carried over unchanged.
+    for value in [
+        "\"2026-10-25T13:17:54.772697296+00:00\"",
+        "\"2026-10-29T11:44:53.954037862+00:00\"",
+        "cerbo:slug \"index\"",
+        "cerbo:virtualPath \"notes/index\"",
+    ] {
+        assert!(meta.contains(value), "{value} lost:\n{meta}");
+    }
+}
+
+#[test]
+fn test_migrate_vocabulary_rewrites_legacy_annotation_type() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    legacy_vault(&ctx, root, "Legacy");
+
+    let output = migrate(&ctx, &[]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+    let ttl = std::fs::read_to_string(
+        root.join(".cerbo/objects").join(MIGRATE_PAGE).join("annotations.ttl"),
+    )
+    .unwrap();
+    assert!(ttl.contains("schema:mentions"), "{ttl}");
+    assert!(ttl.contains("a schema:Place"), "{ttl}");
+    assert!(ttl.contains("schema:name \"Berlin\""), "{ttl}");
+    assert!(!ttl.contains("cerbo:annotation") && !ttl.contains("cerbo:concept"), "{ttl}");
+    assert!(!ttl.contains(MIGRATE_SCHEMA_ONTOLOGY), "{ttl}");
+}
+
+#[test]
+fn test_migrate_vocabulary_re_derives_a_lost_prefix() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    legacy_vault(&ctx, root, "Legacy");
+    let annotations = put_object_file(
+        root,
+        MIGRATE_PAGE,
+        "annotations.ttl",
+        &format!(
+            "<cerbo://objects/{MIGRATE_PAGE}> <cerbo://ontology/annotation> [ \
+             <cerbo://ontology/concept> \"Berlin\" ; \
+             <cerbo://ontology/type> <cerbo://ontology/Place> ] .\n"
+        ),
+    );
+
+    let output = migrate(&ctx, &[]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+    let ttl = std::fs::read_to_string(&annotations).unwrap();
+    assert!(ttl.contains("a schema:Place"), "{ttl}");
+    assert!(!ttl.contains("cerbo://ontology/Place") && !ttl.contains("cerbo:Place"), "{ttl}");
+}
+
+#[test]
+fn test_migrate_vocabulary_one_vault_only() {
+    let ctx = setup();
+    let first = ctx.tmp_dir.path().join("first");
+    let second = ctx.tmp_dir.path().join("second");
+    let first_id = legacy_vault(&ctx, &first, "First");
+    legacy_vault(&ctx, &second, "Second");
+    let untouched = snapshot(&second.join(".cerbo"));
+
+    let output = migrate(&ctx, &["--vault", &first_id, "--json"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(json_summary(&output)["rewritten"], 2);
+
+    let meta = std::fs::read_to_string(
+        first.join(".cerbo/objects").join(MIGRATE_PAGE).join("meta.ttl"),
+    )
+    .unwrap();
+    assert!(meta.contains("schema:NoteDigitalDocument"), "{meta}");
+    assert_eq!(snapshot(&second.join(".cerbo")), untouched, "the other vault changed");
+
+    // A vault path works too, the same as for `cerbo index --vault`.
+    let output = migrate(&ctx, &["--vault", second.to_str().unwrap(), "--json"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(json_summary(&output)["rewritten"], 2);
+}
+
+#[test]
+fn test_migrate_vocabulary_unknown_vault_fails() {
+    let ctx = setup();
+
+    let output = migrate(&ctx, &["--vault", "no-such-vault-137"]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("no-such-vault-137"));
+}
+
+#[test]
+fn test_migrate_vocabulary_unreadable_object() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    std::fs::create_dir_all(root.join(".cerbo/objects")).unwrap();
+    let uuid = |n: usize| format!("00000000-0000-4000-8000-{n:012}");
+    for n in 0..137 {
+        put_object_file(root, &uuid(n), "meta.ttl", &legacy_meta(&uuid(n), &format!("Page {n}")));
+    }
+    let broken = uuid(42);
+    let broken_path = put_object_file(root, &broken, "meta.ttl", "this is {{ not turtle at all");
+
+    let output = migrate(&ctx, &["--vault", root.to_str().unwrap(), "--json"]);
+
+    assert!(!output.status.success(), "an unreadable object must fail the run");
+    assert!(String::from_utf8_lossy(&output.stderr).contains(&broken), "stderr must name {broken}");
+    let summary = json_summary(&output);
+    assert_eq!(summary["scanned"], 137);
+    assert_eq!(summary["rewritten"], 136);
+    assert_eq!(summary["errors"], 1);
+    assert_eq!(std::fs::read_to_string(&broken_path).unwrap(), "this is {{ not turtle at all");
+}
+
+#[test]
+fn test_migrate_vocabulary_dry_run_changes_nothing() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    legacy_vault(&ctx, root, "Legacy");
+    let before = snapshot(&root.join(".cerbo"));
+
+    let output = migrate(&ctx, &["--dry-run"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+    assert_eq!(snapshot(&root.join(".cerbo")), before, "a dry run modified .cerbo/");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Would rewrite 2 files"), "{stdout}");
+    assert!(stdout.contains("meta.ttl") && stdout.contains("annotations.ttl"), "{stdout}");
+
+    let output = migrate(&ctx, &["--dry-run", "--json"]);
+    assert_eq!(json_summary(&output)["rewritten"], 2);
+    assert_eq!(snapshot(&root.join(".cerbo")), before);
+}
+
+#[test]
+fn test_migrate_vocabulary_second_run_touches_nothing() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    legacy_vault(&ctx, root, "Legacy");
+
+    let first = migrate(&ctx, &["--json"]);
+    assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+    assert_eq!(json_summary(&first)["rewritten"], 2);
+
+    let before = snapshot(&root.join(".cerbo"));
+    let second = migrate(&ctx, &["--json"]);
+    assert!(second.status.success(), "{}", String::from_utf8_lossy(&second.stderr));
+    assert_eq!(json_summary(&second)["rewritten"], 0);
+    assert_eq!(snapshot(&root.join(".cerbo")), before, "a file or its mtime changed");
+}
+
+#[test]
+fn test_migrate_vocabulary_json_summary() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    legacy_vault(&ctx, root, "Legacy");
+
+    let output = migrate(&ctx, &["--json"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+    let summary = json_summary(&output);
+    let mut fields: Vec<&str> = summary
+        .as_object()
+        .expect("a JSON object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort();
+    assert_eq!(fields, ["errors", "rewritten", "scanned"], "{summary}");
+    assert_eq!(summary["scanned"], 1);
+    assert_eq!(summary["rewritten"], 2);
+    assert_eq!(summary["errors"], 0);
+}
+
+#[test]
+fn page_write_refreshes_annotations_without_an_index_run() {
+    let ctx = setup();
+    ctx.cmd().arg("init").current_dir(ctx.tmp_dir.path()).output().unwrap();
+    let output = ctx.cmd()
+        .args(["page", "create", "Trip"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+    let uuid = extract_uuid(&output.stdout);
+    let annotations = ctx.config_dir.join("objects").join(&uuid).join("annotations.ttl");
+
+    let write = |content: &str| {
+        let output = ctx.cmd()
+            .args(["page", "write", &uuid, content])
+            .current_dir(ctx.tmp_dir.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        std::fs::read_to_string(&annotations).unwrap()
+    };
+
+    let doc = write("I visited [Berlin]{schema:Place} with [Alice]{foaf:Person}.");
+    assert!(doc.contains("\"Berlin\"") && doc.contains("<http://xmlns.com/foaf/0.1/Person>"), "{doc}");
+
+    let doc = write("I visited Berlin.");
+    assert!(!doc.contains("schema:mentions") && !doc.contains("Berlin"), "{doc}");
+}
+
+#[test]
+fn index_names_an_object_with_two_classes_and_fails() {
+    let ctx = setup();
+    ctx.cmd().arg("init").current_dir(ctx.tmp_dir.path()).output().unwrap();
+    let mut uuids = Vec::new();
+    for title in ["Fine", "Both"] {
+        let output = ctx.cmd()
+            .args(["page", "create", title])
+            .current_dir(ctx.tmp_dir.path())
+            .output()
+            .unwrap();
+        uuids.push(extract_uuid(&output.stdout));
+    }
+    let both_dir = ctx.config_dir.join("objects").join(&uuids[1]);
+    std::fs::write(
+        both_dir.join("meta.ttl"),
+        format!(
+            "<cerbo://objects/{}> a <https://schema.org/NoteDigitalDocument> , <https://schema.org/WebPage> .\n",
+            uuids[1]
+        ),
+    )
+    .unwrap();
+    std::fs::write(both_dir.join("page.md"), "[Berlin]{schema:Place}\n").unwrap();
+
+    let output = ctx.cmd()
+        .args(["index", "--json"])
+        .current_dir(ctx.tmp_dir.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(&uuids[1]), "{stderr}");
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["pages_processed"], 1, "{json}");
+    assert_eq!(json["errors"], 1, "reported once: {json}");
+    assert!(!both_dir.join("annotations.ttl").exists());
 }
