@@ -23,6 +23,9 @@ pub const NS_RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 pub const NS_XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 /// The object store: every object's subject IRI lives here.
 pub const NS_OBJECTS: &str = "cerbo://objects/";
+/// Named graphs of the semantic index: one per object, `cerbo://graphs/<uuid>`.
+/// They exist only inside the index, never in a vault file.
+pub const NS_GRAPHS: &str = "cerbo://graphs/";
 
 /// Where `schema:` pointed before Cerbo adopted schema.org. Read only: every
 /// IRI under it is rewritten to the same local name under [`NS_SCHEMA`].
@@ -70,6 +73,42 @@ pub fn xsd(local: &str) -> NamedNode {
 /// The subject IRI of the object with this UUID.
 pub fn object_iri(uuid: &str) -> NamedNode {
     NamedNode::new_unchecked(format!("{NS_OBJECTS}{uuid}"))
+}
+
+/// The semantic index's named graph holding the object with this UUID.
+pub fn graph_iri(uuid: &str) -> NamedNode {
+    NamedNode::new_unchecked(format!("{NS_GRAPHS}{uuid}"))
+}
+
+/// `<source> schema:citation <target>`: page `source` links to object `target`
+/// from its `page.md`. Index-only; vault files never contain it.
+pub fn citation(source_uuid: &str, target_uuid: &str) -> Triple {
+    Triple::new(
+        object_iri(source_uuid),
+        schema("citation"),
+        Term::from(object_iri(target_uuid)),
+    )
+}
+
+/// The semantic index's graph of implicit similarity links between pages
+/// (design D7). Index-only; vault files never contain it.
+pub fn similarity_graph_iri() -> NamedNode {
+    graph_iri("similarity")
+}
+
+/// Page `source` is similar in meaning to page `target`: the plain
+/// `cerbo:similarTo` triple, plus a `cerbo:Similarity` node carrying the score
+/// as an `xsd:decimal`, so no RDF-star is needed. Index-only.
+pub fn similarity(source_uuid: &str, target_uuid: &str, score: f32) -> Vec<Triple> {
+    let (source, target) = (object_iri(source_uuid), object_iri(target_uuid));
+    let node = oxrdf::BlankNode::default();
+    vec![
+        Triple::new(source.clone(), cerbo("similarTo"), Term::from(target.clone())),
+        Triple::new(node.clone(), rdf_type(), Term::from(cerbo("Similarity"))),
+        Triple::new(node.clone(), cerbo("source"), Term::from(source)),
+        Triple::new(node.clone(), cerbo("target"), Term::from(target)),
+        Triple::new(node, cerbo("score"), Term::from(Literal::new_typed_literal(format!("{score:.4}"), xsd("decimal")))),
+    ]
 }
 
 /// An `xsd:dateTime` literal.

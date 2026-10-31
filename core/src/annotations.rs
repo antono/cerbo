@@ -190,14 +190,22 @@ pub fn annotations_read(ctx: &CerboContext, uuid: &str) -> Result<Vec<Annotation
 // ── Integration with Page Write ──────────────────────────────────────
 
 /// Save `page.md` the way the CLI and the editor do: [`object::object_write`]
-/// (date, backreferences), then `annotations.ttl` from the new content.
+/// (date, broken links), then `annotations.ttl` from the new content, then the
+/// page's graph in the semantic index.
 ///
 /// The annotations file is always rewritten, so removing the last annotation
 /// clears it. Ontologies hold raw RDF rather than notes and, as in indexing,
 /// get no annotations.
 pub fn page_write_with_annotations(ctx: &CerboContext, uuid: &str, content: &str) -> Result<(), String> {
-    object::object_write(ctx, uuid, content)?;
+    object::write_page_content(ctx, uuid, content)?;
+    let result = write_page_annotations(ctx, uuid, content);
+    // The page's graph is updated once, after all of its files, and also when
+    // annotations.ttl failed: page.md and meta.ttl are written either way.
+    object::sync_index(ctx, uuid);
+    result
+}
 
+fn write_page_annotations(ctx: &CerboContext, uuid: &str, content: &str) -> Result<(), String> {
     let meta_path = object::object_path(ctx, uuid).join("meta.ttl");
     if meta_path.exists() {
         let meta = object::ObjectMeta::read_from_file(&meta_path)

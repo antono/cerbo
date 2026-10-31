@@ -1,5 +1,9 @@
 { pkgs, tauri-deps }:
 let
+  # fastembed loads ONNX Runtime at run time (ort `load-dynamic`); the binaries
+  # find it through this variable unless the user sets their own.
+  ortDylibPath = "${pkgs.onnxruntime}/lib/libonnxruntime.so";
+
   cerbo = pkgs.rustPlatform.buildRustPackage {
     pname = "cerbo";
 
@@ -7,7 +11,13 @@ let
     version = "0.1.0";
     src = ../.;
     cargoLock.lockFile = ../Cargo.lock;
-    nativeBuildInputs = [ pkgs.pkg-config pkgs.mandown ];
+    # bindgenHook provides libclang for oxigraph's bundled RocksDB.
+    nativeBuildInputs = [
+      pkgs.pkg-config
+      pkgs.mandown
+      pkgs.makeWrapper
+      pkgs.rustPlatform.bindgenHook
+    ];
     buildInputs = tauri-deps;
     # Network-dependent tests are #[ignore]d; the rest run in the sandbox.
     doCheck = true;
@@ -31,6 +41,8 @@ let
         exit 1
       fi
       cp "$manPage" $out/share/man/man1/
+
+      wrapProgram $out/bin/cerbo --set-default ORT_DYLIB_PATH ${ortDylibPath}
     '';
   };
 
@@ -72,6 +84,7 @@ let
       pkgs.gobject-introspection
       pkgs.jq
       pkgs.desktop-file-utils
+      pkgs.rustPlatform.bindgenHook
     ];
     buildInputs = tauri-deps ++ [ pkgs.gtk3 pkgs.gsettings-desktop-schemas pkgs.adwaita-icon-theme ];
     # The check phase also runs the CLI import-ontology tests, which shell out
@@ -86,6 +99,11 @@ let
 
     # Ensure Tauri doesn't try to use a dev server
     TAURI_ENV_DEBUG = "false";
+
+    # wrapGAppsHook3 already wraps the binary; add ONNX Runtime to that wrapper.
+    preFixup = ''
+      gappsWrapperArgs+=(--set-default ORT_DYLIB_PATH ${ortDylibPath})
+    '';
 
     postInstall = ''
       rm -f $out/bin/cerbo

@@ -5,6 +5,8 @@ let
 in
 pkgs.mkShell {
   buildInputs = tauri-deps ++ dev-deps ++ [ gtk3 pkgs.gtk4 gschema pkgs.adwaita-icon-theme pkgs.glib pkgs.mandown ];
+  # oxigraph builds its bundled RocksDB through bindgen, which needs libclang.
+  nativeBuildInputs = [ pkgs.rustPlatform.bindgenHook ];
 
   shellHook = ''
     echo "Cerbo dev environment"
@@ -22,5 +24,7 @@ pkgs.mkShell {
     WEBKIT_DISABLE_COMPOSITING_MODE = "1";
     WEBKIT_DISABLE_DMABUF_RENDERER = "1";
     GDK_BACKEND = "x11";
+    # fastembed loads ONNX Runtime at run time (ort `load-dynamic`).
+    ORT_DYLIB_PATH = "${pkgs.onnxruntime}/lib/libonnxruntime.so";
   };
 }

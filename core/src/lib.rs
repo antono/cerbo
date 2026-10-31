@@ -89,6 +89,7 @@ pub mod page;
 pub mod paths;
 pub mod prefix_map;
 pub mod rdf;
+pub mod semantic;
 pub mod slug;
 pub mod state;
 pub mod ui_settings;

@@ -1,12 +1,19 @@
-/// Metadata indexing operations for page backrefs and annotations
+/// Metadata indexing operations for page links and annotations
 ///
-/// This module provides functions to rebuild page metadata (backrefs.ttl and annotations.ttl)
-/// from page content. Used by the `cerbo index` CLI command.
+/// This module provides functions to rebuild page metadata (annotations.ttl)
+/// from page content, report broken links and bring the semantic index up to
+/// date. Used by the `cerbo index` CLI command. Backlinks are not stored in the
+/// vault; they are a query over the semantic index (`crate::semantic::backlinks`).
+use crate::semantic::{IndexOptions, SemanticIndex};
 use crate::VaultContext;
 use uuid::Uuid;
 
+/// The backlink cache written by Cerbo before the semantic index. Only ever
+/// deleted, never read.
+const LEGACY_BACKREFS: &str = "backrefs.ttl";
+
 /// Index all pages across all vaults (two-pass: clear all, rebuild all)
-pub fn index_all_pages(global_ctx: &crate::CerboContext) -> Result<IndexStats, String> {
+pub fn index_all_pages(global_ctx: &crate::CerboContext, options: IndexOptions<'_>) -> Result<IndexStats, String> {
     let mut total_stats = IndexStats::default();
 
     // Get all vaults
@@ -14,22 +21,21 @@ pub fn index_all_pages(global_ctx: &crate::CerboContext) -> Result<IndexStats, S
 
     for vault in vaults {
         let vault_ctx = VaultContext::from_path(vault.path.clone())?;
-        let stats = index_vault(&vault_ctx)?;
+        let stats = index_vault(&vault_ctx, options)?;
         total_stats.merge(stats);
     }
 
     Ok(total_stats)
 }
 
-/// Rebuild every page's derived metadata in this vault.
+/// Rebuild every page's derived metadata in this vault, then the vault's
+/// semantic index.
 ///
-/// One scan accumulates each target's complete backreference set, then each
-/// target is written exactly once. There is no clear-all phase: an interrupted
-/// reindex therefore leaves every `backrefs.ttl` holding either its previous or
-/// its newly computed content, never an empty file.
-pub fn index_vault(vault_ctx: &VaultContext) -> Result<IndexStats, String> {
-    use std::collections::{BTreeSet, HashMap};
-
+/// Each page's own `annotations.ttl` is rewritten; link targets are only
+/// checked, never written. Leftover `backrefs.ttl` files of live objects are
+/// deleted. The semantic index is rebuilt from the files afterwards, so it
+/// matches them whatever happened to it before.
+pub fn index_vault(vault_ctx: &VaultContext, options: IndexOptions<'_>) -> Result<IndexStats, String> {
     let mut stats = IndexStats::default();
 
     // Phase 1: the live pages, excluding :Ontology objects. Ontologies contain
@@ -49,13 +55,6 @@ pub fn index_vault(vault_ctx: &VaultContext) -> Result<IndexStats, String> {
 
     eprintln!("Indexing {} pages...", total_pages);
 
-    // Every live page starts with an empty set, so a page that lost all its
-    // inbound links still gets its stale backrefs.ttl replaced.
-    let mut inbound: HashMap<&str, BTreeSet<&str>> = page_uuids
-        .iter()
-        .map(|uuid| (uuid.as_str(), BTreeSet::new()))
-        .collect();
-
     // Phase 2: one scan over the vault.
     for (idx, uuid) in page_uuids.iter().enumerate() {
         let page_md = vault_ctx.object_path(uuid).join("page.md");
@@ -70,22 +69,7 @@ pub fn index_vault(vault_ctx: &VaultContext) -> Result<IndexStats, String> {
             }
         };
 
-        for target in crate::links::extract_cerbo_links(&content) {
-            stats.links_found += 1;
-            match inbound.get_mut(target.as_str()) {
-                Some(sources) => {
-                    sources.insert(uuid.as_str());
-                }
-                None => {
-                    if !crate::links::is_live_target_vault(vault_ctx, &target) {
-                        eprintln!(
-                            "Warning: Broken link in page {}: target {} does not exist",
-                            uuid, target
-                        );
-                    }
-                }
-            }
-        }
+        stats.links_found += count_links(vault_ctx, uuid, &content);
 
         let annotations = crate::annotations::extract_annotations(&content);
         stats.annotations_found += annotations.len();
@@ -109,18 +93,57 @@ pub fn index_vault(vault_ctx: &VaultContext) -> Result<IndexStats, String> {
         }
     }
 
-    // Phase 3: one write per target, with its complete set of sources.
-    for (target, sources) in &inbound {
-        let sources: Vec<String> = sources.iter().map(|s| s.to_string()).collect();
-        if let Err(e) = crate::links::backrefs_set_vault(vault_ctx, target, &sources) {
-            stats.errors.push(IndexError {
-                page_uuid: (*target).to_string(),
-                error_message: format!("Failed to write backrefs: {}", e),
-            });
-        }
+    // Phase 3: files older Cerbo builds wrote into link targets.
+    stats.legacy_backrefs_removed = remove_legacy_backrefs(vault_ctx, &mut stats.errors);
+
+    // Phase 4: the graph, from the files as they now are. A missing index is
+    // built by `open`; an existing one is rebuilt into a new generation.
+    let graph = SemanticIndex::open_existing(vault_ctx, options).and_then(|index| match index {
+        Some(mut index) => index.rebuild(options.progress),
+        None => SemanticIndex::open(vault_ctx, options).and_then(|index| index.triples()),
+    });
+    match graph {
+        Ok(triples) => stats.triples = triples,
+        Err(e) => stats.index_errors.push(e.to_string()),
     }
 
     Ok(stats)
+}
+
+/// Delete the `backrefs.ttl` of every live object, including objects that are
+/// not pages; the trash is left alone. Returns how many were deleted.
+fn remove_legacy_backrefs(vault_ctx: &VaultContext, errors: &mut Vec<IndexError>) -> usize {
+    let Ok(entries) = std::fs::read_dir(vault_ctx.objects_dir()) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if crate::fsio::is_temp_name(&name) {
+            continue;
+        }
+        let path = entry.path().join(LEGACY_BACKREFS);
+        match std::fs::remove_file(&path) {
+            Ok(()) => removed += 1,
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => {}
+            Err(e) => errors.push(IndexError {
+                page_uuid: name,
+                error_message: format!("Failed to delete legacy {}: {}", LEGACY_BACKREFS, e),
+            }),
+        }
+    }
+    removed
+}
+
+/// Count the `cerbo://` links in a page, warning about each broken one.
+fn count_links(vault_ctx: &VaultContext, page_uuid: &str, content: &str) -> usize {
+    let links = crate::links::extract_cerbo_links(content);
+    for target in &links {
+        if !crate::links::is_live_target_vault(vault_ctx, target) {
+            eprintln!("Warning: Broken link in page {}: target {} does not exist", page_uuid, target);
+        }
+    }
+    links.len()
 }
 
 /// Whether this object's links and annotations are indexed: a page that is not
@@ -135,8 +158,9 @@ fn indexable(vault_ctx: &VaultContext, uuid: &str) -> Result<bool, String> {
     }
 }
 
-/// Index a single page (incremental: update only this page's links and annotations)
-pub fn index_page(vault_ctx: &VaultContext, page_uuid: &str) -> Result<IndexStats, String> {
+/// Index a single page (incremental: check this page's links, rewrite its
+/// annotations, replace only its triples in the semantic index)
+pub fn index_page(vault_ctx: &VaultContext, page_uuid: &str, options: IndexOptions<'_>) -> Result<IndexStats, String> {
     let mut stats = IndexStats::default();
 
     if let Err(error_message) = indexable(vault_ctx, page_uuid) {
@@ -162,30 +186,8 @@ pub fn index_page(vault_ctx: &VaultContext, page_uuid: &str) -> Result<IndexStat
         }
     };
 
-    // Extract and update links (backrefs)
-    let links = crate::links::extract_cerbo_links(&content);
-    stats.links_found = links.len();
-
-    // Clear old backrefs for this source page, then re-add
-    for target_uuid in &links {
-        // Check if target page exists
-        let target_path = vault_ctx.object_path(target_uuid);
-        if !target_path.exists() {
-            eprintln!("Warning: Broken link in page {}: target {} does not exist",
-                     page_uuid, target_uuid);
-            continue;
-        }
-
-        // Remove old backref (if exists)
-        let _ = crate::links::backrefs_remove_vault(vault_ctx, target_uuid, page_uuid);
-        // Add new backref
-        if let Err(e) = crate::links::backrefs_add_vault(vault_ctx, target_uuid, page_uuid) {
-            stats.errors.push(IndexError {
-                page_uuid: target_uuid.clone(),
-                error_message: format!("Failed to add backref: {}", e),
-            });
-        }
-    }
+    // Links are only counted and checked; their targets are never written.
+    stats.links_found = count_links(vault_ctx, page_uuid, &content);
 
     // Extract and write annotations
     let annotations = crate::annotations::extract_annotations(&content);
@@ -203,6 +205,16 @@ pub fn index_page(vault_ctx: &VaultContext, page_uuid: &str) -> Result<IndexStat
         }),
     }
 
+    // Only this page's graph is replaced; a missing index is built whole.
+    let graph = SemanticIndex::open(vault_ctx, options).and_then(|mut index| {
+        index.update_objects(&[page_uuid.to_string()])?;
+        index.triples()
+    });
+    match graph {
+        Ok(triples) => stats.triples = triples,
+        Err(e) => stats.index_errors.push(e.to_string()),
+    }
+
     stats.pages_processed = 1;
     Ok(stats)
 }
@@ -213,15 +225,26 @@ pub struct IndexStats {
     pub pages_processed: usize,
     pub links_found: usize,
     pub annotations_found: usize,
+    /// Triples in the semantic index once it was updated.
+    pub triples: u64,
+    /// Leftover `backrefs.ttl` files deleted (full vault runs only).
+    pub legacy_backrefs_removed: usize,
     pub errors: Vec<IndexError>,
+    /// Why the semantic index could not be updated; the vault files are
+    /// written regardless.
+    pub index_errors: Vec<String>,
 }
 
 impl IndexStats {
-    fn merge(&mut self, other: IndexStats) {
+    /// Add the counts and errors of `other`, e.g. another vault's run.
+    pub fn merge(&mut self, other: IndexStats) {
         self.pages_processed += other.pages_processed;
         self.links_found += other.links_found;
         self.annotations_found += other.annotations_found;
+        self.triples += other.triples;
+        self.legacy_backrefs_removed += other.legacy_backrefs_removed;
         self.errors.extend(other.errors);
+        self.index_errors.extend(other.index_errors);
     }
 }
 
@@ -388,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn test_index_page_with_links_updates_backrefs() {
+    fn test_index_page_with_links_writes_nothing_into_the_target() {
         let (_temp, vault_ctx) = setup_test_vault();
 
         let page1_uuid = "11111111-1111-1111-1111-111111111111";
@@ -399,18 +422,15 @@ mod tests {
         create_test_page(&vault_ctx, page2_uuid, "Page 2 content");
 
         // Index page1
-        let stats = index_page(&vault_ctx, page1_uuid).unwrap();
+        let (stats, writes) = crate::fsio::audit::recording(|| index_page(&vault_ctx, page1_uuid, IndexOptions::default()).unwrap());
 
         assert_eq!(stats.pages_processed, 1);
         assert_eq!(stats.links_found, 1);
         assert_eq!(stats.errors.len(), 0);
 
-        // Check that page2 has a backref to page1
-        let backrefs_path = vault_ctx.object_path(page2_uuid).join("backrefs.ttl");
-        assert!(backrefs_path.exists(), "backrefs.ttl should be created");
-
-        let backrefs_content = fs::read_to_string(&backrefs_path).unwrap();
-        assert!(backrefs_content.contains(page1_uuid), "backrefs should contain source page UUID");
+        let target_dir = vault_ctx.object_path(page2_uuid);
+        assert!(writes.iter().all(|p| !p.starts_with(&target_dir)), "{writes:?}");
+        assert_eq!(fs::read_dir(&target_dir).unwrap().count(), 2, "only page.md and meta.ttl");
     }
 
     #[test]
@@ -421,7 +441,7 @@ mod tests {
         create_test_page(&vault_ctx, page_uuid, "Some [knowledge]{schema:Thing} here");
 
         // Index page
-        let stats = index_page(&vault_ctx, page_uuid).unwrap();
+        let stats = index_page(&vault_ctx, page_uuid, IndexOptions::default()).unwrap();
 
         assert_eq!(stats.pages_processed, 1);
         assert_eq!(stats.annotations_found, 1);
@@ -452,7 +472,7 @@ mod tests {
         let page_uuid = "aaaaaaaa-aaaa-aaaa-aaaa-000000000137";
         create_test_page(&vault_ctx, page_uuid, "[Alice]{ex:Person} and [Thing]{zz:Widget}");
 
-        let stats = index_page(&vault_ctx, page_uuid).unwrap();
+        let stats = index_page(&vault_ctx, page_uuid, IndexOptions::default()).unwrap();
         assert_eq!(stats.annotations_found, 2);
         assert!(stats.errors.is_empty(), "an unknown prefix is a warning, not an error");
 
@@ -472,8 +492,8 @@ mod tests {
         create_test_page(&vault_ctx, page2_uuid, "Page 2 content");
 
         // Index vault twice
-        let stats1 = index_vault(&vault_ctx).unwrap();
-        let stats2 = index_vault(&vault_ctx).unwrap();
+        let stats1 = index_vault(&vault_ctx, IndexOptions::default()).unwrap();
+        let stats2 = index_vault(&vault_ctx, IndexOptions::default()).unwrap();
 
         // Both runs should produce same stats
         assert_eq!(stats1.pages_processed, 2);
@@ -483,19 +503,20 @@ mod tests {
         assert_eq!(stats1.errors.len(), 0);
         assert_eq!(stats2.errors.len(), 0);
 
-        // Backref files should be identical
-        let backrefs_path = vault_ctx.object_path(page2_uuid).join("backrefs.ttl");
-        let backrefs1 = fs::read_to_string(&backrefs_path).unwrap();
+        // Annotation files should be identical
+        let annotations_path = vault_ctx.object_path(page1_uuid).join("annotations.ttl");
+        let annotations1 = fs::read_to_string(&annotations_path).unwrap();
 
-        index_vault(&vault_ctx).unwrap();
-        let backrefs2 = fs::read_to_string(&backrefs_path).unwrap();
+        index_vault(&vault_ctx, IndexOptions::default()).unwrap();
+        let annotations2 = fs::read_to_string(&annotations_path).unwrap();
 
-        assert_eq!(backrefs1, backrefs2, "Backrefs should be identical after reindex");
+        assert_eq!(annotations1, annotations2, "Annotations should be identical after reindex");
     }
 
-    /// A hub with many inbound links is written once, not once per source.
+    /// A hub with many inbound links gets no file written for them: the only
+    /// write into it is its own annotations.ttl.
     #[test]
-    fn reindex_writes_each_target_once_with_every_backreference() {
+    fn reindex_writes_nothing_into_link_targets() {
         let (_temp, vault_ctx) = setup_test_vault();
 
         let hub = "00000000-0000-0000-0000-000000000001";
@@ -508,65 +529,13 @@ mod tests {
             create_test_page(&vault_ctx, uuid, &format!("Link to cerbo://objects/{hub}"));
         }
 
-        let hub_backrefs = vault_ctx.object_path(hub).join("backrefs.ttl");
-        let (stats, writes) = crate::fsio::audit::recording(|| index_vault(&vault_ctx).unwrap());
+        let hub_dir = vault_ctx.object_path(hub);
+        let (stats, writes) = crate::fsio::audit::recording(|| index_vault(&vault_ctx, IndexOptions::default()).unwrap());
 
         assert_eq!(stats.errors.len(), 0, "{:?}", stats.errors);
-        assert_eq!(
-            writes.iter().filter(|p| **p == hub_backrefs).count(),
-            1,
-            "the hub's backrefs.ttl must be written exactly once per reindex"
-        );
-
-        let backrefs = crate::links::backrefs_read_vault(&vault_ctx, hub).unwrap();
-        assert_eq!(backrefs.len(), 137, "every source must be recorded");
-    }
-
-    /// There is no clear-all phase any more, so an interrupted reindex can never
-    /// be observed with an emptied `backrefs.ttl`.
-    #[test]
-    fn reindex_never_empties_a_backrefs_file_midway() {
-        let (_temp, vault_ctx) = setup_test_vault();
-
-        let target = "22222222-2222-2222-2222-222222222222";
-        let source = "33333333-3333-3333-3333-333333333333";
-        create_test_page(&vault_ctx, target, "# Target");
-        create_test_page(&vault_ctx, source, &format!("cerbo://objects/{target}"));
-
-        index_vault(&vault_ctx).unwrap();
-        let settled =
-            std::fs::read_to_string(vault_ctx.object_path(target).join("backrefs.ttl")).unwrap();
-        assert!(settled.contains(source));
-
-        // Every write during a second pass carries the full computed set, so at
-        // no point between writes is the file empty.
-        let (_, writes) = crate::fsio::audit::recording(|| index_vault(&vault_ctx).unwrap());
-        let target_writes = writes
-            .iter()
-            .filter(|p| p.ends_with("backrefs.ttl") && p.starts_with(vault_ctx.object_path(target)))
-            .count();
-        assert_eq!(target_writes, 1, "one write means no cleared intermediate state");
-        assert_eq!(
-            std::fs::read_to_string(vault_ctx.object_path(target).join("backrefs.ttl")).unwrap(),
-            settled
-        );
-    }
-
-    /// A page that lost its last inbound link still gets its stale file replaced.
-    #[test]
-    fn reindex_clears_backrefs_that_no_longer_apply() {
-        let (_temp, vault_ctx) = setup_test_vault();
-
-        let target = "44444444-4444-4444-4444-444444444444";
-        let source = "55555555-5555-5555-5555-555555555555";
-        create_test_page(&vault_ctx, target, "# Target");
-        create_test_page(&vault_ctx, source, &format!("cerbo://objects/{target}"));
-        index_vault(&vault_ctx).unwrap();
-        assert_eq!(crate::links::backrefs_read_vault(&vault_ctx, target).unwrap().len(), 1);
-
-        create_test_page(&vault_ctx, source, "# Source with no links");
-        index_vault(&vault_ctx).unwrap();
-        assert!(crate::links::backrefs_read_vault(&vault_ctx, target).unwrap().is_empty());
+        assert_eq!(stats.links_found, 137);
+        let hub_writes: Vec<_> = writes.iter().filter(|p| p.starts_with(&hub_dir)).collect();
+        assert_eq!(hub_writes, vec![&hub_dir.join("annotations.ttl")]);
     }
 
     /// Trash contents are outside the live object set.
@@ -586,12 +555,47 @@ mod tests {
         std::fs::write(trashed.join("page.md"), "# Trashed [x]{schema:Thing}").unwrap();
         std::fs::write(trashed.join("meta.ttl"), "not even valid turtle").unwrap();
 
-        let stats = index_vault(&vault_ctx).unwrap();
+        let stats = index_vault(&vault_ctx, IndexOptions::default()).unwrap();
 
         assert_eq!(stats.pages_processed, 1, "only live pages are indexed");
         assert!(stats.errors.is_empty(), "trash must not be reported: {:?}", stats.errors);
         assert!(!trashed.join("annotations.ttl").exists(), "nothing derived from trash");
-        assert!(!trashed.join("backrefs.ttl").exists(), "nothing derived from trash");
+    }
+
+    /// Leftover `backrefs.ttl` of every live object goes, the trash keeps its
+    /// copy, and the summary counts the files and the index's triples.
+    #[test]
+    fn full_reindex_deletes_legacy_backrefs_and_counts_triples() {
+        let (_temp, vault_ctx) = setup_test_vault();
+
+        let page = "13700000-0000-4000-8000-000000000001";
+        let other = "13700000-0000-4000-8000-000000000002";
+        create_test_page(&vault_ctx, page, "# Page");
+        create_test_page(&vault_ctx, other, &format!("cerbo://{page}"));
+        for uuid in [page, other] {
+            fs::write(vault_ctx.object_path(uuid).join("backrefs.ttl"), "# legacy").unwrap();
+        }
+        let trashed = vault_ctx.cerbo_dir().join("trash").join("20260904T000000.000000Z-x");
+        fs::create_dir_all(&trashed).unwrap();
+        fs::write(trashed.join("backrefs.ttl"), "# legacy").unwrap();
+
+        let stats = index_vault(&vault_ctx, IndexOptions::default()).unwrap();
+
+        assert_eq!(stats.legacy_backrefs_removed, 2);
+        assert!(stats.index_errors.is_empty(), "{:?}", stats.index_errors);
+        assert!(stats.triples > 0);
+        for uuid in [page, other] {
+            assert!(!vault_ctx.object_path(uuid).join("backrefs.ttl").exists());
+        }
+        assert!(trashed.join("backrefs.ttl").exists(), "the trash is not touched");
+
+        let again = index_vault(&vault_ctx, IndexOptions::default()).unwrap();
+        assert_eq!(again.legacy_backrefs_removed, 0);
+        assert_eq!(again.triples, stats.triples);
+
+        let single = index_page(&vault_ctx, page, IndexOptions::default()).unwrap();
+        assert_eq!(single.triples, stats.triples);
+        assert_eq!(single.legacy_backrefs_removed, 0);
     }
 
     /// Give an indexed page's `meta.ttl` a second object class by hand.
@@ -621,7 +625,7 @@ mod tests {
         );
         make_ambiguous(&vault_ctx, ambiguous);
 
-        let (stats, writes) = crate::fsio::audit::recording(|| index_vault(&vault_ctx).unwrap());
+        let (stats, writes) = crate::fsio::audit::recording(|| index_vault(&vault_ctx, IndexOptions::default()).unwrap());
 
         assert_eq!(stats.pages_processed, 1, "only the readable page");
         assert_eq!(stats.errors.len(), 1, "{:?}", stats.errors);
@@ -633,10 +637,9 @@ mod tests {
             "wrote into the ambiguous object: {writes:?}"
         );
         assert!(!dir.join("annotations.ttl").exists());
-        // Its links are not counted as backreferences either.
-        assert!(crate::links::backrefs_read_vault(&vault_ctx, target).unwrap().is_empty());
+        assert_eq!(stats.links_found, 0, "its links are not counted either");
 
-        let single = index_page(&vault_ctx, ambiguous).unwrap();
+        let single = index_page(&vault_ctx, ambiguous, IndexOptions::default()).unwrap();
         assert_eq!(single.pages_processed, 0);
         assert_eq!(single.errors.len(), 1);
         assert!(!dir.join("annotations.ttl").exists());
@@ -681,7 +684,7 @@ mod tests {
         let page_uuid = "bad-uuid-missing-file";
 
         // Try to index non-existent page
-        let stats = index_page(&vault_ctx, page_uuid).unwrap();
+        let stats = index_page(&vault_ctx, page_uuid, IndexOptions::default()).unwrap();
 
         assert_eq!(stats.pages_processed, 0);
         assert_eq!(stats.errors.len(), 1);

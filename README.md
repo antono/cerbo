@@ -13,8 +13,11 @@ first-class citizen. It stores all knowledge as plain files you fully own, with
 - **UUID-Based Storage**: Each page/object is a `.cerbo/objects/<uuid>/` folder,
   with no slug derivation or name-based paths.
 - **Wikilink-Free**: Uses `cerbo://<uuid>` links instead of `[[Wikilinks]]`.
-- **Backlinks & Annotations**: Automatic backlink tracking (`backrefs.ttl`) and
-  HackMD-style annotations (`[Text]{prefix:Type}` → `annotations.ttl`).
+- **Backlinks & Annotations**: Backlinks answered from a local semantic index
+  (no backlink files in the vault) and HackMD-style annotations
+  (`[Text]{prefix:Type}` → `annotations.ttl`).
+- **SPARQL**: Read-only SPARQL queries over a vault's knowledge graph with
+  `cerbo sparql`.
 - **Multiple Vaults**: Manage multiple isolated knowledge bases (vaults)
   anywhere on your disk.
 - **XDG Compliant**: App configuration and caches follow the XDG Base Directory
@@ -67,7 +70,9 @@ nix build .#cerbo          # Build CLI Binary
 - **Configuration**: `$XDG_CONFIG_HOME/cerbo/vaults.json` (defaults to
   `~/.config/cerbo/`). Stores only vault names and paths.
 - **Cache**: `$XDG_CACHE_HOME/cerbo/` (defaults to `~/.cache/cerbo/`). Stores
-  the link index and derived data.
+  derived data, such as the per-vault semantic index in `index/` that answers
+  backlinks and SPARQL queries. It is rebuilt automatically and is safe to
+  delete.
 - **Vaults**: Each vault has a `.cerbo/` directory containing:
   - `objects/<uuid>/` - UUID-based object storage. Each `meta.ttl` records the
     object's class as `rdf:type` with a schema.org class: Product
@@ -169,29 +174,56 @@ cerbo page write 550e8400-e29b-41d4-a716-446655440000 "New content"
 cerbo page delete 550e8400-e29b-41d4-a716-446655440000
 ```
 
+### Backlinks
+
+```bash
+# List the pages linking to a page (add --json for a JSON array)
+cerbo page backlinks 550e8400-e29b-41d4-a716-446655440000
+```
+
+Backlinks come from the semantic index in `$XDG_CACHE_HOME/cerbo/index/`. It is
+built on first use and picks up pages changed outside Cerbo before every answer,
+so no `cerbo index` run is needed after a `git pull` or a sync.
+
+### Query with SPARQL
+
+```bash
+cerbo sparql 'SELECT ?title WHERE { ?page schema:name ?title } ORDER BY ?title'
+cerbo sparql 'ASK { ?page schema:mentions ?x . ?x a schema:Place }'
+cerbo sparql --file query.rq --json      # or: echo '<query>' | cerbo sparql -
+```
+
+Queries are read-only. `cerbo:`, `schema:` (schema.org), `rdf:`, `rdfs:`, `xsd:`
+and the other built-in prefixes, plus the vault's own prefixes, need no `PREFIX`
+line. SELECT prints a table, ASK prints `true`/`false`, CONSTRUCT prints Turtle;
+`--json` prints SPARQL Results JSON or JSON-LD.
+
 ### Rebuild Metadata
 
-The `cerbo index` command rebuilds metadata (backlinks and annotations) from page content. This is useful after:
+The `cerbo index` command rebuilds metadata (annotations) from page content and rebuilds the semantic index. It also deletes the `backrefs.ttl` files older Cerbo builds left in the vault and reports how many. This is useful after:
 - Manually editing `page.md` files outside of Cerbo
 - Bulk imports or vault migrations
 - If backlinks or annotations appear stale or missing
 - To verify metadata integrity after crashes or interruptions
 
+**Upgrade Cerbo on every device that syncs the vault:** older builds still write
+and read `backrefs.ttl` and will not see backlinks without them.
+
 ```bash
-# Rebuild all metadata for the current vault
+# Rebuild all metadata of every registered vault
 cerbo index
 
 # Rebuild metadata for a single page (incremental)
 cerbo index --page 550e8400-e29b-41d4-a716-446655440000
 
-# Index a vault from outside its directory
+# Index only one vault, by ID (see `cerbo vault list`) or path
 cerbo index --vault /path/to/my/vault
 
 # Get indexing statistics as JSON
 cerbo index --json
 ```
 
-The index command uses Git-style vault discovery: it walks up from the current directory looking for a `.cerbo/` directory. You can run it from any subdirectory within a vault.
+Without `--vault` or `--page`, the index command covers every registered vault, plus the vault around the current directory (found Git-style, by walking up to a `.cerbo/` directory) should it not be registered. `--page` looks for the page in the current vault first, then in the registered vaults; it cannot be combined with `--vault`.
 
 ### Build Symlink Tree
 

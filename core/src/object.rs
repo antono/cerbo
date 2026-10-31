@@ -522,7 +522,7 @@ pub fn object_create(
             .map_err(|e| format!("Failed to write page.md: {}", e))?;
     }
 
-
+    sync_index(ctx, &uuid);
     Ok(uuid)
 }
 
@@ -576,7 +576,7 @@ pub fn object_create_with_metadata(
             .map_err(|e| format!("Failed to write page.md: {}", e))?;
     }
 
-
+    sync_index(ctx, &uuid);
     Ok(uuid)
 }
 
@@ -616,6 +616,7 @@ pub fn object_delete(ctx: &CerboContext, uuid: &str) -> Result<(), String> {
     fs::rename(&obj_dir, &entry)
         .map_err(|e| format!("Failed to move object to trash: {}", e))?;
 
+    sync_index(ctx, uuid);
     Ok(())
 }
 
@@ -673,7 +674,7 @@ pub fn object_import(ctx: &CerboContext, url: &str) -> Result<String, String> {
     crate::fsio::write_atomic_str(&page_path, &body)
         .map_err(|e| format!("Failed to write page.md: {}", e))?;
 
-
+    sync_index(ctx, &uuid);
     Ok(uuid)
 }
 
@@ -728,6 +729,7 @@ pub fn object_import_ontology(
         crate::prefix_map::register_prefix(&ctx.config_dir, prefix, namespace, Some(&uuid))?;
     }
 
+    sync_index(ctx, &uuid);
     Ok(uuid)
 }
 
@@ -757,7 +759,18 @@ pub fn object_read(ctx: &CerboContext, uuid: &str) -> Result<String, String> {
 }
 
 /// Write page.md content for an object. Fails if type is Source (read-only).
+///
+/// Only the object's own files are written; the objects it links to are never
+/// touched. Its graph in the semantic index is updated afterwards.
 pub fn object_write(ctx: &CerboContext, uuid: &str, content: &str) -> Result<(), String> {
+    write_page_content(ctx, uuid, content)?;
+    sync_index(ctx, uuid);
+    Ok(())
+}
+
+/// [`object_write`] without the index update, for callers that write more of
+/// the object's files first and then call [`sync_index`] once.
+pub(crate) fn write_page_content(ctx: &CerboContext, uuid: &str, content: &str) -> Result<(), String> {
     let obj_dir = object_path(ctx, uuid);
 
     if !obj_dir.exists() {
@@ -775,16 +788,13 @@ pub fn object_write(ctx: &CerboContext, uuid: &str, content: &str) -> Result<(),
     }
 
     let page_path = obj_dir.join("page.md");
-    let old_content = fs::read_to_string(&page_path).unwrap_or_default();
-
     crate::fsio::write_atomic_str(&page_path, content)
         .map_err(|e| format!("Failed to write page.md: {}", e))?;
 
     // Update modified timestamp in meta.ttl
     update_modified_date(&meta_path, uuid)?;
 
-    // Extract links and update backrefs.ttl
-    for target in update_backrefs(ctx, uuid, &old_content, content)? {
+    for target in broken_links(ctx, content) {
         eprintln!("cerbo: broken link in page {uuid}: {target} does not exist");
     }
 
@@ -809,49 +819,42 @@ fn update_modified_date(meta_path: &Path, uuid: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to update meta.ttl: {}", e))
 }
 
-/// Refresh `backrefs.ttl` on every object whose link status changed.
-///
-/// Returns the link targets that could not take a backreference — a malformed
-/// id, or an object that does not exist. Those are broken links, not failures:
-/// the page content stands. A genuine I/O failure *is* an error and is
-/// propagated, so a partial save is never reported as success.
-pub fn update_backrefs(
-    ctx: &CerboContext,
-    source_uuid: &str,
-    old_content: &str,
-    new_content: &str,
-) -> Result<Vec<String>, String> {
-    let old_links = crate::links::extract_cerbo_links(old_content);
-    let new_links = crate::links::extract_cerbo_links(new_content);
+/// The `cerbo://` link targets in `content` that are not live objects — a
+/// malformed id, or an object that does not exist — each once. They are
+/// reported, never fixed: nothing is written, and no directory is created.
+pub fn broken_links(ctx: &CerboContext, content: &str) -> Vec<String> {
     let mut broken = Vec::new();
-
-    for target_uuid in &old_links {
-        if new_links.contains(target_uuid) {
-            continue;
+    for target in crate::links::extract_cerbo_links(content) {
+        if !crate::links::is_live_target(ctx, &target) && !broken.contains(&target) {
+            broken.push(target);
         }
-        if !crate::links::is_live_target(ctx, target_uuid) {
-            broken.push(target_uuid.clone());
-            continue;
-        }
-        crate::links::backrefs_remove(ctx, target_uuid, source_uuid).map_err(|e| {
-            format!("page.md was written, but clearing the backreference on {target_uuid} failed: {e}")
-        })?;
     }
+    broken
+}
 
-    for target_uuid in &new_links {
-        if old_links.contains(target_uuid) {
-            continue;
-        }
-        if !crate::links::is_live_target(ctx, target_uuid) {
-            broken.push(target_uuid.clone());
-            continue;
-        }
-        crate::links::backrefs_add(ctx, target_uuid, source_uuid).map_err(|e| {
-            format!("page.md was written, but adding the backreference on {target_uuid} failed: {e}")
-        })?;
+// ── Semantic index sync ──────────────────────────────────────
+
+/// The vault that `ctx` writes objects into: its `config_dir` is the vault's
+/// `.cerbo/`. Any other context (the global XDG config, a bare test directory)
+/// has no semantic index.
+fn vault_of(ctx: &CerboContext) -> Option<crate::VaultContext> {
+    if ctx.config_dir.file_name()? != ".cerbo" {
+        return None;
     }
+    Some(crate::VaultContext {
+        vault_path: ctx.config_dir.parent()?.to_path_buf(),
+        // The index reads only `cache_dir` from the global context.
+        global: ctx.clone(),
+    })
+}
 
-    Ok(broken)
+/// Bring the object's graph in the vault's semantic index up to date after its
+/// files were written, created or trashed (design D10). Never fails the write;
+/// see [`crate::semantic::sync_objects`].
+pub(crate) fn sync_index(ctx: &CerboContext, uuid: &str) {
+    if let Some(vault_ctx) = vault_of(ctx) {
+        crate::semantic::sync_objects(&vault_ctx, &[uuid.to_string()]);
+    }
 }
 
 // ── Attachment Management ──────────────────────────────────────
@@ -898,7 +901,7 @@ pub fn attachment_add(ctx: &CerboContext, _page_uuid: &str, file_path: &std::pat
 
     // No page.md for attachments
 
-
+    sync_index(ctx, &uuid);
     Ok(uuid)
 }
 
@@ -907,22 +910,28 @@ pub fn attachment_delete(ctx: &CerboContext, attachment_uuid: &str) -> Result<()
     object_delete(ctx, attachment_uuid)
 }
 
-/// List attachments for a page (via backrefs.ttl :usesAttachment).
+/// List the attachments a page uses: the `cerbo://` links in its `page.md`
+/// whose target is an Attachment, each once, in order of first appearance.
+/// Read from the page itself, so it needs no index.
 pub fn attachment_list(ctx: &CerboContext, page_uuid: &str) -> Result<Vec<String>, String> {
-    // Read page's backrefs.ttl for :usesAttachment
-    let backrefs = crate::links::backrefs_read(ctx, page_uuid)?;
+    let page_path = object_path(ctx, page_uuid).join("page.md");
+    let content = match fs::read_to_string(&page_path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("Failed to read page.md: {}", e)),
+    };
 
-    // Filter for attachments (objects of type Attachment)
-    let mut attachments = Vec::new();
-    for uuid in backrefs {
-        let obj_dir = object_path(ctx, &uuid);
-        let meta_path = obj_dir.join("meta.ttl");
-        if meta_path.exists() {
-            let meta = ObjectMeta::read_from_file(&meta_path)
-                .map_err(|e| format!("Failed to read meta.ttl: {}", e))?;
-            if matches!(meta.object_type, ObjectType::Attachment) {
-                attachments.push(uuid);
-            }
+    let mut attachments: Vec<String> = Vec::new();
+    for target in crate::links::extract_cerbo_links(&content) {
+        if attachments.contains(&target) || !crate::links::is_live_target(ctx, &target) {
+            continue;
+        }
+        let meta_path = object_path(ctx, &target).join("meta.ttl");
+        match ObjectMeta::read_from_file(&meta_path) {
+            Ok(meta) if meta.object_type == ObjectType::Attachment => attachments.push(target),
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => eprintln!("Warning: skipping linked object {target}: {e}"),
         }
     }
 
@@ -1254,6 +1263,31 @@ mod tests {
         assert!(object_read(&ctx, &uuid).is_err(), "a trashed object must not resolve");
     }
 
+    #[test]
+    fn attachment_list_reads_the_pages_links() {
+        let (tmp, ctx) = create_test_context();
+        let file = tmp.path().join("photo.png");
+        fs::write(&file, b"png").unwrap();
+        let attachment = attachment_add(&ctx, "", &file).unwrap();
+        let _unlinked = attachment_add(&ctx, "", &file).unwrap();
+        let note = object_create(&ctx, None, ObjectType::Product, "Note".into()).unwrap();
+        let page = object_create(&ctx, None, ObjectType::Product, "Page".into()).unwrap();
+        let missing = "deadbeef-0000-4000-8000-000000000137";
+        object_write(
+            &ctx,
+            &page,
+            &format!(
+                "![a](cerbo://objects/{attachment}) [n](cerbo://{note}) \
+                 cerbo://{attachment} cerbo://{missing}"
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(attachment_list(&ctx, &page).unwrap(), vec![attachment.clone()]);
+        assert!(attachment_list(&ctx, &note).unwrap().is_empty());
+        assert!(!object_path(&ctx, missing).exists());
+    }
+
     /// A live page that still links to a trashed object must not bring it back.
     #[test]
     fn saving_a_link_to_a_trashed_object_does_not_resurrect_it() {
@@ -1262,15 +1296,10 @@ mod tests {
         let source = object_create(&ctx, None, ObjectType::Product, "Source".into()).unwrap();
         object_delete(&ctx, &target).unwrap();
 
-        let broken = update_backrefs(
-            &ctx,
-            &source,
-            "",
-            &format!("cerbo://objects/{target}"),
-        )
-        .unwrap();
+        object_write(&ctx, &source, &format!("cerbo://objects/{target}"))
+            .expect("a broken link must not fail the save");
 
-        assert_eq!(broken, vec![target.clone()], "the link must report as broken");
+        assert_eq!(broken_links(&ctx, &format!("cerbo://objects/{target}")), vec![target.clone()]);
         assert!(
             !object_path(&ctx, &target).exists(),
             "the trashed object was recreated under .cerbo/objects/"

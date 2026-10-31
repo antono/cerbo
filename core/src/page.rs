@@ -46,7 +46,8 @@ pub fn page_read(ctx: &CerboContext, uuid: String) -> Result<String, String> {
 /// Returns the content on success (for compatibility with old API).
 ///
 /// Every save — from the CLI or the desktop editor — refreshes the page's
-/// backreferences and its `annotations.ttl`.
+/// `annotations.ttl` and its graph in the semantic index, and writes no other
+/// object's files.
 pub fn page_write(
     ctx: &CerboContext,
     uuid: String,
@@ -168,11 +169,10 @@ pub fn cursor_position_load(
 
 /// Attachment functions (UUID model)
 pub fn attachment_list(
-    _ctx: &CerboContext,
-    _uuid: String,
+    ctx: &CerboContext,
+    uuid: String,
 ) -> Result<Vec<String>, String> {
-    // TODO: Read backrefs.ttl for :usesAttachment
-    Ok(Vec::new())
+    crate::object::attachment_list(ctx, &uuid)
 }
 
 pub fn attachment_add(
@@ -180,7 +180,7 @@ pub fn attachment_add(
     page_uuid: String,
     src_path: PathBuf,
 ) -> Result<String, String> {
-    // TODO: Create attachment object, update page's backrefs.ttl
+    // TODO: Create attachment object and link it from the page
     let _ = (&page_uuid, &src_path);
     Err("Not yet implemented".to_string())
 }

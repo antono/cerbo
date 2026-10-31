@@ -65,9 +65,9 @@ pub fn write_atomic(dest: &Path, bytes: &[u8]) -> io::Result<()> {
 
 /// Test-only record of which destinations were actually replaced.
 ///
-/// Lets a test assert *how many times* a file was written during one operation
-/// — the difference between one backreference diff per save and two is
-/// invisible from the final bytes alone.
+/// Lets a test assert *which files* were written during one operation, and how
+/// many times — a save that also wrote another object, or wrote one file
+/// twice, is invisible from the final bytes alone.
 #[cfg(test)]
 pub mod audit {
     use std::cell::RefCell;

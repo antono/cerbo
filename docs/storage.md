@@ -16,7 +16,6 @@ my-vault/
 │   │   ├── <uuid-1>/            # Object directory
 │   │   │   ├── page.md          # Page content (Product, Source, Ontology)
 │   │   │   ├── meta.ttl         # Object metadata (Turtle RDF)
-│   │   │   ├── backrefs.ttl     # Incoming links (backlinks)
 │   │   │   ├── annotations.ttl  # HackMD annotations
 │   │   │   └── <file>           # Attached file (Attachment type)
 │   │   ├── <uuid-2>/
@@ -53,13 +52,13 @@ reads nor rewrites it until one class is removed by hand.
 
 ### 1. Product (Page)
 - **Directory**: `.cerbo/objects/<uuid>/`
-- **Files**: `page.md`, `meta.ttl`, `backrefs.ttl`, `annotations.ttl`
+- **Files**: `page.md`, `meta.ttl`, `annotations.ttl`
 - **Read-only**: No
 - **Description**: Regular wiki pages created by users
 
 ### 2. Source
 - **Directory**: `.cerbo/objects/<uuid>/`
-- **Files**: `page.md`, `meta.ttl`, `backrefs.ttl`
+- **Files**: `page.md`, `meta.ttl`
 - **Read-only**: Yes (cannot write or delete)
 - **Description**: Imported from URL via `cerbo import <url>`
 
@@ -116,8 +115,8 @@ matter of moving the directory back under `.cerbo/objects/<uuid>/`.
   deleting the same UUID again leaves two entries, neither overwriting the other.
 - Read-only (Source) objects still cannot be deleted, and the refusal happens
   before anything moves.
-- Trash is outside the live object set. Indexing, page listing, link resolution,
-  backreference maintenance and the symlink projection all ignore it. A live page
+- Trash is outside the live object set. Indexing, the semantic index, page
+  listing, link resolution and the symlink projection all ignore it. A live page
   that still links to a trashed object reports a **broken link**; the object is
   never resurrected.
 - **Nothing prunes the trash.** It grows until you remove entries yourself.
@@ -125,7 +124,7 @@ matter of moving the directory back under `.cerbo/objects/<uuid>/`.
 
 ## File Formats
 
-`meta.ttl`, `backrefs.ttl` and `annotations.ttl` are valid Turtle, written and
+`meta.ttl` and `annotations.ttl` are valid Turtle, written and
 read with a real RDF parser. Every prefix used is declared in the document, and
 every literal is escaped, so any character a title can hold round-trips exactly.
 
@@ -151,8 +150,7 @@ convenience copy, and Cerbo never reads it back.
 
 `schema:` is the real schema.org namespace, `https://schema.org/`. Terms that
 have no schema.org equivalent stay in Cerbo's own namespace: `cerbo:slug`,
-`cerbo:virtualPath`, `cerbo:position`, `cerbo:unresolvedType` and
-`cerbo:hasBacklink`.
+`cerbo:virtualPath`, `cerbo:position` and `cerbo:unresolvedType`.
 
 #### Legacy vocabulary
 
@@ -173,18 +171,6 @@ uses only the standard ones.
 `cerbo migrate vocabulary` rewrites a vault's files into the standard form once
 (see [Migrating an old vault](#migrating-an-old-vault)). Saving an object also
 rewrites its `meta.ttl` in the standard form.
-
-### backrefs.ttl (Turtle RDF)
-```turtle
-@prefix cerbo: <cerbo://ontology/> .
-<cerbo://objects/<target-uuid>> cerbo:hasBacklink <cerbo://objects/<source-uuid>> ,
-	<cerbo://objects/<another-source-uuid>> .
-```
-
-Derived data: `cerbo index` rebuilds it from page content in a single pass, one
-write per target. An object with no inbound links has a `backrefs.ttl` holding no
-`cerbo:hasBacklink` statements. Cerbo never writes a `backrefs.ttl` for an object
-that does not exist.
 
 ### annotations.ttl (Turtle RDF)
 
@@ -249,6 +235,50 @@ namespace IRI and, optionally, to the ontology object that documents it:
 - Only the vault's own map is used. Two vaults may bind the same prefix to
   different namespaces.
 
+## The semantic index (outside the vault)
+
+Backlinks and SPARQL queries are answered by a derived index of each vault's
+knowledge graph. It lives in the user cache, never in the vault:
+
+```
+$XDG_CACHE_HOME/cerbo/index/<key>/   # ~/.cache/cerbo/index/ by default
+  LOCK                      # held by one Cerbo process for one operation
+  state.json                # live generation, format version, vault path
+  graph-<gen>/              # Oxigraph store, one named graph per object
+  fingerprints-<gen>.bin    # file stats used to notice outside changes
+```
+
+`<key>` is the first 16 hex characters of the SHA-256 of the vault's canonical
+path, so every vault on a machine has its own index.
+
+- The graph holds each object's `meta.ttl` and `annotations.ttl` triples plus
+  one `<page> schema:citation <target>` per distinct `cerbo://` link in its
+  `page.md`, all in the named graph `cerbo://graphs/<uuid>`. Backlinks of X are
+  the pages citing X.
+- It is built by the first command that needs it, rebuilt automatically when it
+  comes from another format version or another vault path, and caught up before
+  every answer with files changed by git, sync or an editor. Saving a page
+  updates only that page's graph.
+- `cerbo index` rebuilds it into a new generation and switches to it atomically;
+  an interrupted rebuild leaves the previous one working. `cerbo index --page`
+  replaces only that page's graph.
+- Deleting the directory loses nothing. Indexes of moved or deleted vaults stay
+  in the cache until removed by hand.
+- `cerbo sparql '<query>'` queries it read-only; see the man page.
+
+### Legacy `backrefs.ttl`
+
+Older Cerbo builds cached backlinks in a `backrefs.ttl` file inside each linked
+object (`<target> cerbo:hasBacklink <source>`), so saving one page rewrote other
+objects' files. Cerbo neither writes nor reads these files any more. A leftover
+file is ignored, and the next full `cerbo index` deletes every one in live
+objects and reports the count (`legacy_backrefs_removed` with `--json`).
+
+**Upgrade Cerbo on every device that syncs the vault.** An older build keeps
+writing `backrefs.ttl` (ignored here and removed again by the next full
+`cerbo index`) and reads backlinks only from those files. To roll back, restore
+the files from git or sync history, or run the older build's `cerbo index`.
+
 ## Link Format
 
 Cerbo uses `cerbo://<uuid>` links instead of wikilinks:
@@ -300,7 +330,7 @@ builds cannot read the migrated files.
 | Storage | `<slug>/page.md` | `.cerbo/objects/<uuid>/page.md` |
 | Human-readable tree | The storage itself | `cerbo/` symlink projection |
 | Links | `[[Page Title]]` | `cerbo://<uuid>` |
-| Backlinks | Computed on-the-fly | Cached in `backrefs.ttl` |
+| Backlinks | Computed on-the-fly | Query over the semantic index in the user cache |
 | Annotations | Not supported | HackMD syntax → `annotations.ttl` |
 | Renaming | Updates all links | Updates `meta.ttl` only; links are UUIDs |
 | Delete | Removed the files | Moved to `.cerbo/trash/` |
