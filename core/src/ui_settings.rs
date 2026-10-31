@@ -12,6 +12,10 @@ pub struct UiSettings {
     pub sidebar_width: Option<u16>,
     pub right_sidebar_visible: Option<bool>,
     pub window_bounds: Option<WindowBounds>,
+    /// The last query run in the desktop SPARQL console; one per app, not per
+    /// vault. Absent in a `ui.toml` written before the console existed.
+    #[serde(default)]
+    pub last_sparql_query: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +54,7 @@ pub fn merge_ui_settings(
     sidebar_width: Option<u16>,
     right_sidebar_visible: Option<bool>,
     window_bounds: Option<WindowBounds>,
+    last_sparql_query: Option<String>,
 ) -> UiSettings {
     UiSettings {
         theme: theme.or_else(|| base.theme.clone()),
@@ -57,6 +62,7 @@ pub fn merge_ui_settings(
         sidebar_width: sidebar_width.or(base.sidebar_width),
         right_sidebar_visible: right_sidebar_visible.or(base.right_sidebar_visible),
         window_bounds: window_bounds.or_else(|| base.window_bounds.clone()),
+        last_sparql_query: last_sparql_query.or_else(|| base.last_sparql_query.clone()),
     }
 }
 
@@ -94,11 +100,46 @@ mod tests {
             sidebar_width: Some(320),
             right_sidebar_visible: Some(false),
             window_bounds: None,
+            last_sparql_query: None,
         };
         save_ui_settings(&ctx, &settings).unwrap();
 
         let loaded = load_ui_settings(&ctx).unwrap();
         assert_eq!(loaded.sidebar_width, Some(320));
         assert_eq!(loaded.right_sidebar_visible, Some(false));
+    }
+
+    #[test]
+    fn load_ui_settings_reads_old_file_without_last_sparql_query() {
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("config");
+        let ctx = CerboContext {
+            config_dir: config_dir.clone(),
+            cache_dir: tmp.path().join("cache"),
+        };
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(config_dir.join("ui.toml"), "theme = \"dark\"\nsidebarWidth = 137\n").unwrap();
+
+        let loaded = load_ui_settings(&ctx).unwrap();
+        assert_eq!(loaded.sidebar_width, Some(137));
+        assert_eq!(loaded.last_sparql_query, None);
+    }
+
+    #[test]
+    fn save_ui_settings_persists_last_sparql_query() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = CerboContext {
+            config_dir: tmp.path().join("config"),
+            cache_dir: tmp.path().join("cache"),
+        };
+        let query = "SELECT ?p ?t WHERE {\n  ?p schema:name ?t\n} LIMIT 137";
+        let merged = merge_ui_settings(&UiSettings::default(), None, None, None, None, None, Some(query.into()));
+        save_ui_settings(&ctx, &merged).unwrap();
+
+        let loaded = load_ui_settings(&ctx).unwrap();
+        assert_eq!(loaded.last_sparql_query.as_deref(), Some(query));
+        // Saving other settings keeps the query.
+        let kept = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None);
+        assert_eq!(kept.last_sparql_query.as_deref(), Some(query));
     }
 }

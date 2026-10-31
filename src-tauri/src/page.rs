@@ -2,11 +2,20 @@ use crate::get_vault_ctx;
 use cerbo_core::object;
 use tauri::AppHandle;
 
+/// Run a command that changes vault files off the main thread. Each such
+/// change also updates the semantic index, which can wait up to the index
+/// lock's timeout while e.g. "Enable" holds it; on the main thread that wait
+/// would freeze the window (spec: the similar notes panel never blocks editing).
+/// The frontend sends these one at a time, so saves keep their order.
+async fn off_main<T: Send + 'static>(work: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work).await.map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 #[allow(non_snake_case)]
-pub fn page_create(app: AppHandle, title: String, slug: Option<String>, virtualPath: Option<String>) -> Result<String, String> {
+pub async fn page_create(app: AppHandle, title: String, slug: Option<String>, virtualPath: Option<String>) -> Result<String, String> {
     let ctx = get_vault_ctx(&app)?;
-    cerbo_core::page::page_create_with_metadata(&ctx, title, slug, virtualPath)
+    off_main(move || cerbo_core::page::page_create_with_metadata(&ctx, title, slug, virtualPath)).await
 }
 
 #[tauri::command]
@@ -18,24 +27,24 @@ pub fn page_read(app: AppHandle, uuid: String) -> Result<String, String> {
 
 #[tauri::command]
 #[allow(non_snake_case)]
-pub fn page_write(
+pub async fn page_write(
     app: AppHandle,
     uuid: String,
     content: String,
 ) -> Result<String, String> {
     let ctx = get_vault_ctx(&app)?;
-    cerbo_core::page::page_write(&ctx, uuid, content)
+    off_main(move || cerbo_core::page::page_write(&ctx, uuid, content)).await
 }
 
 #[tauri::command]
 #[allow(non_snake_case)]
-pub fn page_update_title(
+pub async fn page_update_title(
     app: AppHandle,
     uuid: String,
     newTitle: String,
 ) -> Result<(), String> {
     let ctx = get_vault_ctx(&app)?;
-    cerbo_core::page::page_update_title(&ctx, uuid, newTitle)
+    off_main(move || cerbo_core::page::page_update_title(&ctx, uuid, newTitle)).await
 }
 
 #[tauri::command]
@@ -62,9 +71,9 @@ pub fn cursor_position_load(
 
 #[tauri::command]
 #[allow(non_snake_case)]
-pub fn page_delete(app: AppHandle, uuid: String) -> Result<(), String> {
+pub async fn page_delete(app: AppHandle, uuid: String) -> Result<(), String> {
     let ctx = get_vault_ctx(&app)?;
-    cerbo_core::page::page_delete(&ctx, uuid)
+    off_main(move || cerbo_core::page::page_delete(&ctx, uuid)).await
 }
 
 #[tauri::command]
@@ -86,13 +95,13 @@ pub fn attachment_list(
 
 #[tauri::command]
 #[allow(non_snake_case)]
-pub fn attachment_add(
+pub async fn attachment_add(
     app: AppHandle,
     uuid: String,
     srcPath: std::path::PathBuf,
 ) -> Result<String, String> {
     let ctx = get_vault_ctx(&app)?;
-    object::attachment_add(&ctx, &uuid, &srcPath)
+    off_main(move || object::attachment_add(&ctx, &uuid, &srcPath)).await
 }
 
 #[tauri::command]
@@ -109,12 +118,12 @@ pub fn attachment_upload(
 
 #[tauri::command]
 #[allow(non_snake_case)]
-pub fn attachment_delete(
+pub async fn attachment_delete(
     app: AppHandle,
     uuid: String,
 ) -> Result<(), String> {
     let ctx = get_vault_ctx(&app)?;
-    object::attachment_delete(&ctx, &uuid)
+    off_main(move || object::attachment_delete(&ctx, &uuid)).await
 }
 
 #[tauri::command]

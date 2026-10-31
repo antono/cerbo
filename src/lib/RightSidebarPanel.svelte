@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { listen } from '@tauri-apps/api/event';
   import { app, loadBacklinks, openPage, saveUiSettings } from './stores.svelte';
+  import { INDEX_READY_EVENT } from './backlinks';
+  import SimilarNotesSection from './SimilarNotesSection.svelte';
 
   let { uuid }: { uuid: string } = $props();
 
@@ -8,6 +11,18 @@
     if (uuid) {
       loadBacklinks(uuid);
     }
+  });
+
+  // A vault's index may still be building when its page opens; load again
+  // once the desktop reports it ready.
+  $effect(() => {
+    const current = uuid;
+    const unlisten = listen(INDEX_READY_EVENT, () => {
+      if (current) loadBacklinks(current);
+    });
+    return () => {
+      unlisten.then((stop) => stop());
+    };
   });
 </script>
 
@@ -27,7 +42,13 @@
   </div>
 
   <div class="panel-content">
-    {#if app.backlinks.length === 0}
+    <!-- Sections: Backlinks (titled by the panel header), then Similar notes. -->
+    <section aria-label="Backlinks">
+    {#if app.backlinksStatus === 'loading'}
+      <p class="empty" aria-busy="true">Loading backlinks…</p>
+    {:else if app.backlinksStatus !== 'ready'}
+      <p class="notice" role="status">{app.backlinksMessage}</p>
+    {:else if app.backlinks.length === 0}
       <p class="empty">No pages link here.</p>
     {:else}
       <ul class="backlink-list">
@@ -44,6 +65,9 @@
         {/each}
       </ul>
     {/if}
+    </section>
+
+    <SimilarNotesSection {uuid} />
   </div>
 </aside>
 
@@ -104,6 +128,12 @@
     color: var(--muted-foreground);
     font-size: 0.8125rem;
     font-style: italic;
+  }
+
+  .notice {
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: 0.8125rem;
   }
 
   .backlink-list {

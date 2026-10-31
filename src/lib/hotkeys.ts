@@ -15,6 +15,16 @@ export function isModKey(e: KeyboardEvent, key: string): boolean {
   return mod && e.key.toLowerCase() === key.toLowerCase();
 }
 
+/** `Ctrl+Shift+E` (`Cmd+Shift+E` on Mac): open or close the SPARQL console. */
+export function isSparqlConsoleKey(e: KeyboardEvent): boolean {
+  return isModKey(e, 'e') && e.shiftKey && !e.altKey;
+}
+
+/** Global shortcuts stay off while a confirmation modal owns the keyboard. */
+export function confirmationOpen(state: { showExitPrompt: boolean; confirmDeleteUuid: string | null }): boolean {
+  return state.showExitPrompt || state.confirmDeleteUuid !== null;
+}
+
 /**
  * Checks if the event target is an input-like element (input, textarea, select, contenteditable).
  */

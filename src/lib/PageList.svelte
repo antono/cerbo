@@ -17,7 +17,11 @@
     // In preview mode, don't handle ANY navigation keys - let +layout.svelte handle them
     if (app.editorTab === 'preview') return;
 
-    const isJorK = e.key === 'J' || e.key === 'K';
+    // Vim-style list navigation (spec `sidebar-navigation`): j/k, or J/K as
+    // in preview mode.
+    const isNext = e.key === 'j' || e.key === 'J';
+    const isPrev = e.key === 'k' || e.key === 'K';
+    const isJorK = isNext || isPrev;
     const isArrow = e.key === 'ArrowDown' || e.key === 'ArrowUp';
     const isTab = e.key === 'Tab';
     const isR = e.key === 'r';
@@ -48,10 +52,10 @@
       return;
     }
 
-    if (e.key === 'ArrowDown' || e.key === 'j' || (e.key === 'Tab' && !e.shiftKey)) {
+    if (e.key === 'ArrowDown' || isNext || (e.key === 'Tab' && !e.shiftKey)) {
       e.preventDefault();
       openNextPage();
-    } else if (e.key === 'ArrowUp' || e.key === 'k' || (e.key === 'Tab' && e.shiftKey)) {
+    } else if (e.key === 'ArrowUp' || isPrev || (e.key === 'Tab' && e.shiftKey)) {
       e.preventDefault();
       openPrevPage();
     }

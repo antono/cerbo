@@ -16,6 +16,7 @@
         { keys: [mod, 'T'], desc: 'Toggle light/dark theme' },
         { keys: [mod, 'O'], desc: 'Open vault selector' },
         { keys: [mod, 'Shift', 'O'], desc: 'Add vault' },
+        { keys: [mod, 'Shift', 'E'], desc: 'SPARQL console' },
         { keys: [mod, 'Q'], desc: 'Quit application' },
         { keys: ['F1'], desc: 'Show this help' },
         { keys: ['Esc'], desc: 'Close active dialog or modal' },

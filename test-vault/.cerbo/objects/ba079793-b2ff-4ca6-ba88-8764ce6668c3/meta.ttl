@@ -5,5 +5,5 @@
 <cerbo://objects/ba079793-b2ff-4ca6-ba88-8764ce6668c3> a schema:NoteDigitalDocument ;
 	schema:name "Index" ;
 	schema:dateCreated "2026-10-25T13:17:54.772697296+00:00"^^xsd:dateTime ;
-	schema:dateModified "2026-10-25T13:18:16.608529895+00:00"^^xsd:dateTime ;
+	schema:dateModified "2026-10-31T14:44:22.972370872+00:00"^^xsd:dateTime ;
 	cerbo:slug "index" .

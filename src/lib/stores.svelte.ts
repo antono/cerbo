@@ -8,6 +8,24 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { homeDir } from '@tauri-apps/api/path';
+import { backlinksFailure, type BacklinksStatus } from './backlinks';
+import type { PrefixMap } from './mention-plugin';
+import type { SparqlResponse } from './sparql-console';
+import {
+  enableFailed,
+  enableStarted,
+  enableSucceeded,
+  initialSimilarState,
+  isSuperseded,
+  progressReceived,
+  similarFailed,
+  similarLoaded,
+  similarRequested,
+  type SemanticProgress,
+  type SimilarNotesResponse,
+  type SimilarState,
+} from './similar-notes';
+import { serialQueue } from './write-queue';
 
 // ── Types (mirror Rust structs) ───────────────────────────────────────────────
 
@@ -50,6 +68,7 @@ export interface UiSettings {
   sidebarWidth: number | null;
   rightSidebarVisible: boolean | null;
   windowBounds: { width: number; height: number } | null;
+  lastSparqlQuery: string | null;
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system';
@@ -61,9 +80,13 @@ export const app = $state({
   activeVaultId: null as string | null,
   pages: [] as PageMeta[],
   vaultObjects: [] as VaultObject[],
+  // The open vault's `prefix → namespace` map for mentions; null until loaded.
+  prefixMap: null as PrefixMap | null,
   currentUuid: null as string | null,
   currentContent: '',
   backlinks: [] as BacklinkEntry[],
+  backlinksStatus: 'ready' as BacklinksStatus,
+  backlinksMessage: '',
   attachments: [] as string[],
   loading: false,
   loadingMessage: '',
@@ -89,6 +112,11 @@ export const app = $state({
   renameUuid: null as string | null,
   renameTitle: '',
   confirmDeleteUuid: null as string | null,
+  showSparqlConsole: false,
+  // Last query run in the SPARQL console, kept in ui.toml across restarts.
+  lastSparqlQuery: null as string | null,
+  // The "Similar notes" sidebar section; see similar-notes.ts.
+  similar: { ...initialSimilarState } as SimilarState,
 });
 
 export async function loadUiSettings(): Promise<void> {
@@ -104,9 +132,11 @@ export async function loadUiSettings(): Promise<void> {
     if (typeof res.rightSidebarVisible === 'boolean') {
       app.showRightSidebar = res.rightSidebarVisible;
     }
-    if (res.windowBounds) {
-      // Window bounds are applied in the desktop layer.
+    if (typeof res.lastSparqlQuery === 'string') {
+      app.lastSparqlQuery = res.lastSparqlQuery;
     }
+    // `windowBounds` is applied by the desktop layer when the window opens
+    // and saved by `app_exit`; the frontend never sends it (null keeps it).
   } catch (e) {
     setError(String(e));
   }
@@ -119,7 +149,8 @@ export async function saveUiSettings(): Promise<void> {
       fontSize: null,
       sidebarWidth: app.sidebarWidth,
       rightSidebarVisible: app.showRightSidebar,
-      windowBounds: null,
+      windowBounds: null, // kept: `app_exit` saves the window size
+      lastSparqlQuery: app.lastSparqlQuery,
     });
   } catch (e) {
     console.error('Failed to save UI settings:', e);
@@ -139,6 +170,7 @@ export function closeAllDialogs() {
   app.renameUuid = null;
   app.renameTitle = '';
   app.confirmDeleteUuid = null;
+  app.showSparqlConsole = false;
 }
 
 // ── Computed helpers ──────────────────────────────────────────────────────────
@@ -203,6 +235,8 @@ export async function openVault(vaultId: string): Promise<void> {
     await invoke('vault_set_active', { id: vaultId });
     await loadPages();
     await loadVaultObjects();
+    // Before the first page renders, so mentions resolve on first paint.
+    await loadPrefixMap();
 
     const vault = activeVault();
     if (!vault) return;
@@ -279,6 +313,28 @@ export async function loadPages(): Promise<void> {
   }
 }
 
+export async function loadPrefixMap(): Promise<void> {
+  app.prefixMap = null;
+  if (!app.activeVaultId) return;
+  try {
+    app.prefixMap = await invoke<PrefixMap>('prefix_map_get');
+  } catch (e) {
+    // Mentions still render, only without types; opening the vault goes on.
+    console.error('Failed to load prefix map:', e);
+  }
+}
+
+/**
+ * Run a read-only SPARQL query on the open vault (the console). The query is
+ * remembered even when it fails, so a typo is not lost on reopen. Rejects with
+ * the command's `{ kind, message? }` error.
+ */
+export async function runSparqlQuery(query: string): Promise<SparqlResponse> {
+  app.lastSparqlQuery = query;
+  void saveUiSettings();
+  return invoke<SparqlResponse>('sparql_query', { query });
+}
+
 export async function loadVaultObjects(): Promise<void> {
   if (!app.activeVaultId) return;
   try {
@@ -337,10 +393,14 @@ export async function openPrevPage(): Promise<void> {
   await openPage(app.pages[prevIndex].uuid);
 }
 
+// Page changes run off the main thread in the desktop layer; queue them so they
+// reach the vault in the order they were made.
+const vaultWrite = serialQueue();
+
 export async function savePage(uuid: string, content: string): Promise<string | undefined> {
   if (!app.activeVaultId) return;
   try {
-    const finalContent = await invoke<string>('page_write', { uuid, content });
+    const finalContent = await vaultWrite(() => invoke<string>('page_write', { uuid, content }));
     return finalContent;
   } catch (e) {
     setError(String(e));
@@ -349,7 +409,7 @@ export async function savePage(uuid: string, content: string): Promise<string | 
 
 export async function createPage(title: string, slug?: string, virtualPath?: string): Promise<string> {
   if (!app.activeVaultId) throw new Error('No active vault');
-  const uuid = await invoke<string>('page_create', { title, slug, virtualPath });
+  const uuid = await vaultWrite(() => invoke<string>('page_create', { title, slug, virtualPath }));
   await loadPages();
   app.editorTab = 'write';
   await openPage(uuid);
@@ -359,7 +419,7 @@ export async function createPage(title: string, slug?: string, virtualPath?: str
 export async function deletePage(uuid: string): Promise<void> {
   if (!app.activeVaultId) return;
   try {
-    await invoke('page_delete', { uuid });
+    await vaultWrite(() => invoke('page_delete', { uuid }));
     await loadPages();
     if (app.currentUuid === uuid) {
       if (app.pages.length > 0) {
@@ -378,7 +438,7 @@ export async function deletePage(uuid: string): Promise<void> {
 
 export async function updatePageTitle(uuid: string, newTitle: string): Promise<void> {
   if (!app.activeVaultId) throw new Error('No active vault');
-  await invoke('page_update_title', { uuid, newTitle });
+  await vaultWrite(() => invoke('page_update_title', { uuid, newTitle }));
   await loadPages();
   await openPage(uuid);
 }
@@ -411,17 +471,76 @@ export function extractTitle(content: string): string | null {
   return null;
 }
 
+// Only the latest request may update the panel; an older one can finish later.
+let backlinksRequest = 0;
+
 export async function loadBacklinks(uuid: string): Promise<void> {
   if (!app.activeVaultId) return;
+  const request = ++backlinksRequest;
+  app.backlinksStatus = 'loading';
+  app.backlinksMessage = '';
   try {
     const entries = await invoke<BacklinkEntry[]>('backlinks_get', {
       vaultId: app.activeVaultId,
       uuid,
     });
+    if (request !== backlinksRequest) return;
     app.backlinks = entries;
-  } catch (_) {
+    app.backlinksStatus = 'ready';
+  } catch (e) {
+    if (request !== backlinksRequest) return;
+    // The page stays open and editable; only the panel shows the failure.
+    const failure = backlinksFailure(e);
     app.backlinks = [];
+    app.backlinksStatus = failure.status;
+    app.backlinksMessage = failure.message;
   }
+}
+
+/**
+ * Load the similar notes of page `uuid`. An answer is kept only while `uuid`
+ * is still the open page (design D2); while embeddings are being enabled the
+ * list loads once that ends.
+ */
+export async function loadSimilarNotes(uuid: string): Promise<void> {
+  if (!app.activeVaultId) return;
+  app.similar = similarRequested(app.similar, uuid);
+  if (app.similar.status === 'enabling') return;
+  await fetchSimilarNotes(uuid);
+}
+
+async function fetchSimilarNotes(uuid: string): Promise<void> {
+  try {
+    const response = await invoke<SimilarNotesResponse>('similar_get', { uuid });
+    app.similar = similarLoaded(app.similar, app.currentUuid, response);
+  } catch (e) {
+    // A newer request replaced this one before it ran; that one answers.
+    if (isSuperseded(e)) return;
+    // The page stays open and editable; only the section shows the failure.
+    app.similar = similarFailed(app.similar, app.currentUuid, uuid, e);
+  }
+}
+
+/**
+ * Compute the vault's embeddings ("Enable" / "Retry"), the same work as
+ * `cerbo index --embeddings`, then load the open page's similar notes.
+ */
+export async function enableEmbeddings(): Promise<void> {
+  if (!app.activeVaultId || app.similar.status === 'enabling') return;
+  app.similar = enableStarted(app.similar);
+  try {
+    await invoke('embeddings_refresh');
+  } catch (e) {
+    app.similar = enableFailed(app.similar, e);
+    return;
+  }
+  app.similar = enableSucceeded(app.similar, app.currentUuid);
+  if (app.similar.uuid) await fetchSimilarNotes(app.similar.uuid);
+}
+
+/** Show a `semantic://progress` step in the similar notes section. */
+export function applySemanticProgress(progress: SemanticProgress): void {
+  app.similar = progressReceived(app.similar, progress);
 }
 
 export async function goBack(): Promise<void> {

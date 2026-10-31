@@ -1,11 +1,14 @@
 mod index;
 mod page;
 mod paths;
+mod semantic;
 mod vault;
+mod window;
 
 use cerbo_core::context::CoreContext;
 use cerbo_core::CerboContext;
 use index::WatcherState;
+use semantic::IndexGate;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -71,6 +74,7 @@ fn ui_settings_save(
     sidebarWidth: Option<u16>,
     rightSidebarVisible: Option<bool>,
     windowBounds: Option<cerbo_core::ui_settings::WindowBounds>,
+    lastSparqlQuery: Option<String>,
 ) -> Result<(), String> {
     let ctx = get_context(&app)?;
     let current = cerbo_core::ui_settings::load_ui_settings(&ctx)?;
@@ -81,6 +85,7 @@ fn ui_settings_save(
         sidebarWidth,
         rightSidebarVisible,
         windowBounds,
+        lastSparqlQuery,
     );
     cerbo_core::ui_settings::save_ui_settings(&ctx, &merged)
 }
@@ -104,6 +109,7 @@ fn window_bounds_save(app: tauri::AppHandle, width: f64, height: f64) -> Result<
         None,
         None,
         Some(cerbo_core::ui_settings::WindowBounds { width, height }),
+        None,
     );
     cerbo_core::ui_settings::save_ui_settings(&ctx, &merged)
 }
@@ -115,6 +121,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(WatcherState::default())
         .manage(ActiveVaultState::default())
+        .manage(IndexGate::default())
+        .setup(|app| {
+            // A missing or unreadable size only means the default one.
+            if let Err(e) = window::restore_size(app.handle()) {
+                eprintln!("Warning: could not restore the window size: {e}");
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // vault
             vault::vault_add,
@@ -126,6 +140,11 @@ pub fn run() {
             vault::vault_objects_list,
             // index
             index::backlinks_get,
+            // semantic
+            semantic::similar_get,
+            semantic::embeddings_refresh,
+            semantic::prefix_map_get,
+            semantic::sparql_query,
             vault_open,
             // page
             page::page_create,
@@ -152,8 +171,13 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+/// The one exit path of the close button and `Ctrl+Q`, after the frontend
+/// saved its UI settings: keep the window size, then end the process.
 #[tauri::command]
 fn app_exit(app: tauri::AppHandle) {
+    if let Err(e) = window::save_size(&app) {
+        eprintln!("Warning: could not save the window size: {e}");
+    }
     app.exit(0);
 }
 

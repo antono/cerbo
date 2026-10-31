@@ -3,15 +3,18 @@
   import { fade } from 'svelte/transition';
   import { ModeWatcher, mode, setMode } from 'mode-watcher';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { ChevronDown, HelpCircle, Moon, Plus, Sun, Vault } from 'lucide-svelte';
+  import { ChevronDown, HelpCircle, Moon, Plus, Sun } from 'lucide-svelte';
+  import cerboIcon from '../favicon.svg';
   import { app, loadVaults, loadUiSettings, saveUiSettings, openVault, quickAddVault, quitApp, closeAllDialogs, openNextPage, openPrevPage, triggerRename, triggerDelete, goBack, goForward } from '#lib/stores.svelte.js';
   import PageList from '#lib/PageList.svelte';
   import GlobalSearch from '#lib/GlobalSearch.svelte';
   import NewPageDialog from '#lib/NewPageDialog.svelte';
   import RenamePageDialog from '#lib/RenamePageDialog.svelte';
   import KeyboardHelp from '#lib/KeyboardHelp.svelte';
+  import SparqlConsole from '#lib/SparqlConsole.svelte';
   import ExitConfirmation from '#lib/ExitConfirmation.svelte';
-  import { isModKey, isInputFocused } from '#lib/hotkeys.js';
+  import TitleBar from '#lib/TitleBar.svelte';
+  import { isModKey, isInputFocused, isSparqlConsoleKey, confirmationOpen } from '#lib/hotkeys.js';
   import '../app.css';
 
   let { children } = $props();
@@ -38,14 +41,23 @@
     function handleKeydown(e: KeyboardEvent) {
       // 1. Escape: Close active dialogs/forms
       if (e.key === 'Escape') {
-        if (app.showSearch || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.renameUuid || app.confirmDeleteUuid) {
+        if (app.showSearch || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.renameUuid || app.confirmDeleteUuid || app.showSparqlConsole) {
           closeAllDialogs();
           return;
         }
       }
 
       // Confirmation dialogs own their own keyboard handling.
-      if (app.showExitPrompt || app.confirmDeleteUuid) return;
+      if (confirmationOpen(app)) return;
+
+      // SPARQL console (Ctrl+Shift+E), also from the editor; toggles itself.
+      if (isSparqlConsoleKey(e)) {
+        e.preventDefault();
+        const nextState = !app.showSparqlConsole;
+        closeAllDialogs();
+        app.showSparqlConsole = nextState;
+        return;
+      }
 
       // 2. New Page (Ctrl+N) - Handle first so it can toggle itself
       if (isModKey(e, 'n')) {
@@ -76,7 +88,7 @@
       }
 
       // Ignore other global shortcuts if any modal is open
-      if (app.showSearch || app.showExitPrompt || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.confirmDeleteUuid) return;
+      if (app.showSearch || app.showExitPrompt || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.confirmDeleteUuid || app.showSparqlConsole) return;
 
       // 5. Go Back (Alt+Left) - only when not in input
       if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'Left') && !isInputFocused()) {
@@ -287,6 +299,8 @@
 
 <ModeWatcher />
 
+<TitleBar />
+
 <div class="app-shell" class:is-resizing={isResizingSidebar}>
   <!-- Sidebar -->
   <aside 
@@ -303,7 +317,7 @@
         title={`Switch vault (${modKeyLabel}+O)`}
         disabled={app.showNewPageForm}
       >
-        <Vault size={18} class="vault-icon" />
+        <img src={cerboIcon} alt="" width="18" height="18" class="vault-icon" />
         <span class="vault-label">{vault?.name ?? 'No vault'}</span>
         <span class="vault-chevron"><ChevronDown size={12} /></span>
       </button>
@@ -386,6 +400,10 @@
   <KeyboardHelp onClose={() => app.showHelp = false} />
 {/if}
 
+{#if app.showSparqlConsole}
+  <SparqlConsole onClose={() => app.showSparqlConsole = false} />
+{/if}
+
 {#if app.showVaultSelector}
   <div class="modal-backdrop" onclick={() => (app.showVaultSelector = false)} role="presentation">
     <div bind:this={vaultSelectorEl} class="vault-selector-modal" onkeydown={handleVaultSelectorKeydown} onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1" transition:fade={{ duration: 150 }}>
@@ -397,7 +415,7 @@
       <div class="vault-selector-body">
         {#each app.vaults as item (item.id)}
           <button class="vault-item" class:selected={item.id === app.vaults[selectedVaultIndex]?.id} onclick={() => selectVault(item.id)}>
-            <Vault size={16} />
+            <img src={cerboIcon} alt="" width="18" height="18" class="vault-icon" />
             <span class="vault-item-name">{item.name}</span>
             {#if item.id === app.activeVaultId}
               <span class="vault-item-check">✓</span>
@@ -435,7 +453,8 @@
 <style>
   .app-shell {
     display: flex;
-    height: 100vh;
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
   }
 
@@ -599,6 +618,13 @@
     padding: 0.5rem;
     max-height: 50vh;
     overflow-y: auto;
+  }
+
+  /* Cerbo app icon (src/favicon.svg) as the vault glyph; it carries its own
+     dark rounded background, so it reads on both themes. */
+  .vault-icon {
+    flex-shrink: 0;
+    display: block;
   }
 
   .vault-item {

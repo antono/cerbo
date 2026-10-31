@@ -16,12 +16,17 @@
   --highlight-fg: var(--fg);
   --primary: #3b82f6;
   --primary-hover: #2563eb;
+  /* Text on a --primary or --primary-hover fill. */
+  --primary-foreground: #ffffff;
   --muted-foreground: #64748b;
   --radius: 0.375rem;
+  /* Outline of the frameless window (none when maximized). */
+  --window-border: #94a3b8;
   --sidebar-width: 260px;
 
   /* Unified Layout Variables */
   --header-height: 48px;
+  --titlebar-height: 32px;
   --backlinks-width: 280px;
   --p-1: 0.25rem;
   --p-2: 0.5rem;
@@ -40,9 +45,22 @@ html, body {
   height: 100%;
   font-family: var(--font-sans);
   font-size: 15px;
-  background: var(--bg);
   color: var(--fg);
   overflow: hidden; /* App shell handles scrolling */
+}
+
+/* The window has no native frame: the body draws an outline so the app
+   stands out against other windows. It goes away while the window is
+   maximized or fullscreen. */
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--window-border);
+}
+
+html.window-maximized body {
+  border: none;
 }
 
 /* Dark mode overrides */
@@ -58,7 +76,10 @@ html, body {
   --highlight-fg: var(--fg);
   --primary: #60a5fa;
   --primary-hover: #93c5fd;
+  /* Dark text: white on the light blues above is below 4.5:1. */
+  --primary-foreground: #0f1117;
   --muted-foreground: #94a3b8;
+  --window-border: #4b5563;
 }
 
 /* Keep prefers-color-scheme for initial load if no preference is set */
@@ -75,7 +96,9 @@ html, body {
     --highlight-fg: var(--fg);
     --primary: #60a5fa;
     --primary-hover: #93c5fd;
+    --primary-foreground: #0f1117;
     --muted-foreground: #94a3b8;
+  --window-border: #4b5563;
   }
 }
 

@@ -18,6 +18,7 @@
     attachTaskListClickHandler,
     previewTaskListPlugin,
   } from './wikilink-plugin';
+  import { mentionPlugin } from './mention-plugin';
   import { getCursorPositionFromOffset, restoreCursorPosition as resolveCursorPosition } from './cursor-position';
   import { focusTextareaAtOffset } from './textarea-focus';
   import { buildPageDiffFile, decideExternalPageChange, loadPageDiffFile, logPageContentDiff, pageChangeKey, pageMdPathToSlug, shouldIgnoreUnchangedPageChange, shouldSkipExternalPageChange } from './page-sync';
@@ -155,6 +156,8 @@
       themes: ['material-theme-lighter', 'material-theme-palenight'],
     },
     extensions: [
+      // First, so `[Berlin]{schema:Place}` becomes a mention before link handling.
+      mentionPlugin({ getPrefixes: () => app.prefixMap }),
       wikilinkPlugin({
         getPages: () => pageTitles(),
         getVaultObjects: () => app.vaultObjects,
@@ -401,7 +404,7 @@
   $effect(() => {
     function handleKeydown(e: KeyboardEvent) {
       // Ignore if modal is open
-      if (app.showSearch || app.showExitPrompt) return;
+      if (app.showSearch || app.showExitPrompt || app.showSparqlConsole) return;
 
       const modI = isModKey(e, 'i');
 
@@ -626,5 +629,28 @@
   :global(.carta-renderer a.wikilink-broken) {
     color: #dc2626;
     border-bottom-color: #dc2626;
+  }
+
+  /* Mentions are typed text, not links: a tint and a dotted underline, no link colour. */
+  :global(.carta-renderer span.mention) {
+    color: var(--fg);
+    background: color-mix(in oklab, var(--primary) 12%, transparent);
+    border-bottom: 1px dotted var(--primary);
+    border-radius: calc(var(--radius) / 2);
+    padding: 0 0.15em;
+    cursor: help;
+  }
+
+  :global(.carta-renderer span.mention:hover) {
+    background: color-mix(in oklab, var(--primary) 22%, transparent);
+  }
+
+  /* Unknown prefix: same red as a broken wikilink. */
+  :global(.carta-renderer span.mention.unresolved) {
+    background: color-mix(in oklab, #dc2626 10%, transparent);
+    border-bottom: none;
+    text-decoration: underline wavy #dc2626;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.2em;
   }
 </style>

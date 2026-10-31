@@ -47,8 +47,17 @@ A Carta plugin, `mention-plugin.ts`, parses `[Text]{prefix:Type}` in mdast:
 
 `UiSettings` gains `last_sparql_query: Option<String>`. It is global per app rather than per vault, which matches the spec ("last query run in this app") and needs no new storage.
 
+### D6. Vault icon from the existing favicon
+
+The vault selector entry in `+layout.svelte` replaces the lucide `Vault` glyph with `<img src={cerboIcon} alt="" width="18" height="18">`. `cerboIcon` is imported from `src/favicon.svg` through Vite, so it is the same brain-on-chip artwork as the app icon (`src-tauri/icons/logo.svg` produces it via `build:favicon`) and stays in sync. The SVG has its own dark rounded background, so it reads on both themes. A thin border token is added only if the manual dark-theme check shows otherwise.
+
+- **Alternatives:**
+  - Inlining the SVG markup: allows recolouring but duplicates the artwork.
+  - A PNG from `src-tauri/icons`: blurry at 1.5× and 2× scaling.
+
 ## Risks / Trade-offs
 
 - [A model download started from the panel takes minutes] → Progress events and a non-blocking section. The download can also be done ahead of time with `cerbo index --embeddings`.
 - [Mention regex collides with other bracket syntax (task lists, links)] → The plugin matches only `]{prefix:Name}` with an identifier-shaped prefix. Unit tests cover links, task lists and wikilinks next to mentions.
+- [Brain-on-chip detail is lost at 18 px] → It is recognisable as the app icon by shape and colour; this is acceptable for a list glyph.
 - [Many unique UUIDs in a large SELECT] → Titles come from the in-memory page list. Unknown UUIDs show the raw IRI.
