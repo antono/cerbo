@@ -65,6 +65,20 @@ nix build .#cerbo-desktop  # Build Desktop App
 nix build .#cerbo          # Build CLI Binary
 ```
 
+### 4. End-to-End Tests
+
+The e2e suite drives the built desktop app through `tauri-driver` and
+WebKitWebDriver (both provided by the devshell) with WebdriverIO:
+
+```bash
+nix build .#cerbo-desktop  # Build the app under test (./result)
+bun run test:e2e           # Run e2e/specs; uses xvfb-run when DISPLAY is unset
+```
+
+Each spec file runs with temporary XDG config/cache dirs; specs under
+`e2e/specs/vault/` get a fresh copy of `test-vault/`. Your own vaults and
+settings are never touched. Set `CERBO_DESKTOP_BIN` to test another binary.
+
 ## Data Storage
 
 - **Configuration**: `$XDG_CONFIG_HOME/cerbo/vaults.json` (defaults to

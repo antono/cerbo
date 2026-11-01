@@ -129,7 +129,17 @@ let
       cp src-tauri/icons/icon.png $out/share/icons/hicolor/512x512/apps/cerbo-desktop.png
     '';
   };
+  # Not in nixpkgs. Bridges WebdriverIO to WebKitWebDriver for e2e tests.
+  tauri-driver = pkgs.rustPlatform.buildRustPackage rec {
+    pname = "tauri-driver";
+    version = "2.1.0";
+    src = pkgs.fetchCrate {
+      inherit pname version;
+      hash = "sha256-Ttik3t/IUnze3SHcpH9zPS1UwW9B/V70Wvel+eBHhOE=";
+    };
+    cargoHash = "sha256-x7cz2KLNLJRlPqahV/BwyYJcncfUyhIp6/gORhvudZI=";
+  };
 in
 {
-  inherit cerbo cerbo-frontend cerbo-desktop;
+  inherit cerbo cerbo-frontend cerbo-desktop tauri-driver;
 }

@@ -11,7 +11,8 @@
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri",
     "build:favicon": "sed 's/fill=\"white\"/fill=\"#3b82f6\"/g' src-tauri/icons/logo.svg > src/favicon.svg",
-    "dev-debug": "WEBKIT_INSPECTOR_SERVER=127.0.0.1:9222 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 bun run tauri dev"
+    "dev-debug": "WEBKIT_INSPECTOR_SERVER=127.0.0.1:9222 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222 bun run tauri dev",
+    "test:e2e": "e2e/run.sh"
   },
   "license": "LGPL-3.0-or-later",
   "dependencies": {
@@ -42,12 +43,19 @@
     "@sveltejs/kit": "^3.1.0",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tauri-apps/cli": "^2.12.4",
+    "@types/mocha": "^10.0.10",
+    "@wdio/cli": "10.1.0",
+    "@wdio/globals": "10.1.0",
+    "@wdio/local-runner": "10.1.0",
+    "@wdio/mocha-framework": "10.1.0",
+    "@wdio/spec-reporter": "10.1.0",
     "bun2nix": "^2.1.2",
     "svelte": "^5.57.2",
     "svelte-check": "^4.7.7",
     "typescript": "^6.0.3",
     "vite": "^8.3.5",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "webdriverio": "10.1.0"
   },
   "imports": {
     "#lib": "./src/lib/index.js",
