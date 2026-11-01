@@ -124,7 +124,7 @@ pub fn materialize(vault_root: &Path) -> Result<MaterializeReport, SymlinkError>
             vp_dir
         };
 
-        let leaf_path = leaf_parent.join(format!("{}.md", &entry.slug));
+        let leaf_path = leaf_parent.join(format!("{}.md", entry.slug));
         let page_file = vault_root.join(".cerbo").join("objects").join(&entry.uuid).join("page.md");
 
         let rel_target = pathdiff::diff_paths(&page_file, &leaf_parent)
@@ -219,7 +219,7 @@ fn build_plan(vault_root: &Path) -> Result<Vec<PlanEntry>, SymlinkError> {
 
 /// Returns the rendered path for a plan entry: `<virtual_path>/<slug>.md` or just `<slug>.md`.
 fn rendered_path(entry: &PlanEntry) -> PathBuf {
-    let leaf = format!("{}.md", &entry.slug);
+    let leaf = format!("{}.md", entry.slug);
     if entry.virtual_path.is_empty() {
         PathBuf::from(leaf)
     } else {
