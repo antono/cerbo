@@ -1,3 +1,9 @@
+> **Archived.** This is a point-in-time code review of the UUID object store
+> as of 2026-09-04. Most of the defects it lists have since been fixed (atomic
+> writes, the removal of `index.json` and `backrefs.ttl`, valid Turtle, the
+> semantic index). It is kept for the reasoning behind those changes; for the
+> current layout read [storage.md](../storage.md).
+
 # Store Model Review — UUID Object Store
 
 **Date:** 2026-09-04

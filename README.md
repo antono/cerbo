@@ -1,326 +1,72 @@
-# Cerbo
+<p align="center">
+  <img src="src-tauri/icons/icon.png" alt="Cerbo icon" width="128" height="128">
+</p>
 
-**Cerbo** (/ˈt͡serbo/) is Esperanto for "brain". It is a local-first markdown wiki editor that treats the filesystem as a
-first-class citizen. It stores all knowledge as plain files you fully own, with
-`cerbo://` link-based graph navigation as the core interaction model.
+<h1 align="center">Cerbo</h1>
 
-## Core Features
+<p align="center">
+  A local-first Markdown wiki with a knowledge graph underneath.<br>
+  <em>Cerbo</em> (/ˈt͡serbo/) is Esperanto for "brain".
+</p>
 
-- **Local-First & Private**: Your data stays on your machine in plain Markdown
-  files and folders. No cloud dependency, no proprietary formats.
-- **Desktop & CLI**: Work your way. Use the GUI for visual editing or the `cerbo`
-  CLI for terminal workflows, automation, and headless indexing.
-- **UUID-Based Storage**: Each page/object is a `.cerbo/objects/<uuid>/` folder,
-  with no slug derivation or name-based paths.
-- **Wikilink-Free**: Uses `cerbo://<uuid>` links instead of `[[Wikilinks]]`.
-- **Backlinks & Annotations**: Backlinks answered from a local semantic index
-  (no backlink files in the vault) and HackMD-style annotations
-  (`[Text]{prefix:Type}` → `annotations.ttl`).
-- **SPARQL**: Read-only SPARQL queries over a vault's knowledge graph with
-  `cerbo sparql` or the desktop SPARQL console.
-- **Search by Meaning**: `cerbo search` and `cerbo similar` find related notes
-  across languages with a local embedding model; page text never leaves your
-  machine.
-- **Multiple Vaults**: Manage multiple isolated knowledge bases (vaults)
-  anywhere on your disk.
-- **XDG Compliant**: App configuration and caches follow the XDG Base Directory
-  Specification.
+Cerbo keeps your notes as plain files you own, gives every page a permanent
+UUID so links never break, and indexes the result as an RDF graph you can
+query with SPARQL or search by meaning. It ships as a desktop app and as a
+`cerbo` command-line tool that share the same vault format.
 
-## Tech Stack
+## Features
 
-- **Backend**: Rust Workspace (Core library + CLI + Tauri Desktop)
-- **Frontend**: [Svelte 5](https://svelte.dev/) +
-  [Carta](https://github.com/BearToCode/carta) (Markdown Editor) + Tailwind CSS
-- **Package Manager**: [Bun](https://bun.sh/)
-- **Environment**: [Nix Flakes](https://nixos.org/explore/#nix-flakes)
+- **Local-first, plain files.** Every note is a Markdown file in a `.cerbo/`
+  directory you can commit, sync and grep. No cloud, no database lock-in.
+- **Stable links.** Pages link with `cerbo://<uuid>`; renaming never breaks a
+  link. Backlinks come from a local index, not from files in the vault.
+- **Semantic annotations.** `[Bob]{schema:Person}` marks what a page mentions,
+  using schema.org and any ontology you import.
+- **SPARQL.** Read-only queries over the vault's knowledge graph, from the CLI
+  or the desktop console.
+- **Search by meaning.** `cerbo search` and `cerbo similar` find related notes
+  across languages with a local embedding model; text never leaves your machine.
+- **Desktop and CLI.** A Tauri + Svelte editor with backlinks, similar notes
+  and keyboard-driven navigation, and a scriptable CLI with `--json` output.
+- **Multiple vaults.** Isolated knowledge bases anywhere on disk, found
+  Git-style from the current directory.
 
-## Getting Started
-
-This project uses [Nix Flakes](https://nixos.org/explore/#nix-flakes) to manage the development environment, including
-Rust, Bun, and build dependencies.
-
-### 1. Enter the Environment
-
-You can enter the development shell using:
+## Quick start
 
 ```bash
-nix develop
+nix develop                        # dev shell with Rust, Bun, Tauri (or `direnv allow`)
+nix build .#cerbo-desktop          # desktop app  -> result/bin/cerbo-desktop
+nix build .#cerbo                  # CLI          -> result/bin/cerbo
 ```
-
-Alternatively, if you have [direnv](https://direnv.net/) installed, just run `direnv allow` and the environment will be automatically loaded when you enter the directory.
-
-### 2. Run Development Tasks
-
-All development commands (bun, cargo) should be run inside the Nix development shell:
 
 ```bash
-bun run tauri dev          # Start Tauri app with hot reload
-cargo check                # Run Rust workspace type checks
-cargo test -p cerbo-core   # Run core logic tests (use --test-threads=1 for isolation)
+cerbo init                         # turn the current directory into a vault
+cerbo page create "My first page"  # prints the page's UUID
+cerbo sparql 'SELECT ?t WHERE { ?p schema:name ?t }'
 ```
 
-### 3. Build for Production
-
-Use `nix build` to build the components:
-
-```bash
-nix build .#cerbo-desktop  # Build Desktop App
-nix build .#cerbo          # Build CLI Binary
-```
-
-### 4. End-to-End Tests
-
-The e2e suite drives the built desktop app through `tauri-driver` and
-WebKitWebDriver (both provided by the devshell) with WebdriverIO:
-
-```bash
-nix build .#cerbo-desktop  # Build the app under test (./result)
-bun run test:e2e           # Run e2e/specs; uses xvfb-run when DISPLAY is unset
-```
-
-Each spec file runs with temporary XDG config/cache dirs; specs under
-`e2e/specs/vault/` get a fresh copy of `test-vault/`. Your own vaults and
-settings are never touched. Set `CERBO_DESKTOP_BIN` to test another binary.
-
-## Desktop App
-
-- **Right sidebar**: Backlinks of the open page and, once semantic search is
-  enabled with the panel's **Enable** button, its most similar notes with a
-  score. Enabling downloads the embedding model once (about 490 MB).
-- **Mentions**: `[Berlin]{schema:Place}` renders as a highlighted "Berlin" with
-  its type in a tooltip; an unknown prefix is underlined as unresolved.
-- **SPARQL console**: `Ctrl+Shift+E` runs read-only queries; page IRIs show as
-  titles and open the page. The last query is kept between runs.
-- **Window**: No native frame. Cerbo draws its own title bar (vault · page);
-  drag it to move, double-click to maximize. The only window button is close,
-  which asks for confirmation like `Ctrl+Q`. The window size is restored on
-  start.
-- **Shortcuts**: Press `F1` for the full list.
-
-## Data Storage
-
-- **Configuration**: `$XDG_CONFIG_HOME/cerbo/` (defaults to `~/.config/cerbo/`):
-  `vaults.toml` (registered vault names and paths), `vaults.auto.toml` (vaults
-  found from the current directory) and `ui.toml` (desktop settings).
-- **Cache**: `$XDG_CACHE_HOME/cerbo/` (defaults to `~/.cache/cerbo/`). Stores
-  derived data only, all safe to delete and rebuilt automatically:
-  - `index/` - the per-vault semantic index that answers backlinks, SPARQL
-    queries and semantic search, with the vault's embeddings
-  - `models/` - the pinned embedding model
-- **Vaults**: Each vault has a `.cerbo/` directory containing:
-  - `objects/<uuid>/` - UUID-based object storage. Each `meta.ttl` records the
-    object's class as `rdf:type` with a schema.org class: Product
-    (`schema:NoteDigitalDocument`), Source (`schema:WebPage`), Attachment
-    (`schema:MediaObject`) or Ontology (`schema:DefinedTermSet`)
-  - `trash/<timestamp>-<uuid>/` - Deleted objects, kept until you remove them
-  - `ontology-map.json` - Maps annotation prefixes (e.g., "ex") to namespace IRIs
-    and ontology UUIDs
-
-  Titles resolve by scanning the vault's `meta.ttl` files; there is no lookup
-  index on disk. See [docs/storage.md](docs/storage.md) for the full layout,
-  including the `cerbo/` symlink projection.
-
-## Link Format
-
-Cerbo uses `cerbo://<uuid>` links instead of wikilinks:
-
-```markdown
-Check out [this page](cerbo://123e4567-e89b-12d3-a456-426614174000) for details.
-```
-
-## HackMD Annotations
-
-Cerbo supports HackMD-style semantic annotations:
-
-```markdown
-[Bob]{schema:Person} works at [Acme Corp]{schema:Organization}.
-```
-
-These are extracted to `annotations.ttl` in Turtle RDF format, as entities the
-page mentions, using the standard schema.org vocabulary:
-
-```turtle
-<cerbo://objects/<uuid>> schema:mentions _:m0 .
-_:m0 schema:name "Bob" ;
-	a schema:Person ;
-	cerbo:position "1:0" .
-```
-
-The prefixes `schema`, `foaf`, `dcterms`, `skos`, `rdf`, `rdfs`, `owl` and `xsd`
-are built in. Other prefixes are registered per vault with
-`cerbo import-ontology --prefix --namespace`. An annotation with an unknown prefix
-is kept as `cerbo:unresolvedType` and reported as a warning.
-
-## CLI Usage
-
-### Initialize a Vault
-
-Create a new vault in the current directory:
-
-```bash
-cerbo init
-```
-
-This creates a `.cerbo/` directory with the necessary structure and bundles standard ontologies (Schema.org, FOAF).
-
-### Manage Pages
-
-```bash
-# Create a new page
-cerbo page create "My First Page"
-# Output: Created page: 550e8400-e29b-41d4-a716-446655440000
-
-# List all pages
-cerbo page list
-
-# Read a page
-cerbo page read 550e8400-e29b-41d4-a716-446655440000
-
-# Write content to a page
-cerbo page write 550e8400-e29b-41d4-a716-446655440000 "New content"
-
-# Delete a page
-cerbo page delete 550e8400-e29b-41d4-a716-446655440000
-```
-
-### Backlinks
-
-```bash
-# List the pages linking to a page (add --json for a JSON array)
-cerbo page backlinks 550e8400-e29b-41d4-a716-446655440000
-```
-
-Backlinks come from the semantic index in `$XDG_CACHE_HOME/cerbo/index/`. It is
-built on first use and picks up pages changed outside Cerbo before every answer,
-so no `cerbo index` run is needed after a `git pull` or a sync.
-
-### Query with SPARQL
-
-```bash
-cerbo sparql 'SELECT ?title WHERE { ?page schema:name ?title } ORDER BY ?title'
-cerbo sparql 'ASK { ?page schema:mentions ?x . ?x a schema:Place }'
-cerbo sparql --file query.rq --json      # or: echo '<query>' | cerbo sparql -
-```
-
-Queries are read-only. `cerbo:`, `schema:` (schema.org), `rdf:`, `rdfs:`, `xsd:`
-and the other built-in prefixes, plus the vault's own prefixes, need no `PREFIX`
-line. SELECT prints a table, ASK prints `true`/`false`, CONSTRUCT prints Turtle;
-`--json` prints SPARQL Results JSON or JSON-LD.
-
-### Search by Meaning
-
-```bash
-cerbo index --embeddings                       # once per vault: compute embeddings
-cerbo search "поездка в Берлин"                # pages about a trip to Berlin, in any language
-cerbo similar 550e8400-e29b-41d4-a716-446655440000 --limit 5
-cerbo search "museums" --annotated schema:Place --json
-```
-
-Embeddings are computed on this machine with `intfloat/multilingual-e5-small`,
-pinned to one revision and checked by SHA-256. The model (about 490 MB) is
-downloaded on first use into `$XDG_CACHE_HOME/cerbo/models/`; set
-`CERBO_MODEL_DIR` to use a local copy without network access. Pages changed
-since their last embedding are embedded again before each search. Pages whose
-similarity is at least 0.80 are also linked with `cerbo:similarTo` inside the
-index (never in vault files), so SPARQL can query them.
-
-### Rebuild Metadata
-
-The `cerbo index` command rebuilds metadata (annotations) from page content and rebuilds the semantic index. This is useful after:
-- Manually editing `page.md` files outside of Cerbo
-- Bulk imports
-- If backlinks or annotations appear stale or missing
-- To verify metadata integrity after crashes or interruptions
-
-```bash
-# Rebuild all metadata of every registered vault
-cerbo index
-
-# Rebuild metadata for a single page (incremental)
-cerbo index --page 550e8400-e29b-41d4-a716-446655440000
-
-# Index only one vault, by ID (see `cerbo vault list`) or path
-cerbo index --vault /path/to/my/vault
-
-# Also refresh embeddings for semantic search
-cerbo index --embeddings
-
-# Get indexing statistics as JSON
-cerbo index --json
-```
-
-Without `--vault` or `--page`, the index command covers every registered vault, plus the vault around the current directory (found Git-style, by walking up to a `.cerbo/` directory) should it not be registered. `--page` looks for the page in the current vault first, then in the registered vaults; it cannot be combined with `--vault`.
-
-### Build Symlink Tree
-
-The `cerbo symlink` command builds a human-readable directory tree at `<vault-root>/cerbo/` using symlinks into the UUID object store. This lets you browse and navigate your notes by slug name instead of raw UUIDs.
-
-```bash
-# Build (or rebuild) the symlink tree from the current vault
-cerbo symlink
-
-# Build from an explicit vault path
-cerbo symlink --vault /path/to/my/vault
-
-# Get a JSON report of what was created
-cerbo symlink --json
-```
-
-- Symlinks are always **relative** (portable when the vault is moved)
-- Pages without a `cerbo:slug` are skipped — run `cerbo index` first to backfill slugs
-- The tree is rebuilt atomically, so reads always see a consistent state
-- `cerbo init` adds `/cerbo/` to `.gitignore` automatically
-
-Pages can be nested via the `cerbo:virtualPath` metadata field:
-
-```
-cerbo/
-├── my-notes          → .cerbo/objects/<uuid>/
-├── research/
-│   ├── rust-ownership → .cerbo/objects/<uuid>/
-│   └── async-patterns → .cerbo/objects/<uuid>/
-└── projects/
-    └── cerbo          → .cerbo/objects/<uuid>/
-```
-
-### Import Content
-
-```bash
-# Import a webpage as a source object
-cerbo import https://example.com/article
-
-# Import an ontology
-cerbo import-ontology https://schema.org/version/latest/schemaorg-current-https.jsonld
-
-# Import an ontology and register its annotation prefix ([Bob]{ex:Person})
-cerbo import-ontology https://example.org/vocab.ttl --prefix ex --namespace https://example.org/vocab#
-```
-
-### Vault Management
-
-```bash
-# List all registered vaults
-cerbo vault list
-
-# Add a vault
-cerbo vault add "Work Notes" /path/to/work/vault
-
-# Remove a vault
-cerbo vault remove <vault-id>
-
-# Set active vault
-cerbo vault active <vault-id>
-```
-
-### Utilities
-
-```bash
-# Resolve UUID to filesystem path
-cerbo resolve 550e8400-e29b-41d4-a716-446655440000
-
-# Show configuration
-cerbo info
-```
+Prebuilt Linux releases are on the
+[Releases](https://github.com/antono/cerbo/releases) page.
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/development.md](docs/development.md) | Dev environment, building, tests, releases, repository layout |
+| [docs/cli.md](docs/cli.md) | The `cerbo` command line, with the full reference in [`man cerbo`](cli/man/cerbo.md) |
+| [docs/desktop.md](docs/desktop.md) | The desktop app: panels, SPARQL console, window, shortcuts |
+| [docs/links-and-annotations.md](docs/links-and-annotations.md) | `cerbo://` links and `[Text]{prefix:Type}` annotations |
+| [docs/storage.md](docs/storage.md) | What is on disk: the vault store, file formats, cache, config, older formats |
+
+The index of all pages is [docs/README.md](docs/README.md). Feature designs
+live in [openspec/](openspec/).
+
+## Tech stack
+
+Rust workspace (`core` library, `cli`, `src-tauri` desktop) ·
+[Svelte 5](https://svelte.dev/) + [Carta](https://github.com/BearToCode/carta) +
+Tailwind CSS · [Bun](https://bun.sh/) · [Nix Flakes](https://nixos.org/explore/#nix-flakes) ·
+[Oxigraph](https://github.com/oxigraph/oxigraph) for the RDF store.
 
 ## License
 
