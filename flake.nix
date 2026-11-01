@@ -27,7 +27,7 @@
         inherit (deps) tauri-deps dev-deps;
 
         cerbo-pkgs = import ./nix/pkgs.nix { inherit pkgs tauri-deps; };
-        inherit (cerbo-pkgs) cerbo cerbo-frontend cerbo-desktop;
+        inherit (cerbo-pkgs) cerbo cerbo-frontend cerbo-desktop tauri-driver;
 
         src = builtins.path { path = ./.; name = "cerbo-src"; };
         releaseWorkflowCheck = pkgs.writeShellApplication {
@@ -41,7 +41,7 @@
       {
         packages = {
           default = cerbo;
-          inherit cerbo cerbo-frontend cerbo-desktop;
+          inherit cerbo cerbo-frontend cerbo-desktop tauri-driver;
           release-workflow-check = releaseWorkflowCheck;
         };
 
@@ -66,7 +66,7 @@
         };
 
         devShells.default = import ./nix/devshell.nix {
-          inherit pkgs tauri-deps dev-deps;
+          inherit pkgs tauri-deps dev-deps tauri-driver;
         };
       }
     );

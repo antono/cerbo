@@ -1,0 +1,97 @@
+name: E2E
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      # Same closure-archive cache as release.yml, under its own key: this
+      # devshell also carries tauri-driver, which is built from source.
+      - name: Restore Nix closure cache
+        id: nix-closure-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .tmp/nix-closure.tar.zst
+          key: ${{ runner.os }}-e2e-nix-closure-${{ hashFiles('flake.lock', 'nix/*.nix') }}
+
+      - name: Import cached Nix closure
+        if: steps.nix-closure-cache.outputs.cache-hit == 'true'
+        run: zstd -d --stdout .tmp/nix-closure.tar.zst | nix-store --import
+
+      - name: Build Nix devshell
+        id: devshell
+        run: |
+          DEVSHELL_PATH=$(nix build .#devShells.x86_64-linux.default --no-link --print-out-paths)
+          echo "path=$DEVSHELL_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Export Nix closure archive (cache miss)
+        if: steps.nix-closure-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp
+          nix-store --query --requisites "${{ steps.devshell.outputs.path }}" \
+            | sort -u > .tmp/nix-closure-paths.txt
+          xargs nix-store --export < .tmp/nix-closure-paths.txt \
+            | zstd -1 -T0 -o .tmp/nix-closure.tar.zst
+
+      - name: Save Nix closure cache
+        if: steps.nix-closure-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .tmp/nix-closure.tar.zst
+          key: ${{ steps.nix-closure-cache.outputs.cache-primary-key }}
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-e2e-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-e2e-cargo-
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache/
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      # Built with cargo inside the devshell (as release.yml does) rather than
+      # `nix build .#cerbo-desktop`, so target/ is cached between runs and the
+      # workspace test suite is not rerun here.
+      - name: Build desktop app
+        run: |
+          nix develop --command bash -euo pipefail <<'BASH'
+          bun install --frozen-lockfile
+          bun run tauri build --no-bundle
+          BASH
+
+      - name: Run e2e tests
+        env:
+          CERBO_DESKTOP_BIN: target/release/cerbo-desktop
+        run: |
+          nix develop --command bash -euo pipefail <<'BASH'
+          unset DISPLAY
+          bun run test:e2e
+          BASH

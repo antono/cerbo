@@ -17,7 +17,10 @@ first-class citizen. It stores all knowledge as plain files you fully own, with
   (no backlink files in the vault) and HackMD-style annotations
   (`[Text]{prefix:Type}` → `annotations.ttl`).
 - **SPARQL**: Read-only SPARQL queries over a vault's knowledge graph with
-  `cerbo sparql`.
+  `cerbo sparql` or the desktop SPARQL console.
+- **Search by Meaning**: `cerbo search` and `cerbo similar` find related notes
+  across languages with a local embedding model; page text never leaves your
+  machine.
 - **Multiple Vaults**: Manage multiple isolated knowledge bases (vaults)
   anywhere on your disk.
 - **XDG Compliant**: App configuration and caches follow the XDG Base Directory
@@ -65,14 +68,45 @@ nix build .#cerbo-desktop  # Build Desktop App
 nix build .#cerbo          # Build CLI Binary
 ```
 
+### 4. End-to-End Tests
+
+The e2e suite drives the built desktop app through `tauri-driver` and
+WebKitWebDriver (both provided by the devshell) with WebdriverIO:
+
+```bash
+nix build .#cerbo-desktop  # Build the app under test (./result)
+bun run test:e2e           # Run e2e/specs; uses xvfb-run when DISPLAY is unset
+```
+
+Each spec file runs with temporary XDG config/cache dirs; specs under
+`e2e/specs/vault/` get a fresh copy of `test-vault/`. Your own vaults and
+settings are never touched. Set `CERBO_DESKTOP_BIN` to test another binary.
+
+## Desktop App
+
+- **Right sidebar**: Backlinks of the open page and, once semantic search is
+  enabled with the panel's **Enable** button, its most similar notes with a
+  score. Enabling downloads the embedding model once (about 490 MB).
+- **Mentions**: `[Berlin]{schema:Place}` renders as a highlighted "Berlin" with
+  its type in a tooltip; an unknown prefix is underlined as unresolved.
+- **SPARQL console**: `Ctrl+Shift+E` runs read-only queries; page IRIs show as
+  titles and open the page. The last query is kept between runs.
+- **Window**: No native frame. Cerbo draws its own title bar (vault · page);
+  drag it to move, double-click to maximize. The only window button is close,
+  which asks for confirmation like `Ctrl+Q`. The window size is restored on
+  start.
+- **Shortcuts**: Press `F1` for the full list.
+
 ## Data Storage
 
-- **Configuration**: `$XDG_CONFIG_HOME/cerbo/vaults.json` (defaults to
-  `~/.config/cerbo/`). Stores only vault names and paths.
+- **Configuration**: `$XDG_CONFIG_HOME/cerbo/` (defaults to `~/.config/cerbo/`):
+  `vaults.toml` (registered vault names and paths), `vaults.auto.toml` (vaults
+  found from the current directory) and `ui.toml` (desktop settings).
 - **Cache**: `$XDG_CACHE_HOME/cerbo/` (defaults to `~/.cache/cerbo/`). Stores
-  derived data, such as the per-vault semantic index in `index/` that answers
-  backlinks and SPARQL queries. It is rebuilt automatically and is safe to
-  delete.
+  derived data only, all safe to delete and rebuilt automatically:
+  - `index/` - the per-vault semantic index that answers backlinks, SPARQL
+    queries and semantic search, with the vault's embeddings
+  - `models/` - the pinned embedding model
 - **Vaults**: Each vault has a `.cerbo/` directory containing:
   - `objects/<uuid>/` - UUID-based object storage. Each `meta.ttl` records the
     object's class as `rdf:type` with a schema.org class: Product
@@ -116,31 +150,6 @@ The prefixes `schema`, `foaf`, `dcterms`, `skos`, `rdf`, `rdfs`, `owl` and `xsd`
 are built in. Other prefixes are registered per vault with
 `cerbo import-ontology --prefix --namespace`. An annotation with an unknown prefix
 is kept as `cerbo:unresolvedType` and reported as a warning.
-
-## Upgrading the RDF Vocabulary
-
-Older Cerbo builds wrote metadata with Cerbo's private terms (`cerbo:type`,
-`cerbo:title`, `schema:` bound to `cerbo://ontology/schema/`). These files are
-still read, and every save writes the standard schema.org terms. To rewrite a
-whole vault at once:
-
-```bash
-cerbo migrate vocabulary --dry-run   # show what would change
-cerbo migrate vocabulary             # rewrite every registered vault
-```
-
-**Upgrade Cerbo on every device that syncs the vault first:** older builds cannot
-read migrated files.
-
-## Migration from Slug-Based Storage
-
-Cerbo uses UUID-based storage (`.cerbo/objects/<uuid>/`). This is a **breaking change**
-from the previous slug-based model: old slug-based vaults are not compatible. Create a new
-vault and move your content across by hand, then build the derived data with:
-
-```bash
-cerbo index
-```
 
 ## CLI Usage
 
@@ -198,16 +207,30 @@ and the other built-in prefixes, plus the vault's own prefixes, need no `PREFIX`
 line. SELECT prints a table, ASK prints `true`/`false`, CONSTRUCT prints Turtle;
 `--json` prints SPARQL Results JSON or JSON-LD.
 
+### Search by Meaning
+
+```bash
+cerbo index --embeddings                       # once per vault: compute embeddings
+cerbo search "поездка в Берлин"                # pages about a trip to Berlin, in any language
+cerbo similar 550e8400-e29b-41d4-a716-446655440000 --limit 5
+cerbo search "museums" --annotated schema:Place --json
+```
+
+Embeddings are computed on this machine with `intfloat/multilingual-e5-small`,
+pinned to one revision and checked by SHA-256. The model (about 490 MB) is
+downloaded on first use into `$XDG_CACHE_HOME/cerbo/models/`; set
+`CERBO_MODEL_DIR` to use a local copy without network access. Pages changed
+since their last embedding are embedded again before each search. Pages whose
+similarity is at least 0.80 are also linked with `cerbo:similarTo` inside the
+index (never in vault files), so SPARQL can query them.
+
 ### Rebuild Metadata
 
-The `cerbo index` command rebuilds metadata (annotations) from page content and rebuilds the semantic index. It also deletes the `backrefs.ttl` files older Cerbo builds left in the vault and reports how many. This is useful after:
+The `cerbo index` command rebuilds metadata (annotations) from page content and rebuilds the semantic index. This is useful after:
 - Manually editing `page.md` files outside of Cerbo
-- Bulk imports or vault migrations
+- Bulk imports
 - If backlinks or annotations appear stale or missing
 - To verify metadata integrity after crashes or interruptions
-
-**Upgrade Cerbo on every device that syncs the vault:** older builds still write
-and read `backrefs.ttl` and will not see backlinks without them.
 
 ```bash
 # Rebuild all metadata of every registered vault
@@ -218,6 +241,9 @@ cerbo index --page 550e8400-e29b-41d4-a716-446655440000
 
 # Index only one vault, by ID (see `cerbo vault list`) or path
 cerbo index --vault /path/to/my/vault
+
+# Also refresh embeddings for semantic search
+cerbo index --embeddings
 
 # Get indexing statistics as JSON
 cerbo index --json

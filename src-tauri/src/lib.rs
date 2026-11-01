@@ -22,6 +22,12 @@ impl Default for ActiveVaultState {
     }
 }
 
+/// The shared app lock, held for the app's whole life so that no automatic
+/// vault rewrite (`cerbo migrate vocabulary`, the CLI's migration before a
+/// write) runs while this app may be saving files. `None` when the lock could
+/// not be taken; the app still runs.
+pub struct AppPresence(#[allow(dead_code)] Option<cerbo_core::app_lock::AppLock>);
+
 pub fn get_context(_app: &tauri::AppHandle) -> Result<CerboContext, String> {
     let core = CoreContext::new()?;
     let ctx = CerboContext {
@@ -123,6 +129,11 @@ pub fn run() {
         .manage(ActiveVaultState::default())
         .manage(IndexGate::default())
         .setup(|app| {
+            let presence = CoreContext::new()
+                .and_then(|core| cerbo_core::app_lock::AppLock::shared(&core.cache_dir))
+                .inspect_err(|e| eprintln!("Warning: could not take the app lock: {e}"))
+                .ok();
+            app.manage(AppPresence(presence));
             // A missing or unreadable size only means the default one.
             if let Err(e) = window::restore_size(app.handle()) {
                 eprintln!("Warning: could not restore the window size: {e}");

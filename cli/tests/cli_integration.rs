@@ -1413,6 +1413,329 @@ fn test_migrate_vocabulary_json_summary() {
     assert_eq!(summary["errors"], 0);
 }
 
+// ── automatic vocabulary migration ────────────────────────────────────────────
+
+const OLD_FORMAT_WARNING: &str = "use the old metadata format; migrating them to schema.org";
+const OLD_FORMAT_DEFERRED: &str =
+    "use the old metadata format; not migrating them while Cerbo desktop or another migration is running";
+
+fn meta_of(root: &Path, uuid: &str) -> String {
+    std::fs::read_to_string(root.join(".cerbo/objects").join(uuid).join("meta.ttl")).unwrap()
+}
+
+/// `cerbo page list --json` run from inside `root`: a command that only reads.
+fn page_list_in(ctx: &TestContext, root: &Path) -> std::process::Output {
+    ctx.cmd().args(["page", "list", "--json"]).current_dir(root).output().unwrap()
+}
+
+/// `cerbo page create <title> --json` run from inside `root`: a command that writes.
+fn page_create_in(ctx: &TestContext, root: &Path, title: &str) -> std::process::Output {
+    ctx.cmd().args(["page", "create", title, "--json"]).current_dir(root).output().unwrap()
+}
+
+fn stdout_json(output: &std::process::Output) -> serde_json::Value {
+    serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {}", String::from_utf8_lossy(&output.stdout)))
+}
+
+/// The app lock a running Cerbo desktop holds, in the test's cache directory.
+fn running_desktop_app(ctx: &TestContext) -> cerbo_core::app_lock::AppLock {
+    cerbo_core::app_lock::AppLock::shared(&ctx.xdg_dir.path().join("cache").join("cerbo")).unwrap()
+}
+
+#[test]
+fn test_a_read_only_command_migrates_the_old_format_too() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    legacy_vault(&ctx, root, "Legacy");
+
+    let output = page_list_in(&ctx, root);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(&format!("Warning: 1 objects in vault \"Legacy\" {OLD_FORMAT_WARNING}")), "{stderr}");
+    assert!(stderr.contains("Migrated vault"), "{stderr}");
+    // stdout holds only the command's own JSON.
+    let pages = stdout_json(&output);
+    assert_eq!(pages[0]["uuid"], MIGRATE_PAGE, "{pages}");
+    assert_eq!(pages[0]["title"], "Index", "{pages}");
+    assert!(meta_of(root, MIGRATE_PAGE).contains("schema:NoteDigitalDocument"));
+
+    // Once migrated, the next run is silent.
+    let output = page_list_in(&ctx, root);
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("old metadata format"));
+}
+
+#[test]
+fn test_a_writing_command_migrates_the_old_format_and_warns_on_stderr() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    legacy_vault(&ctx, root, "Legacy");
+
+    let output = page_create_in(&ctx, root, "New");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!("Warning: 1 objects in vault \"Legacy\" {OLD_FORMAT_WARNING}")),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Migrated vault \"Legacy\": rewrote 2 files, 0 errors"), "{stderr}");
+    assert!(stdout_json(&output)["uuid"].is_string());
+
+    let meta = meta_of(root, MIGRATE_PAGE);
+    assert!(meta.contains("a schema:NoteDigitalDocument"), "{meta}");
+    assert!(!meta.contains("cerbo:title"), "{meta}");
+    let annotations =
+        std::fs::read_to_string(root.join(".cerbo/objects").join(MIGRATE_PAGE).join("annotations.ttl")).unwrap();
+    assert!(annotations.contains("schema:mentions"), "{annotations}");
+
+    // Now current: no warning from any command.
+    for output in [page_list_in(&ctx, root), page_create_in(&ctx, root, "Another")] {
+        assert!(output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("old metadata format"));
+    }
+}
+
+#[test]
+fn test_migration_warnings_are_printed_by_the_automatic_migration() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    legacy_vault(&ctx, root, "Legacy");
+    put_object_file(root, MIGRATE_PAGE, "page.md", "[Bob]{nope:Person}\n");
+
+    let output = page_create_in(&ctx, root, "New");
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Warning: page") && stderr.contains("unknown prefix 'nope'"), "{stderr}");
+    assert!(stderr.contains("kept as cerbo:unresolvedType"), "{stderr}");
+}
+
+#[test]
+fn test_a_running_desktop_app_defers_the_migration() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    legacy_vault(&ctx, root, "Legacy");
+    let before = snapshot(&root.join(".cerbo"));
+    let app = running_desktop_app(&ctx);
+
+    let legacy_object = root.join(".cerbo/objects").join(MIGRATE_PAGE);
+    let untouched = |what: &str| {
+        let now = snapshot(&legacy_object);
+        let then: std::collections::BTreeMap<_, _> =
+            before.iter().filter(|(p, _)| p.starts_with(&legacy_object)).map(|(p, v)| (p.clone(), v.clone())).collect();
+        assert_eq!(now, then, "{what} rewrote a file under the running app");
+    };
+
+    let output = page_create_in(&ctx, root, "While the app runs");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(&format!("1 objects in vault \"Legacy\" {OLD_FORMAT_DEFERRED}")), "{stderr}");
+    assert!(!stderr.contains("Migrated vault"), "{stderr}");
+    stdout_json(&output);
+    untouched("page create");
+
+    // The launcher's run, while another window is open, also leaves it alone.
+    let output = migrate(&ctx, &["--if-needed", "--json"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(json_summary(&output)["rewritten"], 0);
+
+    // An explicit migration refuses instead of racing the app; a dry run is fine.
+    let output = migrate(&ctx, &[]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Cerbo desktop or another migration is running"));
+    assert!(migrate(&ctx, &["--dry-run"]).status.success());
+    untouched("cerbo migrate vocabulary");
+
+    // Once the app has exited, the next writing command migrates.
+    drop(app);
+    let output = page_create_in(&ctx, root, "After");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Migrated vault \"Legacy\""));
+    assert!(meta_of(root, MIGRATE_PAGE).contains("schema:NoteDigitalDocument"));
+}
+
+#[test]
+fn test_a_current_vault_gets_no_warning() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    ctx.cmd().arg("init").current_dir(root).output().unwrap();
+    let uuid = create_page_in(&ctx, root, "Current");
+
+    let output = ctx.cmd().args(["page", "read", &uuid]).current_dir(root).output().unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("old metadata format") && !stderr.contains("Migrated vault"), "{stderr}");
+}
+
+fn create_page_in(ctx: &TestContext, root: &Path, title: &str) -> String {
+    let output = page_create_in(ctx, root, title);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    stdout_json(&output)["uuid"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn test_a_legacy_file_synced_in_later_is_found_by_the_next_command() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    legacy_vault(&ctx, root, "Legacy");
+    assert!(page_create_in(&ctx, root, "First").status.success());
+    assert!(meta_of(root, MIGRATE_PAGE).contains("schema:NoteDigitalDocument"));
+
+    // An old Cerbo on another device saves the page and a new one; sync
+    // delivers both after this vault was already migrated.
+    put_object_file(root, MIGRATE_PAGE, "meta.ttl", &legacy_meta(MIGRATE_PAGE, "Index again"));
+    let other = "00000000-0000-4000-8000-000000000137";
+    put_object_file(root, other, "meta.ttl", &legacy_meta(other, "From the old laptop"));
+
+    // `cerbo index` writes: it migrates both before the index reads the vault.
+    let output = ctx.cmd()
+        .args(["index", "--json"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(&format!("2 objects in vault \"Legacy\" {OLD_FORMAT_WARNING}")), "{stderr}");
+    let migrated_at = stderr.find("Migrated vault").expect("migration reported");
+    if let Some(built_at) = stderr.find("Building the semantic index") {
+        assert!(migrated_at < built_at, "{stderr}");
+    }
+    stdout_json(&output);
+    for uuid in [MIGRATE_PAGE, other] {
+        let meta = meta_of(root, uuid);
+        assert!(meta.contains("schema:NoteDigitalDocument") && !meta.contains("cerbo:title"), "{meta}");
+    }
+}
+
+#[test]
+fn test_index_json_stdout_stays_json_while_migrating() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    legacy_vault(&ctx, root, "Legacy");
+
+    let output = ctx.cmd()
+        .args(["index", "--vault", root.to_str().unwrap(), "--json"])
+        .current_dir(ctx.xdg_dir.path())
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8_lossy(&output.stderr).contains(OLD_FORMAT_WARNING));
+    let summary = stdout_json(&output);
+    assert_eq!(summary["pages_processed"], 1, "{summary}");
+    assert!(meta_of(root, MIGRATE_PAGE).contains("schema:NoteDigitalDocument"));
+}
+
+#[test]
+fn test_migrate_vocabulary_dry_run_does_not_auto_migrate() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    legacy_vault(&ctx, root, "Legacy");
+    let before = snapshot(&root.join(".cerbo"));
+
+    // From inside the vault too, where a writing command would migrate it.
+    let output = ctx.cmd()
+        .args(["migrate", "vocabulary", "--dry-run"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(OLD_FORMAT_WARNING));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Would rewrite 2 files"));
+    assert_eq!(snapshot(&root.join(".cerbo")), before, "a dry run modified .cerbo/");
+}
+
+#[test]
+fn test_migrate_vocabulary_if_needed() {
+    let ctx = setup();
+    let first = ctx.tmp_dir.path().join("first");
+    let second = ctx.tmp_dir.path().join("second");
+    legacy_vault(&ctx, &first, "First");
+    legacy_vault(&ctx, &second, "Second");
+
+    let output = migrate(&ctx, &["--if-needed", "--json"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let summary = json_summary(&output);
+    assert_eq!((summary["scanned"].as_u64(), summary["rewritten"].as_u64()), (Some(2), Some(4)), "{summary}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("vault \"First\"") && stderr.contains("vault \"Second\""), "{stderr}");
+
+    // Nothing left: no output at all without --json.
+    let output = migrate(&ctx, &["--if-needed"]);
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty(), "{}", String::from_utf8_lossy(&output.stdout));
+    assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
+
+    let output = migrate(&ctx, &["--if-needed", "--dry-run"]);
+    assert!(!output.status.success(), "--if-needed and --dry-run conflict");
+}
+
+#[test]
+fn test_migrate_if_needed_from_inside_an_unregistered_vault_leaves_it_alone() {
+    let ctx = setup();
+    let registered = ctx.tmp_dir.path().join("registered");
+    legacy_vault(&ctx, &registered, "Registered");
+    // A colleague's checkout the desktop app happens to be started from.
+    let elsewhere = ctx.tmp_dir.path().join("elsewhere");
+    std::fs::create_dir_all(elsewhere.join(".cerbo/objects")).unwrap();
+    put_object_file(&elsewhere, MIGRATE_PAGE, "meta.ttl", &legacy_meta(MIGRATE_PAGE, "Not mine"));
+    let subdir = elsewhere.join("notes");
+    std::fs::create_dir_all(&subdir).unwrap();
+    let before = snapshot(&elsewhere.join(".cerbo"));
+
+    let output = ctx.cmd()
+        .args(["migrate", "vocabulary", "--if-needed", "--json"])
+        .current_dir(&subdir)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(json_summary(&output)["scanned"], 1, "only the registered vault");
+    assert_eq!(snapshot(&elsewhere.join(".cerbo")), before, "the unregistered vault was rewritten");
+    let output = ctx.cmd().args(["vault", "list", "--json"]).current_dir(ctx.xdg_dir.path()).output().unwrap();
+    let vaults = stdout_json(&output);
+    let paths: Vec<&str> = vaults.as_array().unwrap().iter().map(|v| v["path"].as_str().unwrap()).collect();
+    assert_eq!(paths, [registered.to_str().unwrap()], "the current directory's vault was registered");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_a_failing_migration_does_not_block_the_command() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    legacy_vault(&ctx, root, "Legacy");
+    // The object directory cannot take the migrated files.
+    let dir = root.join(".cerbo/objects").join(MIGRATE_PAGE);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    if std::fs::write(dir.join("probe"), "").is_ok() {
+        // Running as root: permissions do not stop writes, nothing to test.
+        let _ = std::fs::remove_file(dir.join("probe"));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+
+    let output = page_create_in(&ctx, root, "Still works");
+    let listed = page_list_in(&ctx, root);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains(OLD_FORMAT_WARNING), "{stderr}");
+    // The failed object and the reason are named, not just counted.
+    assert!(stderr.contains(&format!("Warning: could not migrate object {MIGRATE_PAGE}: failed to write")), "{stderr}");
+    assert!(stderr.contains("rewrote 0 files, 1 errors"), "{stderr}");
+    assert!(!stderr.contains("--dry-run"), "{stderr}");
+    assert!(stdout_json(&output)["uuid"].is_string());
+    let pages = stdout_json(&listed);
+    let titles: Vec<&str> = pages.as_array().unwrap().iter().map(|p| p["title"].as_str().unwrap()).collect();
+    assert!(titles.contains(&"Index"), "the old format is still read: {pages}");
+    assert!(meta_of(root, MIGRATE_PAGE).contains("cerbo:title"), "the file was left as it was");
+}
+
 #[test]
 fn page_write_refreshes_annotations_without_an_index_run() {
     let ctx = setup();

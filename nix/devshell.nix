@@ -1,10 +1,12 @@
-{ pkgs, tauri-deps, dev-deps }:
+{ pkgs, tauri-deps, dev-deps, tauri-driver }:
 let
   gtk3 = pkgs.gtk3;
   gschema = pkgs.gsettings-desktop-schemas;
 in
 pkgs.mkShell {
-  buildInputs = tauri-deps ++ dev-deps ++ [ gtk3 pkgs.gtk4 gschema pkgs.adwaita-icon-theme pkgs.glib pkgs.mandown ];
+  buildInputs = tauri-deps ++ dev-deps ++ [ gtk3 pkgs.gtk4 gschema pkgs.adwaita-icon-theme pkgs.glib pkgs.mandown ]
+    # e2e: webkitgtk_4_1 (in tauri-deps) ships WebKitWebDriver matching the app.
+    ++ [ tauri-driver pkgs.xvfb-run ];
   # oxigraph builds its bundled RocksDB through bindgen, which needs libclang.
   nativeBuildInputs = [ pkgs.rustPlatform.bindgenHook ];
 
@@ -26,5 +28,6 @@ pkgs.mkShell {
     GDK_BACKEND = "x11";
     # fastembed loads ONNX Runtime at run time (ort `load-dynamic`).
     ORT_DYLIB_PATH = "${pkgs.onnxruntime}/lib/libonnxruntime.so";
+    WEBKIT_WEBDRIVER = "${pkgs.webkitgtk_4_1}/bin/WebKitWebDriver";
   };
 }

@@ -81,6 +81,7 @@ pub mod config;
 pub mod context;
 pub mod fsio;
 pub mod annotations;
+pub mod app_lock;
 pub mod metadata_index;
 pub mod links;
 pub mod migration;
@@ -95,6 +96,7 @@ pub mod state;
 pub mod ui_settings;
 pub mod vault;
 pub mod vault_symlink;
+pub mod vocabulary_check;
 pub mod vocabulary_migration;
 
 #[cfg(any(test, feature = "test-utils"))]

@@ -16,7 +16,7 @@
 
 mod backlinks;
 mod embed;
-mod fingerprints;
+pub(crate) mod fingerprints;
 mod graph;
 mod lock;
 pub mod model;

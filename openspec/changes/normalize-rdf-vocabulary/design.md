@@ -102,6 +102,17 @@ Detecting the namespace from a fetched page is unreliable: the current import fe
 
 The serializer declares `rdf:`, `schema:` (`https://schema.org/`), `cerbo:` and `xsd:`, so the common case reads as `a schema:NoteDigitalDocument`. Annotation types from other namespaces are written as full IRIs. A per-file prefix list derived from the map is not worth the churn.
 
+### D8. Automatic migration: cached check before every command
+
+Asking users to run `cerbo migrate vocabulary` once is not enough: an old Cerbo on another device keeps writing the legacy form into a synced vault. So the CLI checks before every command that works on a vault, and the desktop launcher runs `cerbo migrate vocabulary --if-needed` before every start. Every command that works on a vault warns and migrates first, reads included (the user's choice). The app lock below keeps this from racing the desktop app's saves.
+
+- **Same verdict as the migration.** The check calls the migration's own `plan_object`; an object is legacy exactly when the migration would rewrite one of its files. Only those objects are migrated (`migrate_objects`), so a newly synced file does not cost a full rewrite pass.
+- **Cheap when nothing changed.** A per-vault table in the user cache (`vocabulary/<vault key>-<rules stamp>`, the semantic index's key and binary fingerprint format) holds `(mtime_ns, size)` of `meta.ttl`, `annotations.ttl` and `page.md` of every object found current. Each check stats every object (8 threads above 1024 objects, as the index catch-up) and reads only objects whose stamp changed. Files are stamped before they are read, so a file changed in between is re-read next time. Unreadable objects are not cached: the migration cannot fix them either, and caching an I/O error could hide a legacy file once it becomes readable. The rules stamp hashes the Cerbo version, the legacy alias tables and a manual `RULES_REVISION` (bumped when `plan_object` or the writers change), so a build with other rules never trusts another build's "current" verdicts; it re-reads every object once and deletes the stale table.
+- **Never in the way.** Nothing is written into the vault by the check; the cache is rewritten only when it changed, and failing to write it is a warning. Every message goes to stderr, so `--json` output is unchanged. A failed migration is a warning: readers understand the legacy form anyway.
+- **Never under a running app.** The desktop app holds `$XDG_CACHE_HOME/cerbo/desktop.lock` shared (`flock`) for its whole life; every migration takes it exclusively without waiting. When it cannot, the automatic migration only warns and `cerbo migrate vocabulary` fails, so no rewrite races the app's own saves. A second launch while the app runs therefore migrates nothing. Independently, each file is rewritten only if its content still equals what the plan was made from, which narrows the window against other writers (another CLI process) to the atomic rename itself.
+- **Order.** The migration runs after the command has resolved its vault and before the semantic index catch-up, so the index reads the migrated files once instead of the legacy ones and then again.
+- **Desktop launcher.** The GApps wrapper is a binary wrapper (no `--run`), so it moves to `libexec/` and a shell script in `bin/` runs the migration (`>&2 || true`) and `exec -a "$0"`s it, keeping the program name the `.desktop` entry matches. The app itself does not migrate. `cerbo migrate` never auto-registers the vault in the current directory, so starting the app from inside some checkout does not register or rewrite it. The package's `installCheckPhase` checks the generated launcher (order, `|| true`, `exec -a`, the GApps wrapper in `libexec/`) and runs it with stand-ins for both programs.
+
 ## Risks / Trade-offs
 
 - [Mixed-version sync: an older Cerbo on another device reads a migrated `meta.ttl` and does not find `cerbo:type`] → Note it in the release notes and the man page: upgrade every device before migrating. Old builds are not changed.
@@ -114,6 +125,6 @@ The serializer declares `rdf:`, `schema:` (`https://schema.org/`), `cerbo:` and 
 ## Migration Plan
 
 1. Ship the tolerant reader and the new writer. Any saved object is upgraded naturally.
-2. Users run `cerbo migrate vocabulary --dry-run`, then `cerbo migrate vocabulary`, once per machine set (the files sync).
+2. Users run `cerbo migrate vocabulary --dry-run`, then `cerbo migrate vocabulary`, once per machine set (the files sync). Since D8 this happens by itself on the first command or desktop start after the upgrade; running it by hand remains possible.
 3. `test-vault` is migrated in the same commit as the implementation.
 4. Rollback: an older build cannot read migrated files. Restore from git or sync history. The `--dry-run` step and the release note warn about this.
