@@ -24,7 +24,7 @@ See proposal.md - Why. Relevant current state:
 - Driver stack pinned through Nix so it matches the app's webkit.
 
 **Non-Goals:**
-- macOS/Windows drivers, CI workflow, Playwright, coverage of features beyond
+- macOS/Windows drivers, Playwright, coverage of features beyond
   the smoke scenarios.
 
 ## Decisions
@@ -87,6 +87,22 @@ from `nix build .#cerbo-desktop`; it fails fast if the file is missing.
 `test:e2e` wraps WebdriverIO in `xvfb-run -a` when `DISPLAY` is unset; with a
 display it runs directly so developers can watch.
 
+### CI: separate `e2e.yml`, app built with cargo in the devshell
+
+A dedicated workflow on `push` to `main`, `pull_request` and manual dispatch;
+`release.yml` stays a manual release pipeline. It reuses release.yml's
+patterns: Determinate Nix installer, devshell closure archived in
+`actions/cache` (own key, since this devshell also builds `tauri-driver`),
+cargo `target/` cache. The app is built with `bun run tauri build --no-bundle`
+and passed via `CERBO_DESKTOP_BIN=target/release/cerbo-desktop`.
+
+- Alternative: `nix build .#cerbo-desktop` tests the exact Nix package but has
+  no incremental cache without a binary cache (Cachix) and reruns the whole
+  workspace test suite on every PR. Revisit if a binary cache is added.
+- The cargo binary relies on the devshell environment (`ORT_DYLIB_PATH`,
+  gsettings schemas, `GDK_BACKEND=x11`); the launcher wrapper inherits it
+  from `tauri-driver`.
+
 ## Risks / Trade-offs
 
 - [The app writes window bounds / settings on exit] → all writes go to the
@@ -99,9 +115,8 @@ display it runs directly so developers can watch.
   specs and harness stay.
 - [Nix build is slow before every run] → the suite does not rebuild; the
   developer builds once and reruns.
+- [CI tests the cargo binary, not the Nix package or its launcher] → the
+  frontend and Rust code are identical; Nix-only wrapping stays covered by
+  the package's own checks.
 
-## Open Questions
-
-- Whether to wire the suite into `release.yml` or a separate CI workflow
-  (deferred, out of scope).
 </content>

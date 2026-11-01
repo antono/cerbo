@@ -20,12 +20,13 @@ WebDriver route of Tauri 2 is the path that will survive the upgrade.
 - Add a smoke suite: app starts with no vaults and shows the empty state; app
   starts with a seeded vault and lists its pages.
 - Add a `bun run test:e2e` entry point that works headless under Xvfb.
+- Run the suite in GitHub Actions on pushes to `main` and on pull requests.
 
 ## Capabilities
 
 ### New Capabilities
 - `desktop-e2e-testing`: how the desktop app is exercised end to end:
-  isolation from user data, headless execution, and the baseline smoke
+  isolation from user data, headless execution, CI, and the baseline smoke
   scenarios that must pass.
 
 ### Modified Capabilities
@@ -34,8 +35,6 @@ WebDriver route of Tauri 2 is the path that will survive the upgrade.
 ## Non-goals
 
 - macOS or Windows e2e runs (no WKWebView driver on macOS; Windows not targeted).
-- CI wiring in GitHub Actions; this change makes the suite runnable locally
-  and headless, CI comes later.
 - Broad feature coverage beyond the smoke scenarios.
 - Playwright or mocked-IPC browser tests.
 
@@ -46,5 +45,6 @@ WebDriver route of Tauri 2 is the path that will survive the upgrade.
   `nix/bun.nix` regenerated.
 - `nix/pkgs.nix`, `nix/devshell.nix`, `flake.nix`: `tauri-driver` package and
   devshell tools.
+- `.github/workflows/e2e.yml`: new CI workflow.
 - No change to app runtime code or to release builds.
 </content>

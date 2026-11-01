@@ -18,8 +18,12 @@
 - [x] 3.2 Add `e2e/specs/vault/vault-open.e2e.ts`: seeded fixture vault → it is the active vault and its "Index" page is listed in the sidebar; verify it passes
 - [x] 3.3 Document running e2e tests in `README.md` (build, run, headless, env overrides); verify the documented commands run as written
 
+## 4. CI
+
+- [x] 4.1 Add `.github/workflows/e2e.yml` (push to main, pull_request, dispatch) that builds the app with `bun run tauri build --no-bundle` and runs `bun run test:e2e` headless; verify `actionlint` passes
+- [ ] 4.2 Verify the workflow passes on GitHub for a pull request
+
 ## Workflow follow-up
 
-- Wire the suite into CI in a separate change.
 - Archive this change after review.
 </content>

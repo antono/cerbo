@@ -41,6 +41,18 @@ server when needed.
 - **WHEN** the e2e command runs in a session without `DISPLAY`
 - **THEN** the tests run against a virtual display and report results normally
 
+### Requirement: E2E suite runs in CI
+The e2e suite SHALL run automatically for every pull request and every push
+to the main branch, and a failing e2e test SHALL fail that run.
+
+#### Scenario: Pull request runs e2e
+- **WHEN** a pull request is opened or updated
+- **THEN** CI builds the desktop app and runs the e2e suite headless
+
+#### Scenario: Failing test fails CI
+- **WHEN** any e2e test fails in CI
+- **THEN** the CI run is reported as failed
+
 ### Requirement: Smoke scenarios
 The e2e suite SHALL include smoke tests covering first launch without vaults
 and launch with an existing vault.
