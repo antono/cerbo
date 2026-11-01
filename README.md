@@ -135,8 +135,15 @@ is kept as `cerbo:unresolvedType` and reported as a warning.
 
 Older Cerbo builds wrote metadata with Cerbo's private terms (`cerbo:type`,
 `cerbo:title`, `schema:` bound to `cerbo://ontology/schema/`). These files are
-still read, and every save writes the standard schema.org terms. To rewrite a
-whole vault at once:
+still read, and every save writes the standard schema.org terms.
+
+Usually nothing to do by hand: the `cerbo-desktop` launcher migrates every
+registered vault before the app starts. Every `cerbo` command that works on a
+vault warns on stderr when it still holds old-format objects and migrates them
+first. It checks again on every run, so old-format files synced in later from another device are
+found too; an unchanged vault costs only a `stat` per file. Nothing is migrated
+while the desktop app is running, so a migration never overwrites its saves.
+To see or run the migration yourself (with the app closed):
 
 ```bash
 cerbo migrate vocabulary --dry-run   # show what would change

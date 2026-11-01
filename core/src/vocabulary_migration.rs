@@ -57,10 +57,35 @@ pub struct ObjectError {
 /// goes on; only a vault-wide failure (an unreadable object directory or prefix
 /// map) is returned as `Err`.
 pub fn migrate_vocabulary(vault_ctx: &VaultContext, dry_run: bool) -> Result<MigrationReport, String> {
+    let objects = live_objects(&vault_ctx.objects_dir())?;
+    migrate_listed(vault_ctx, objects, dry_run)
+}
+
+/// [`migrate_vocabulary`] restricted to the live objects `uuids`, as the
+/// automatic migration runs it on what [`crate::vocabulary_check`] found. A
+/// UUID whose directory is gone by now is skipped; `scanned` counts the rest.
+pub fn migrate_objects(
+    vault_ctx: &VaultContext,
+    uuids: &[String],
+    dry_run: bool,
+) -> Result<MigrationReport, String> {
+    let objects = uuids
+        .iter()
+        .map(|uuid| (uuid.clone(), vault_ctx.object_path(uuid)))
+        .filter(|(_, dir)| dir.is_dir())
+        .collect();
+    migrate_listed(vault_ctx, objects, dry_run)
+}
+
+fn migrate_listed(
+    vault_ctx: &VaultContext,
+    objects: Vec<(String, PathBuf)>,
+    dry_run: bool,
+) -> Result<MigrationReport, String> {
     let map = PrefixMap::load_vault(vault_ctx)?;
     let mut report = MigrationReport::default();
 
-    for (uuid, obj_dir) in live_objects(&vault_ctx.objects_dir())? {
+    for (uuid, obj_dir) in objects {
         report.scanned += 1;
 
         // Every new document is built before any is written, so an object that
@@ -73,26 +98,53 @@ pub fn migrate_vocabulary(vault_ctx: &VaultContext, dry_run: bool) -> Result<Mig
             }
         };
 
-        for (path, document) in plan {
+        for change in plan {
             if !dry_run
-                && let Err(e) = crate::fsio::write_atomic_str(&path, &document)
+                && let Err(message) = write_if_unchanged(&change)
             {
-                report.errors.push(ObjectError {
-                    uuid: uuid.clone(),
-                    message: format!("failed to write {}: {}", path.display(), e),
-                });
+                report.errors.push(ObjectError { uuid: uuid.clone(), message });
                 break;
             }
             report.rewritten += 1;
-            report.files.push(path);
+            report.files.push(change.path);
         }
     }
 
     Ok(report)
 }
 
+/// Replace `change.path` with the migrated document, unless the file changed
+/// since it was planned from: another writer saved it in between, and putting
+/// the migrated old content back would lose that save. The object is then
+/// reported and left for the next run, which plans from the new content.
+fn write_if_unchanged(change: &PlannedWrite) -> Result<(), String> {
+    let path = &change.path;
+    match fs::read_to_string(path) {
+        Ok(now) if now == change.on_disk => {}
+        Ok(_) => {
+            return Err(format!(
+                "{} changed while it was being migrated; left as it is for the next run",
+                path.display()
+            ));
+        }
+        Err(e) => return Err(format!("failed to read {}: {}", path.display(), e)),
+    }
+    crate::fsio::write_atomic_str(path, &change.document)
+        .map_err(|e| format!("failed to write {}: {}", path.display(), e))
+}
+
+/// One file of an object that the migration rewrites.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PlannedWrite {
+    pub path: PathBuf,
+    /// The content the plan was made from.
+    pub on_disk: String,
+    /// The migrated document that replaces it.
+    pub document: String,
+}
+
 /// The object directories under `objects/`, sorted by UUID so reports are stable.
-fn live_objects(objects_dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
+pub(crate) fn live_objects(objects_dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     if !objects_dir.exists() {
         return Ok(Vec::new());
     }
@@ -113,12 +165,13 @@ fn live_objects(objects_dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
 }
 
 /// The files of one object that need rewriting, with their new content.
-fn plan_object(
+/// Empty for an object already in the standard vocabulary.
+pub(crate) fn plan_object(
     map: &PrefixMap,
     obj_dir: &Path,
     uuid: &str,
     warnings: &mut Vec<String>,
-) -> Result<Vec<(PathBuf, String)>, String> {
+) -> Result<Vec<PlannedWrite>, String> {
     let mut plan = Vec::new();
 
     let meta_path = obj_dir.join("meta.ttl");
@@ -128,7 +181,7 @@ fn plan_object(
     if let Some(doc) = meta_doc
         && doc != meta_on_disk
     {
-        plan.push((meta_path, doc));
+        plan.push(PlannedWrite { path: meta_path, on_disk: meta_on_disk, document: doc });
     }
 
     // Ontologies hold raw RDF rather than notes, and the index never annotates
@@ -152,7 +205,7 @@ fn plan_object(
             let (doc, notes) = annotations_ttl(map, uuid, &extract_annotations(&page));
             warnings.extend(notes);
             if doc != on_disk {
-                plan.push((annotations_path, doc));
+                plan.push(PlannedWrite { path: annotations_path, on_disk, document: doc });
             }
         }
     }
@@ -516,6 +569,28 @@ mod tests {
         assert!(second.errors.is_empty(), "{second:?}");
         assert!(writes.is_empty(), "second run wrote {writes:?}");
         assert_eq!(snapshot(&ctx), before, "a file or its mtime changed");
+    }
+
+    #[test]
+    fn a_file_saved_by_someone_else_after_planning_is_not_overwritten() {
+        let (_tmp, ctx) = vault();
+        let path = put(&ctx, PAGE, "meta.ttl", LEGACY_META);
+        let map = PrefixMap::load_vault(&ctx).unwrap();
+        let plan = plan_object(&map, &ctx.object_path(PAGE), PAGE, &mut Vec::new()).unwrap();
+        assert_eq!(plan.len(), 1, "{plan:?}");
+
+        // The desktop app renames the page between planning and writing.
+        let renamed = LEGACY_META.replace("\"Index\"", "\"Renamed 137\"");
+        fs::write(&path, &renamed).unwrap();
+
+        let err = write_if_unchanged(&plan[0]).unwrap_err();
+        assert!(err.contains("changed while it was being migrated"), "{err}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), renamed, "the rename was lost");
+
+        // Unchanged, the same plan is written.
+        fs::write(&path, LEGACY_META).unwrap();
+        write_if_unchanged(&plan[0]).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), plan[0].document);
     }
 
     #[test]

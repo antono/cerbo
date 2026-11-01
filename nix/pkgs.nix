@@ -105,6 +105,61 @@ let
       gappsWrapperArgs+=(--set-default ORT_DYLIB_PATH ${ortDylibPath})
     '';
 
+    # Launch script: bring every registered vault into the schema.org
+    # vocabulary, then start the app. The GApps wrapper here is a binary one,
+    # which has no --run, so it moves to libexec and a shell script takes its
+    # place. The check is cached (a stat per file once a vault is current) and
+    # repeats on every start, because an old Cerbo on another device can sync
+    # old-format files in at any time. Its output goes to stderr, and a failure
+    # never keeps the app from starting: the app reads the old format too.
+    # `exec -a "$0"` keeps argv[0] ending in cerbo-desktop, which the window's
+    # app_id and the .desktop entry's StartupWMClass depend on.
+    postFixup = ''
+      mkdir -p $out/libexec
+      mv $out/bin/cerbo-desktop $out/libexec/cerbo-desktop
+      cat > $out/bin/cerbo-desktop <<EOF
+    #!${pkgs.runtimeShell}
+    ${cerbo}/bin/cerbo migrate vocabulary --if-needed >&2 || true
+    exec -a "\$0" $out/libexec/cerbo-desktop "\$@"
+    EOF
+      chmod +x $out/bin/cerbo-desktop
+    '';
+
+    # The launcher is shell glue that no Rust test runs, and postFixup must
+    # come after wrapGAppsHook3's fixup: check the result. installCheck runs
+    # after fixup, on the finished $out.
+    doInstallCheck = true;
+    installCheckPhase = ''
+      runHook preInstallCheck
+      launcher=$out/bin/cerbo-desktop
+      ${pkgs.runtimeShell} -n "$launcher"
+      grep -qF '${cerbo}/bin/cerbo migrate vocabulary --if-needed >&2 || true' "$launcher"
+      grep -qF "exec -a \"\$0\" $out/libexec/cerbo-desktop \"\$@\"" "$launcher"
+      # What the launcher execs is the GApps wrapper, with ONNX Runtime set.
+      test -x $out/libexec/cerbo-desktop
+      grep -qa XDG_DATA_DIRS $out/libexec/cerbo-desktop
+      grep -qa ORT_DYLIB_PATH $out/libexec/cerbo-desktop
+
+      # Run it with stand-ins: the migration first, its output on stderr only,
+      # and the app starts with its arguments even when the migration fails.
+      # The app stand-in is a script: `exec -a` renames argv[0], which would
+      # confuse a multi-call coreutils binary.
+      printf '#!%s\necho started "$@"\n' ${pkgs.runtimeShell} > fake-app
+      chmod +x fake-app
+      for migration in "${pkgs.coreutils}/bin/echo migrating" ${pkgs.coreutils}/bin/false; do
+        sed -e "s|${cerbo}/bin/cerbo|$migration|" \
+            -e "s|$out/libexec/cerbo-desktop|$PWD/fake-app|" \
+            "$launcher" > fake-launcher
+        chmod +x fake-launcher
+        out_text=$(./fake-launcher 137 2> fake-stderr)
+        test "$out_text" = "started 137"
+        case "$migration" in
+          *echo*) grep -qxF 'migrating migrate vocabulary --if-needed' fake-stderr ;;
+        esac
+      done
+      runHook postInstallCheck
+    '';
+
     postInstall = ''
       rm -f $out/bin/cerbo
 

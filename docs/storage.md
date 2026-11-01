@@ -168,8 +168,10 @@ uses only the standard ones.
 | `<cerbo://ontology/schema/x>` | `<https://schema.org/x>` |
 | `cerbo:annotation` / `cerbo:concept` | `schema:mentions` / `schema:name` |
 
-`cerbo migrate vocabulary` rewrites a vault's files into the standard form once
-(see [Migrating an old vault](#migrating-an-old-vault)). Saving an object also
+Every CLI command that works on a vault, and the desktop launcher, rewrites the
+objects still in the legacy form before going on, and `cerbo migrate vocabulary`
+rewrites a whole vault on request (see
+[Migrating an old vault](#migrating-an-old-vault)). Saving an object also
 rewrites its `meta.ttl` in the standard form.
 
 ### annotations.ttl (Turtle RDF)
@@ -279,6 +281,31 @@ writing `backrefs.ttl` (ignored here and removed again by the next full
 `cerbo index`) and reads backlinks only from those files. To roll back, restore
 the files from git or sync history, or run the older build's `cerbo index`.
 
+## Other derived data in the user cache
+
+Besides the semantic index, `$XDG_CACHE_HOME/cerbo/` (`~/.cache/cerbo/` by
+default) holds:
+
+```
+models/<revision>/       # the embedding model, downloaded on first use
+vocabulary/<key>-<rules> # objects already checked for the legacy vocabulary
+desktop.lock             # held by a running desktop app; see below
+```
+
+`vocabulary/<key>-<rules>` (same `<key>` as the index) records
+`(mtime_ns, size)` of `meta.ttl`, `annotations.ttl` and `page.md` of every
+object found to be in the standard vocabulary, so the automatic migration reads
+only objects whose files changed. `<rules>` is a hash of the Cerbo version and
+its legacy-term tables: a build with other rules ignores (and then deletes)
+tables it did not write, and reads every object once. Deleting the table costs
+one full read of the vault on the next command.
+
+`desktop.lock` is an advisory lock. Every running desktop app holds it shared;
+every vocabulary migration takes it exclusively, without waiting, and writes
+nothing when it cannot.
+
+
+
 ## Link Format
 
 Cerbo uses `cerbo://<uuid>` links instead of wikilinks:
@@ -320,8 +347,20 @@ exactly as a save would), regenerates an existing `annotations.ttl` from
 only when its bytes change, and skips the trash. A second run changes nothing.
 An object it cannot read is named by UUID and left as it was.
 
-**Upgrade Cerbo on every device that syncs the vault before migrating.** Older
-builds cannot read the migrated files.
+You rarely need to run it. Every CLI command that works on a vault first checks
+it, warns on stderr (``Warning: <N> objects in vault "<name>" use the old
+metadata format; migrating them to schema.org``) and migrates the objects still
+in the legacy form first. The packaged desktop launcher runs `cerbo migrate vocabulary
+--if-needed` on every registered vault before the app starts. All of this
+repeats on every run, because an old build on another device can sync legacy
+files in at any time; the check reads only objects whose files changed since it
+last found them current (see the `vocabulary/` cache above). Nothing is
+migrated while a desktop app is running (see `desktop.lock` above), so a
+migration never overwrites the app's saves. A failure is a warning and never
+stops the command or the app.
+
+**Upgrade Cerbo on every device that syncs the vault.** Older builds cannot read
+the migrated files.
 
 ## Key Differences from Slug-Based Model
 

@@ -255,8 +255,11 @@ enum MigrateCommands {
         #[arg(long)]
         vault: Option<String>,
         /// Report what would change without writing anything
-        #[arg(long)]
+        #[arg(long, conflicts_with = "if_needed")]
         dry_run: bool,
+        /// Check cheaply (cached file stamps) and migrate only the objects still in the old format
+        #[arg(long)]
+        if_needed: bool,
         /// Print only {"scanned", "rewritten", "errors"} as JSON
         #[arg(long)]
         json: bool,
@@ -377,6 +380,83 @@ fn migration_targets(
         }
     }
     Ok(targets)
+}
+
+/// A vault's name in the registry, or its path when it is not registered.
+fn vault_label(ctx: &CerboContext, vault_root: &std::path::Path) -> String {
+    let canonical = std::fs::canonicalize(vault_root).ok();
+    cerbo_core::vault::vault_list(ctx)
+        .ok()
+        .and_then(|reg| {
+            reg.vaults
+                .into_iter()
+                .find(|v| canonical.is_some() && std::fs::canonicalize(&v.path).ok() == canonical)
+        })
+        .map(|v| v.name)
+        .unwrap_or_else(|| vault_root.display().to_string())
+}
+
+/// Look for objects in the pre-schema.org vocabulary before a command works on
+/// a vault. Old Cerbo builds may still write that format into a synced vault,
+/// so this runs on every command; a vault already checked costs one `stat` per
+/// file. Every such command migrates them first, but only while no desktop
+/// app holds the app lock, so a running app's saves are never overwritten. Everything goes to stderr, so `--json` output stays
+/// clean, and nothing here fails the command: the readers understand the old
+/// format anyway.
+///
+/// Returns `(objects found in the old format and migrated, files rewritten,
+/// errors)`.
+fn check_old_vocabulary(ctx: &CerboContext, vault_root: &std::path::Path) -> (usize, usize, usize) {
+    use cerbo_core::vocabulary_check::{EnsureOutcome, ensure_current_vocabulary};
+
+    if !vault_root.join(".cerbo").is_dir() {
+        return (0, 0, 0);
+    }
+    let vault_ctx = cerbo_core::VaultContext { vault_path: vault_root.to_path_buf(), global: ctx.clone() };
+    let label = vault_label(ctx, vault_root);
+    let old_format = |n: usize, what: &str| {
+        eprintln!("Warning: {} objects in vault \"{}\" use the old metadata format; {}", n, label, what);
+    };
+
+    let result = ensure_current_vocabulary(&vault_ctx, &ctx.cache_dir, |legacy| {
+        old_format(legacy.len(), "migrating them to schema.org");
+    });
+    match result {
+        Ok(EnsureOutcome::Current) => (0, 0, 0),
+        Ok(EnsureOutcome::Deferred { legacy }) => {
+            old_format(
+                legacy.len(),
+                "not migrating them while Cerbo desktop or another migration is running",
+            );
+            (0, 0, 0)
+        }
+        Ok(EnsureOutcome::Migrated { report, .. }) => {
+            // The same notes `cerbo migrate vocabulary` prints, such as a type
+            // kept as cerbo:unresolvedType.
+            for warning in &report.warnings {
+                eprintln!("Warning: {}", warning);
+            }
+            for err in &report.errors {
+                eprintln!("Warning: could not migrate object {}: {}", err.uuid, err.message);
+            }
+            eprintln!(
+                "Migrated vault \"{}\": rewrote {} files, {} errors",
+                label,
+                report.rewritten,
+                report.errors.len()
+            );
+            (report.scanned, report.rewritten, report.errors.len())
+        }
+        Err(e) => {
+            eprintln!("Warning: could not migrate vault \"{}\" from the old metadata format: {}", label, e);
+            (0, 0, 1)
+        }
+    }
+}
+
+/// The vault root a resolved page context points into.
+fn vault_root_of(vault_ctx: &CerboContext) -> &std::path::Path {
+    vault_ctx.config_dir.parent().unwrap_or(&vault_ctx.config_dir)
 }
 
 /// The vault a page context points into, for the semantic index: its
@@ -560,6 +640,7 @@ fn run_search(
     ) -> Result<Vec<cerbo_core::semantic::SearchHit>, cerbo_core::semantic::SemanticError>,
 ) -> Result<(), String> {
     let vault_ctx = path_vault_ctx(filters.vault, cwd_vault_root)?;
+    check_old_vocabulary(&vault_ctx.global, &vault_ctx.vault_path);
     let search = cerbo_core::semantic::SearchOptions {
         limit: usize::try_from(filters.limit).unwrap_or(usize::MAX),
         types: filters.types,
@@ -675,7 +756,12 @@ async fn main() -> Result<(), String> {
     let mut cwd_vault_id = cwd_vault_root
         .as_deref()
         .and_then(|root| cerbo_core::vault::vault_id_from_path(&ctx, root));
-    if let (Some(root), None) = (cwd_vault_root.as_ref(), cwd_vault_id.as_ref()) {
+    // `cerbo migrate` works on registered vaults or an explicit --vault, never
+    // on the current directory, and the desktop launcher runs it from wherever
+    // the app was started: registering that directory's vault would be a side
+    // effect nobody asked for, and the migration would then rewrite it.
+    let registers_cwd_vault = !matches!(cli.command, Commands::Migrate { .. });
+    if let (true, Some(root), None) = (registers_cwd_vault, cwd_vault_root.as_ref(), cwd_vault_id.as_ref()) {
         let _ = cerbo_core::vault::auto_vault_register(&ctx, root);
         cwd_vault_id = cerbo_core::vault::vault_id_from_path(&ctx, root);
     }
@@ -812,6 +898,7 @@ async fn main() -> Result<(), String> {
                     cwd_vault_id.as_deref(),
                     cwd_vault_root.as_deref(),
                 )?;
+                check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
                 let pages = cerbo_core::page::page_list(&eff_ctx)?;
 
                 if json {
@@ -831,6 +918,7 @@ async fn main() -> Result<(), String> {
                     cwd_vault_id.as_deref(),
                     cwd_vault_root.as_deref(),
                 )?;
+                check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
                 let uuid = cerbo_core::object::object_create(&eff_ctx, None, cerbo_core::object::ObjectType::Product, title)?;
                 if json {
                     print_json(&serde_json::json!({"uuid": uuid}));
@@ -845,6 +933,7 @@ async fn main() -> Result<(), String> {
                     cwd_vault_id.as_deref(),
                     cwd_vault_root.as_deref(),
                 )?;
+                check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
                 let content = cerbo_core::page::page_read(&eff_ctx, uuid)?;
                 if json {
                     print_json(&serde_json::json!({"content": content}));
@@ -859,6 +948,7 @@ async fn main() -> Result<(), String> {
                     cwd_vault_id.as_deref(),
                     cwd_vault_root.as_deref(),
                 )?;
+                check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
                 let _ = cerbo_core::page::page_write(&eff_ctx, uuid, content)?;
                 if json {
                     print_json_success("Page updated");
@@ -873,6 +963,7 @@ async fn main() -> Result<(), String> {
                     cwd_vault_id.as_deref(),
                     cwd_vault_root.as_deref(),
                 )?;
+                check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
                 cerbo_core::page::page_delete(&eff_ctx, uuid)?;
                 if json {
                     print_json_success("Page deleted");
@@ -887,6 +978,7 @@ async fn main() -> Result<(), String> {
                     cwd_vault_id.as_deref(),
                     cwd_vault_root.as_deref(),
                 )?;
+                check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
                 let vault_ctx = index_vault_ctx(&ctx, &eff_ctx);
                 let options = cerbo_core::semantic::IndexOptions {
                     progress: Some(&print_build_progress),
@@ -913,6 +1005,7 @@ async fn main() -> Result<(), String> {
                 cwd_vault_id.as_deref(),
                 cwd_vault_root.as_deref(),
             )?;
+            check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
             let obj_path = cerbo_core::object::object_path(&eff_ctx, &uuid);
             if !obj_path.exists() {
                 if json {
@@ -935,6 +1028,7 @@ async fn main() -> Result<(), String> {
                 cwd_vault_id.as_deref(),
                 cwd_vault_root.as_deref(),
             )?;
+            check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
             let uuid = cerbo_core::object::object_import(&eff_ctx, &url)?;
             if json {
                 print_json(&serde_json::json!({"uuid": uuid, "url": url}));
@@ -949,6 +1043,7 @@ async fn main() -> Result<(), String> {
                 cwd_vault_id.as_deref(),
                 cwd_vault_root.as_deref(),
             )?;
+            check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
             // clap guarantees both flags or neither.
             let registration = prefix.as_deref().zip(namespace.as_deref());
             let uuid = cerbo_core::object::object_import_ontology(&eff_ctx, &url, registration)?;
@@ -1000,6 +1095,8 @@ async fn main() -> Result<(), String> {
                 if targets.len() > 1 {
                     eprintln!("Vault {} ({}):", label, root.display());
                 }
+                // Before indexing, so the index reads the migrated files.
+                check_old_vocabulary(&ctx, root);
                 let embedder = embedder.as_mut().map(|e| e as &mut dyn cerbo_core::semantic::Embedder);
                 let result = cerbo_core::VaultContext::from_path(root.clone()).and_then(|vault_ctx| {
                     index_one_vault(&vault_ctx, page.as_deref(), !no_backfill_slug, embedder, options)
@@ -1081,6 +1178,7 @@ async fn main() -> Result<(), String> {
             use std::io::Read;
 
             let vault_ctx = path_vault_ctx(vault, cwd_vault_root.as_deref())?;
+            check_old_vocabulary(&ctx, &vault_ctx.vault_path);
 
             // clap guarantees exactly one of the query argument and --file.
             let sparql = match (query.as_deref(), file) {
@@ -1112,10 +1210,50 @@ async fn main() -> Result<(), String> {
             }
         },
         Commands::Migrate { action } => match action {
-            MigrateCommands::Vocabulary { vault, dry_run, json } => {
+            MigrateCommands::Vocabulary { vault, dry_run, if_needed: true, json } => {
+                // What the CLI does before every command that writes to a
+                // vault, for every target; the desktop launcher runs this
+                // before the app starts. Only the objects found in the old
+                // format count as scanned. With an app already running nothing
+                // is migrated, and that is not an error.
+                let (mut scanned, mut rewritten, mut errors) = (0usize, 0usize, 0usize);
+                debug_assert!(!dry_run, "clap rejects --dry-run with --if-needed");
+                for (_, root) in migration_targets(&ctx, vault.as_deref())? {
+                    let (s, r, e) = check_old_vocabulary(&ctx, &root);
+                    scanned += s;
+                    rewritten += r;
+                    errors += e;
+                }
+                if json {
+                    print_json(&serde_json::json!({
+                        "scanned": scanned,
+                        "rewritten": rewritten,
+                        "errors": errors
+                    }));
+                }
+                if errors > 0 {
+                    std::process::exit(1);
+                }
+            }
+            MigrateCommands::Vocabulary { vault, dry_run, if_needed: false, json } => {
                 use cerbo_core::VaultContext;
                 use cerbo_core::vocabulary_migration::migrate_vocabulary;
 
+                // A running desktop app may be saving these files; rewriting
+                // them under it could put back what it just replaced.
+                let _lock = if dry_run {
+                    None
+                } else {
+                    match cerbo_core::app_lock::AppLock::try_exclusive(&ctx.cache_dir)? {
+                        Some(lock) => Some(lock),
+                        None => {
+                            eprintln!(
+                                "Error: Cerbo desktop or another migration is running; close it and run `cerbo migrate vocabulary` again"
+                            );
+                            std::process::exit(1);
+                        }
+                    }
+                };
                 let (mut scanned, mut rewritten, mut errors) = (0usize, 0usize, 0usize);
                 for (label, root) in migration_targets(&ctx, vault.as_deref())? {
                     let report = match VaultContext::from_path(root).and_then(|v| migrate_vocabulary(&v, dry_run)) {
@@ -1197,6 +1335,7 @@ async fn main() -> Result<(), String> {
                 }
             };
 
+            check_old_vocabulary(&ctx, &vault_root);
             match vault_symlink::materialize(&vault_root) {
                 Ok(report) => {
                     if json {

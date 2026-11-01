@@ -12,6 +12,8 @@ Cerbo is a local-first markdown wiki tool designed for both human and AI agent w
 
 The tool supports managing multiple vaults (workspaces), creating and editing pages with markdown content, importing web content as source objects, and working with ontologies (Schema.org, FOAF) for semantic markup using the HackMD annotation syntax `[Text]{prefix:Type}`.
 
+Every command that works on a vault first brings its metadata into the schema.org vocabulary, if it still holds files in Cerbo's old format (see AUTOMATIC MIGRATION).
+
 # VAULT AUTO-DISCOVERY
 
 All cerbo commands automatically detect the active vault from the current working directory, without requiring a `--vault` flag. At startup, cerbo walks up from the current directory looking for an ancestor directory containing `.cerbo/`. If found, that vault is used for the invocation.
@@ -25,6 +27,30 @@ Vault resolution priority (highest to lowest):
 5. Error: not inside a cerbo vault
 
 If the current directory is inside a vault that has not been registered with `cerbo vault add`, it is automatically recorded in `vaults.auto.toml` (silently, no output) and immediately used for the current invocation. Auto-registered vaults appear in `cerbo vault list` with an `(auto)` marker.
+
+# AUTOMATIC MIGRATION
+
+Before a command works on a vault, cerbo checks it for objects whose `meta.ttl` or `annotations.ttl` still use Cerbo's old metadata format.
+
+Every such command (`page list`, `page read`, `page backlinks`, `page create`, `page write`, `page delete`, `resolve`, `sparql`, `search`, `similar`, `import`, `import-ontology`, `index` for every vault it indexes, `symlink`) first migrates exactly those objects, as `cerbo migrate vocabulary` would, and print on stderr:
+
+```
+Warning: <N> objects in vault "<name or path>" use the old metadata format; migrating them to schema.org
+Warning: could not migrate object <UUID>: <reason>      (one line per object that failed)
+Migrated vault "<name or path>": rewrote <files> files, <errors> errors
+```
+
+along with any note `cerbo migrate vocabulary` would print (for example an annotation type kept as `cerbo:unresolvedType`).
+
+- **Every time:** an old Cerbo build on another device can sync old-format files into the vault at any time, so the check runs on every command, not once.
+- **Cheap:** cerbo remembers the modification time and size of the files of every object already found current, in `$XDG_CACHE_HOME/cerbo/vocabulary/<key>-<rules>` (the same `<key>` as the semantic index; `<rules>` changes with the Cerbo version and its list of old terms, so a newer Cerbo checks every object once again). Only objects whose files changed since are read again; an unchanged vault costs one `stat` per file. The cache is never written into the vault, and deleting it only costs one full read.
+- **Never under the desktop app:** a running Cerbo desktop app holds `$XDG_CACHE_HOME/cerbo/desktop.lock`. While it does, nothing is migrated and the warning ends with `not migrating them while Cerbo desktop or another migration is running` instead. Any migration also leaves a file alone, and reports its object, when the file changed between being read and being rewritten.
+- **Never blocking:** a vault that cannot be checked, an object that cannot be migrated, or a cache that cannot be written is a warning on stderr; the command still runs, and Cerbo reads the old format anyway. stdout, including `--json` output, is never touched.
+- **Before the index:** `cerbo index` migrates first, so the index sees the migrated files.
+- **Not for:** `init`, `vault`, `info`, `--help`, `--version`, and `migrate vocabulary`, which does its own work (so `--dry-run` changes nothing).
+- **Desktop app:** the packaged `cerbo-desktop` launcher runs `cerbo migrate vocabulary --if-needed` on every registered vault before the app starts, with the same messages on stderr; a failure never keeps the app from starting. Starting it again while it runs migrates nothing.
+
+**Warning:** older Cerbo builds cannot read migrated files. Upgrade Cerbo on every device that syncs the vault.
 
 # COMMANDS
 
@@ -227,6 +253,7 @@ Usage: `cerbo migrate vocabulary [OPTIONS]`
 Options:
 - `--vault <ID|PATH>` - Migrate only this vault, given by registered vault ID or by path (default: every registered vault)
 - `--dry-run` - List the files that would be rewritten and write nothing
+- `--if-needed` - Do what every writing command does first (see AUTOMATIC MIGRATION): use the cache to find the objects still in the old format, migrate only those, and report on stderr. Prints nothing when every vault is current. While the desktop app runs it migrates nothing and still exits zero. With `--json`, `scanned` counts the old-format objects migrated. Cannot be combined with `--dry-run`
 - `--json` - Print only a JSON object with the numeric fields scanned, rewritten and errors
 
 **Behavior:**
@@ -234,9 +261,11 @@ Options:
 - `annotations.ttl`: a file that uses an old term (or does not parse) is regenerated from `page.md` with the vault's prefix map, so `cerbo:annotation`/`cerbo:concept` become `schema:mentions`/`schema:name` and types that lost their prefix are re-derived from the page text. A file already in the standard form is left alone; a page with no `annotations.ttl` does not get one. Saving the page or `cerbo index` brings either up to date. Ontology objects are skipped, as in `cerbo index`.
 - Each file is written atomically, and only when its new content differs from what is on disk. A second run rewrites nothing and changes no modification time.
 - Objects in `.cerbo/trash/` are not touched.
-- An object that cannot be read (for example a `meta.ttl` that does not parse, or one with two object classes) is named by UUID on stderr and left untouched; the other objects are still migrated.
+- An object that cannot be read (for example a `meta.ttl` that does not parse, or one with two object classes) is named by UUID on stderr and left untouched; the other objects are still migrated. So is an object one of whose files changed while it was being migrated.
+- Without `--dry-run`, it refuses to run while a Cerbo desktop app (or another migration) is running, since the app may be saving the same files: it prints an error and writes nothing. Close the app and run it again.
+- Unlike other commands, `cerbo migrate` never auto-registers the vault in the current directory; use `--vault` to name an unregistered one.
 
-**Exit status:** non-zero if any object or vault could not be migrated.
+**Exit status:** non-zero if any object or vault could not be migrated, or the desktop app is running.
 
 **Warning:** older Cerbo builds cannot read migrated files. Upgrade Cerbo on every device that syncs the vault before migrating, and run `--dry-run` first.
 
@@ -328,7 +357,7 @@ Cerbo uses a **UUID-based storage model** where all content is stored locally in
     +-- state.toml            # Application state
 ```
 
-Derived data is kept outside the vault, in the user cache: the semantic index (with the vault's embeddings) lives in `$XDG_CACHE_HOME/cerbo/index/` (see SEMANTIC INDEX) and the embedding model in `$XDG_CACHE_HOME/cerbo/models/` (see SEMANTIC SEARCH). Objects have no `backrefs.ttl`.
+Derived data is kept outside the vault, in the user cache: the semantic index (with the vault's embeddings) lives in `$XDG_CACHE_HOME/cerbo/index/` (see SEMANTIC INDEX), the embedding model in `$XDG_CACHE_HOME/cerbo/models/` (see SEMANTIC SEARCH), the record of objects already checked for the old metadata format in `$XDG_CACHE_HOME/cerbo/vocabulary/`, and the lock a running desktop app holds against automatic rewrites in `$XDG_CACHE_HOME/cerbo/desktop.lock` (see AUTOMATIC MIGRATION). Objects have no `backrefs.ttl`.
 
 ## Object Types
 
@@ -397,6 +426,11 @@ Preview, then run, the vocabulary migration of one vault:
 ```
 cerbo migrate vocabulary --vault /path/to/my/vault --dry-run
 cerbo migrate vocabulary --vault /path/to/my/vault
+```
+
+Migrate only what is still in the old format, in every registered vault (what the desktop launcher runs):
+```
+cerbo migrate vocabulary --if-needed
 ```
 
 Show configuration info:
