@@ -12,14 +12,6 @@ pub fn extract_cerbo_links(content: &str) -> Vec<String> {
         .collect()
 }
 
-/// Extract [[Title]] wikilinks from page content (for migration/compatibility)
-pub fn extract_wikilinks(content: &str) -> Vec<String> {
-    let re = Regex::new(r"\[\[([^\]]+)\]").unwrap();
-    re.captures_iter(content)
-        .map(|cap| cap[1].to_string())
-        .collect()
-}
-
 // ── Link Targets ─────────────────────────────────────────
 
 /// True if `target` names a live object.
@@ -72,15 +64,6 @@ mod tests {
         assert!(links.contains(&"1e5d7dc7-a34c-4a2a-aa49-8bfe2b9805b6".to_string()));
         assert!(links.contains(&"10270714-7005-4627-8b5e-ac75a30c1990".to_string()));
         assert!(links.contains(&"f7e435db-9740-4a2a-8e57-b439c4f8bb18".to_string()));
-    }
-
-    #[test]
-    fn test_extract_wikilinks() {
-        let content = "Links to [[Page A]] and [[Page B]] and [[Page A]] again";
-        let links = extract_wikilinks(content);
-        assert_eq!(links.len(), 3);
-        assert!(links.contains(&"Page A".to_string()));
-        assert!(links.contains(&"Page B".to_string()));
     }
 
     /// A link to an object that does not exist must not conjure one.

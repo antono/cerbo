@@ -1,23 +1,11 @@
-use serde::{Deserialize, Serialize};
-use std::path::{PathBuf, Path};
+use serde::Serialize;
 use crate::CerboContext;
 use crate::object::{object_path, ObjectMeta};
-
-/// Get the full path to a page object directory within a vault
-pub fn get_page_path(vault_path: &Path, page_uuid: &str) -> PathBuf {
-    vault_path.join(".cerbo").join("objects").join(page_uuid)
-}
 
 #[derive(Debug, Serialize)]
 pub struct PageMeta {
     pub uuid: String,
     pub title: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CursorPosition {
-    pub line: u32,
-    pub column: u32,
 }
 
 /// Create a new page using UUID model.
@@ -43,7 +31,7 @@ pub fn page_read(ctx: &CerboContext, uuid: String) -> Result<String, String> {
 }
 
 /// Write page content by UUID. Fails if type is Source (read-only).
-/// Returns the content on success (for compatibility with old API).
+/// Returns the content on success.
 ///
 /// Every save — from the CLI or the desktop editor — refreshes the page's
 /// `annotations.ttl` and its graph in the semantic index, and writes no other
@@ -147,57 +135,6 @@ pub fn page_list(ctx: &CerboContext) -> Result<Vec<PageMeta>, String> {
     pages.sort_by(|a, b| a.title.cmp(&b.title));
     Ok(pages)
 }
-
-/// Cursor position functions (stubbed for now)
-pub fn cursor_position_save(
-    _ctx: &CerboContext,
-    _uuid: String,
-    _line: u32,
-    _column: u32,
-) -> Result<(), String> {
-    // TODO: Implement with cursor position storage
-    Ok(())
-}
-
-pub fn cursor_position_load(
-    _ctx: &CerboContext,
-    _uuid: String,
-) -> Result<Option<CursorPosition>, String> {
-    // TODO: Implement with cursor position storage
-    Ok(None)
-}
-
-/// Attachment functions (UUID model)
-pub fn attachment_list(
-    ctx: &CerboContext,
-    uuid: String,
-) -> Result<Vec<String>, String> {
-    crate::object::attachment_list(ctx, &uuid)
-}
-
-pub fn attachment_add(
-    _ctx: &CerboContext,
-    page_uuid: String,
-    src_path: PathBuf,
-) -> Result<String, String> {
-    // TODO: Create attachment object and link it from the page
-    let _ = (&page_uuid, &src_path);
-    Err("Not yet implemented".to_string())
-}
-
-pub fn attachment_delete(
-    _ctx: &CerboContext,
-    _uuid: String,
-    _filename: String,
-) -> Result<(), String> {
-    // TODO: Delete attachment object
-    Err("Not yet implemented".to_string())
-}
-
-/// Stub functions for tests (to be removed)
-pub fn has_h1(_content: &str) -> bool { false }
-pub fn humanize_slug(_slug: &str) -> String { String::new() }
-pub fn ensure_page_has_h1(_path: &Path, _slug: &str) -> Result<bool, String> { Ok(false) }
 
 #[cfg(test)]
 // Fixtures write files directly; the atomic-write rule guards vault code, not setup.

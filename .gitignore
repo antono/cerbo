@@ -30,3 +30,8 @@ cli/man/cerbo.1
 result
 .gitnexus
 /cerbo/
+.lean-ctx/
+.agents/skills/generated/
+
+# The repository is not a vault
+/.cerbo/
