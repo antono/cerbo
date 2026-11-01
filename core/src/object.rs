@@ -1450,7 +1450,7 @@ mod tests {
                 "    schema:dateModified \"2024-01-01T00:00:00Z\"^^xsd:dateTime .\n",
                 "    cerbo:slug \"rdf-type-source-notes\" .\n",
             ),
-            format!("objects/<{}>", "uuid")
+            format_args!("objects/<{}>", "uuid")
         );
         fs::write(&path, damaged).unwrap();
         let before = fs::read(&path).unwrap();

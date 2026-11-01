@@ -535,6 +535,8 @@ fn mark_stale(vault_ctx: &VaultContext) {
 }
 
 #[cfg(test)]
+// Fixtures write files directly; the atomic-write rule guards vault code, not setup.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use crate::object::{object_create, object_delete, ObjectType};

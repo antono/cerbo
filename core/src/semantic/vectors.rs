@@ -122,8 +122,10 @@ fn decode(bytes: &[u8]) -> Option<FlatVectors> {
         return None;
     }
     vectors.rows = rest
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().expect("chunks of 4")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect();
     Some(vectors)
 }
@@ -218,6 +220,8 @@ impl VectorIndex for FlatVectors {
 }
 
 #[cfg(test)]
+// Fixtures write files directly; the atomic-write rule guards vault code, not setup.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 

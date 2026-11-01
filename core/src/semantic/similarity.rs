@@ -519,6 +519,8 @@ pub fn similar(
 }
 
 #[cfg(test)]
+// Fixtures write files directly; the atomic-write rule guards vault code, not setup.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::super::embed::MockEmbedder;
     use super::super::{IndexLocation, IndexState};
@@ -843,7 +845,7 @@ mod tests {
         assert_eq!(scored.len(), 1);
         assert_eq!(scored[0].0, b);
         let score: f32 = scored[0].1.parse().unwrap();
-        assert!(score >= SIMILARITY_MIN_SCORE && score <= 1.0, "{score}");
+        assert!((SIMILARITY_MIN_SCORE..=1.0).contains(&score), "{score}");
 
         assert!(files_containing(&vault.ctx.vault_path, "similarTo").is_empty());
         assert!(files_containing(&vault.ctx.vault_path, "Similarity").is_empty());

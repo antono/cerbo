@@ -490,7 +490,7 @@ fn print_build_progress(progress: cerbo_core::semantic::BuildProgress) {
 /// Report embedding progress on stderr, about every tenth of the pages.
 fn print_embed_progress(done: usize, total: usize) {
     let step = (total / 10).max(1);
-    if done == total || done % step == 0 {
+    if done == total || done.is_multiple_of(step) {
         eprintln!("Embedded {} of {} pages", done, total);
     }
 }
