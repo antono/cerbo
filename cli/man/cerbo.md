@@ -12,8 +12,6 @@ Cerbo is a local-first markdown wiki tool designed for both human and AI agent w
 
 The tool supports managing multiple vaults (workspaces), creating and editing pages with markdown content, importing web content as source objects, and working with ontologies (Schema.org, FOAF) for semantic markup using the HackMD annotation syntax `[Text]{prefix:Type}`.
 
-Every command that works on a vault first brings its metadata into the schema.org vocabulary, if it still holds files in Cerbo's old format (see AUTOMATIC MIGRATION).
-
 # VAULT AUTO-DISCOVERY
 
 All cerbo commands automatically detect the active vault from the current working directory, without requiring a `--vault` flag. At startup, cerbo walks up from the current directory looking for an ancestor directory containing `.cerbo/`. If found, that vault is used for the invocation.
@@ -27,30 +25,6 @@ Vault resolution priority (highest to lowest):
 5. Error: not inside a cerbo vault
 
 If the current directory is inside a vault that has not been registered with `cerbo vault add`, it is automatically recorded in `vaults.auto.toml` (silently, no output) and immediately used for the current invocation. Auto-registered vaults appear in `cerbo vault list` with an `(auto)` marker.
-
-# AUTOMATIC MIGRATION
-
-Before a command works on a vault, cerbo checks it for objects whose `meta.ttl` or `annotations.ttl` still use Cerbo's old metadata format.
-
-Every such command (`page list`, `page read`, `page backlinks`, `page create`, `page write`, `page delete`, `resolve`, `sparql`, `search`, `similar`, `import`, `import-ontology`, `index` for every vault it indexes, `symlink`) first migrates exactly those objects, as `cerbo migrate vocabulary` would, and print on stderr:
-
-```
-Warning: <N> objects in vault "<name or path>" use the old metadata format; migrating them to schema.org
-Warning: could not migrate object <UUID>: <reason>      (one line per object that failed)
-Migrated vault "<name or path>": rewrote <files> files, <errors> errors
-```
-
-along with any note `cerbo migrate vocabulary` would print (for example an annotation type kept as `cerbo:unresolvedType`).
-
-- **Every time:** an old Cerbo build on another device can sync old-format files into the vault at any time, so the check runs on every command, not once.
-- **Cheap:** cerbo remembers the modification time and size of the files of every object already found current, in `$XDG_CACHE_HOME/cerbo/vocabulary/<key>-<rules>` (the same `<key>` as the semantic index; `<rules>` changes with the Cerbo version and its list of old terms, so a newer Cerbo checks every object once again). Only objects whose files changed since are read again; an unchanged vault costs one `stat` per file. The cache is never written into the vault, and deleting it only costs one full read.
-- **Never under the desktop app:** a running Cerbo desktop app holds `$XDG_CACHE_HOME/cerbo/desktop.lock`. While it does, nothing is migrated and the warning ends with `not migrating them while Cerbo desktop or another migration is running` instead. Any migration also leaves a file alone, and reports its object, when the file changed between being read and being rewritten.
-- **Never blocking:** a vault that cannot be checked, an object that cannot be migrated, or a cache that cannot be written is a warning on stderr; the command still runs, and Cerbo reads the old format anyway. stdout, including `--json` output, is never touched.
-- **Before the index:** `cerbo index` migrates first, so the index sees the migrated files.
-- **Not for:** `init`, `vault`, `info`, `--help`, `--version`, and `migrate vocabulary`, which does its own work (so `--dry-run` changes nothing).
-- **Desktop app:** the packaged `cerbo-desktop` launcher runs `cerbo migrate vocabulary --if-needed` on every registered vault before the app starts, with the same messages on stderr; a failure never keeps the app from starting. Starting it again while it runs migrates nothing.
-
-**Warning:** older Cerbo builds cannot read migrated files. Upgrade Cerbo on every device that syncs the vault.
 
 # COMMANDS
 
@@ -73,10 +47,10 @@ Usage: `cerbo vault <SUBCOMMAND>`
 
 ### Subcommands:
 
-- `cerbo vault list [--json]` - List all registered vaults. Auto-registered vaults are shown with an `(auto)` marker. JSON output includes an `is_auto` boolean field per vault.
-- `cerbo vault add <NAME> <PATH> [--json]` - Add a new vault with given name at specified path
-- `cerbo vault remove <ID> [--json]` - Remove a vault by its ID (works on both manually and auto-registered vaults)
-- `cerbo vault active <ID> [--json]` - Set the active vault
+- `cerbo vault list [--json]` - List all registered vaults, one per line as `<id>: <name>`. Auto-registered vaults are shown with an `(auto)` marker and the active vault with `(current)`. JSON output includes an `is_auto` boolean field per vault.
+- `cerbo vault add <NAME> <PATH> [--json]` - Register the vault at `PATH` (the directory containing `.cerbo/`) under the display name `NAME`, and print its ID
+- `cerbo vault remove <ID> [--json]` - Remove a vault from the registry by its ID (works on both manually and auto-registered vaults); the vault's files are left alone
+- `cerbo vault active <ID> [--json]` - Set the active vault, used when no vault is found around the current directory (see VAULT AUTO-DISCOVERY)
 - `cerbo vault approve <ID> [--json]` - Promote an auto-registered vault to the manual registry. Moves the entry from `vaults.auto.toml` to `vaults.toml`. Errors if the ID is not in the auto registry or the path is already manually registered.
 
 ## page
@@ -87,14 +61,14 @@ Usage: `cerbo page <SUBCOMMAND>`
 
 ### Subcommands:
 
-- `cerbo page list [--json] [--vault <ID>]` - List all pages in the current vault (auto-discovered from CWD, or override with --vault)
-- `cerbo page create <TITLE> [--json]` - Create a new page with the given title
-- `cerbo page read <UUID> [--json]` - Read the content of a page by its UUID
-- `cerbo page write <UUID> <CONTENT> [--json]` - Write content to a page
-- `cerbo page delete <UUID> [--json]` - Delete a page by its UUID
+- `cerbo page list [--json] [--vault <ID>]` - List all pages in the current vault (auto-discovered from CWD, or override with --vault): a header line naming the vault, then one `<uuid>: <title>` per page. With `--json`, a JSON array of objects with `uuid` and `title`.
+- `cerbo page create <TITLE> [--json]` - Create a new page with the given title and print its UUID (`Created page with UUID: <uuid>`; with `--json`, `{"uuid": ...}`)
+- `cerbo page read <UUID> [--json]` - Print the markdown content of a page (with `--json`, `{"content": ...}`)
+- `cerbo page write <UUID> <CONTENT> [--json]` - Replace the whole content of a page with `CONTENT`; its links and annotations are re-extracted, and a link to a missing object is reported on stderr while the save still succeeds
+- `cerbo page delete <UUID> [--json]` - Delete a page by its UUID (moved to the trash, see below)
 - `cerbo page backlinks <UUID> [--json] [--vault <ID>]` - List the pages that link to an object, one per line as `<uuid>: <title>`, ordered by title then UUID. With `--json`, stdout is only a JSON array of objects with `uuid` and `title`. An unknown UUID exits non-zero with "Object not found".
 
-**Backlinks come from the semantic index.** A page's links are stored only in its own `page.md`; saving a page never writes to the objects it links to, and there is no `backrefs.ttl` file. Cerbo keeps a per-machine index of every page's links in the user cache (`$XDG_CACHE_HOME/cerbo/index/`, never inside the vault; see SEMANTIC INDEX) and answers `cerbo page backlinks` from it. Before answering, the index picks up pages that were added, edited or deleted outside Cerbo (by git, file sync or an editor), so a synced page that links here is listed without running `cerbo index`. The first command that needs the index builds it, with progress on stderr. While another Cerbo process (such as the desktop app) is using the index, the command waits up to 5 seconds and then fails with "index busy". Deleting the index directory loses nothing; it is rebuilt from the vault files.
+**Backlinks come from the semantic index.** A page's links are stored only in its own `page.md`; saving a page never writes to the objects it links to. Cerbo keeps a per-machine index of every page's links in the user cache (`$XDG_CACHE_HOME/cerbo/index/`, never inside the vault; see SEMANTIC INDEX) and answers `cerbo page backlinks` from it. Before answering, the index picks up pages that were added, edited or deleted outside Cerbo (by git, file sync or an editor), so a synced page that links here is listed without running `cerbo index`. The first command that needs the index builds it, with progress on stderr. While another Cerbo process (such as the desktop app) is using the index, the command waits up to 5 seconds and then fails with "index busy". Deleting the index directory loses nothing; it is rebuilt from the vault files.
 
 **Delete moves the page to the trash.** `cerbo page delete` renames the object's directory to `.cerbo/trash/<timestamp>-<uuid>/` rather than removing it. Every file inside is preserved byte-for-byte, so a mistaken delete is recovered by moving the directory back to `.cerbo/objects/<uuid>/`. Deleting, recreating and deleting the same UUID again leaves two separate entries; neither overwrites the other.
 
@@ -157,7 +131,7 @@ Options:
 
 ## index
 
-Rebuild metadata (annotations.ttl) from page content, report broken links, and bring the semantic index up to date. Used for recovery after manual edits, bulk imports, or vault migration. Backlinks are not files; see `cerbo page backlinks` and SEMANTIC INDEX.
+Rebuild metadata (annotations.ttl) from page content, report broken links, and bring the semantic index up to date. Used for recovery after manual edits or bulk imports. Backlinks are not files; see `cerbo page backlinks` and SEMANTIC INDEX.
 
 Usage: `cerbo index [OPTIONS]`
 
@@ -168,13 +142,13 @@ Options:
 - `--page <UUID>` - Index only a single page (incremental mode), in the vault around the current directory if the page is there, otherwise in the registered vault that holds it. Cannot be combined with `--vault`: `cerbo index --vault <id> --page <uuid>` exits non-zero with "Cannot specify both --vault and --page".
 - `--no-backfill-slug` - Skip backfilling missing `cerbo:slug` values into `meta.ttl`
 - `--embeddings` - Also compute the embeddings of every page whose content changed since its last embedding and refresh the similarity links (see SEMANTIC SEARCH). The first run on a vault creates its embeddings and may download the model.
-- `--json` - Output result as JSON with pages_processed, links_found, annotations_found, triples, legacy_backrefs_removed, slugs_backfilled, path_errors, collisions, errors, vault_errors (the number of vaults that could not be indexed), and with `--embeddings` also embedded
+- `--json` - Output result as JSON with pages_processed, links_found, annotations_found, triples, slugs_backfilled, path_errors, collisions, errors, vault_errors (the number of vaults that could not be indexed), and with `--embeddings` also embedded
 
 **Behavior:**
-- Without `--page`: Full rebuild of each vault in scope. Every page's `annotations.ttl` is regenerated and its links are counted; a link to an object that does not exist is reported as broken on stderr. No file of a link target is written. Every `backrefs.ttl` left in a live object by an older Cerbo is deleted (the trash is not touched). The semantic index is then rebuilt from the vault files, so it matches them afterwards; the previous index keeps answering until the new one is complete.
-- With `--page <UUID>`: Updates only the annotations of that one page, checks its links, and replaces only that page's triples in the semantic index. Leftover `backrefs.ttl` files are left for a full run.
+- Without `--page`: Full rebuild of each vault in scope. Every page's `annotations.ttl` is regenerated and its links are counted; a link to an object that does not exist is reported as broken on stderr. No file of a link target is written. The semantic index is then rebuilt from the vault files, so it matches them afterwards; the previous index keeps answering until the new one is complete.
+- With `--page <UUID>`: Updates only the annotations of that one page, checks its links, and replaces only that page's triples in the semantic index.
 - With `--embeddings`: after the above, every page of the vault (also with `--page`) whose title or `page.md` changed since its last embedding is embedded, vectors of deleted pages are dropped, and the `cerbo:similarTo` links are recomputed. Unchanged pages are not embedded again. Progress goes to stderr.
-- The summary reports the number of triples in the semantic index and, when there were any, the number of legacy `backrefs.ttl` files removed; with `--embeddings` it also reports the number of pages embedded. With `--json` these are the numeric fields `triples`, `legacy_backrefs_removed` and `embedded` (`embedded` only with `--embeddings`).
+- The summary reports the number of triples in the semantic index; with `--embeddings` it also reports the number of pages embedded. With `--json` these are the numeric fields `triples` and `embedded` (`embedded` only with `--embeddings`).
 - If the semantic index has to be built first, its progress goes to stderr.
 - Idempotent: Running twice produces identical files and an index that answers every query identically
 - Continues past an object it cannot read or write, then reports every one of them by UUID on stderr. An object whose `meta.ttl` names more than one object class is reported and left untouched: it is neither indexed nor given a slug.
@@ -184,7 +158,7 @@ Options:
 **When to use `--page`:**
 - Immediately after your own edit to one page, to refresh just what that page declares
 
-`--page` cannot repair a vault; it only looks at the named page. After bulk imports or migrations, or after a crash, run a full-vault reindex (`cerbo index` with no `--page`).
+`--page` cannot repair a vault; it only looks at the named page. After bulk imports or a crash, run a full-vault reindex (`cerbo index` with no `--page`).
 
 ## sparql
 
@@ -246,19 +220,19 @@ Options: the same as `cerbo search` (`--limit`, `--type`, `--annotated`, `--vaul
 
 ## migrate vocabulary
 
-Rewrite stored metadata from Cerbo's old private RDF terms into the standard schema.org vocabulary, so an old vault holds exactly what new writes produce. Cerbo reads the old terms anyway, so this is never required for a vault to open.
+Rewrite every object's `meta.ttl` and `annotations.ttl` into the current schema.org vocabulary, exactly as a save writes them (see STORAGE). A vault written by the current Cerbo is left unchanged.
 
 Usage: `cerbo migrate vocabulary [OPTIONS]`
 
 Options:
 - `--vault <ID|PATH>` - Migrate only this vault, given by registered vault ID or by path (default: every registered vault)
 - `--dry-run` - List the files that would be rewritten and write nothing
-- `--if-needed` - Do what every writing command does first (see AUTOMATIC MIGRATION): use the cache to find the objects still in the old format, migrate only those, and report on stderr. Prints nothing when every vault is current. While the desktop app runs it migrates nothing and still exits zero. With `--json`, `scanned` counts the old-format objects migrated. Cannot be combined with `--dry-run`
+- `--if-needed` - Check cheaply, using cached file stamps in `$XDG_CACHE_HOME/cerbo/vocabulary/`, and rewrite only the objects that need it. Prints nothing when every vault is current. Cannot be combined with `--dry-run`
 - `--json` - Print only a JSON object with the numeric fields scanned, rewritten and errors
 
 **Behavior:**
-- `meta.ttl`: a file that uses an old term (`cerbo:type`, `cerbo:Product`/`Source`/`Attachment`/`Ontology`, `cerbo:title`, `cerbo:original-url`, `cerbo:mime-type`, or `schema:` bound to `cerbo://ontology/schema/`) is rewritten with `rdf:type` and the schema.org class, `schema:name`, `schema:url` and `schema:encodingFormat`. Values (title, dates, slug, virtual path) and any other triples are kept, and the file is written exactly as a save writes it (for example `schema:url` as an IRI).
-- `annotations.ttl`: a file that uses an old term (or does not parse) is regenerated from `page.md` with the vault's prefix map, so `cerbo:annotation`/`cerbo:concept` become `schema:mentions`/`schema:name` and types that lost their prefix are re-derived from the page text. A file already in the standard form is left alone; a page with no `annotations.ttl` does not get one. Saving the page or `cerbo index` brings either up to date. Ontology objects are skipped, as in `cerbo index`.
+- `meta.ttl` is rewritten with `rdf:type`, `schema:name`, `schema:url` and `schema:encodingFormat`; values (title, dates, slug, virtual path) and any other triples are kept.
+- `annotations.ttl` is regenerated from `page.md` with the vault's prefix map when it needs rewriting or does not parse; a page with no `annotations.ttl` does not get one. Ontology objects are skipped, as in `cerbo index`.
 - Each file is written atomically, and only when its new content differs from what is on disk. A second run rewrites nothing and changes no modification time.
 - Objects in `.cerbo/trash/` are not touched.
 - An object that cannot be read (for example a `meta.ttl` that does not parse, or one with two object classes) is named by UUID on stderr and left untouched; the other objects are still migrated. So is an object one of whose files changed while it was being migrated.
@@ -266,8 +240,6 @@ Options:
 - Unlike other commands, `cerbo migrate` never auto-registers the vault in the current directory; use `--vault` to name an unregistered one.
 
 **Exit status:** non-zero if any object or vault could not be migrated, or the desktop app is running.
-
-**Warning:** older Cerbo builds cannot read migrated files. Upgrade Cerbo on every device that syncs the vault before migrating, and run `--dry-run` first.
 
 ## symlink
 
@@ -305,17 +277,13 @@ Cerbo keeps a derived, per-machine index of each vault's knowledge graph: every 
 - **One process at a time:** an operation holds the index briefly. Another Cerbo process waits up to 5 seconds, then reports "index busy" and exits non-zero. Saving a page never fails because of the index: if it cannot be updated, a warning says so, the index is marked stale, and the next operation rebuilds it. The CLI waits up to 5 seconds before marking it; the desktop app never waits, and its own index worker catches up from the file watcher.
 - **Orphans:** indexes of vaults that were moved or deleted stay in the cache until you remove them by hand.
 
-**`backrefs.ttl` is gone.** Older Cerbo builds cached each object's backlinks in a `backrefs.ttl` file inside the linked object, so one save rewrote other objects' files. Cerbo no longer writes or reads these files: leftover ones are ignored, and the next full `cerbo index` deletes them from every live object and reports how many it removed.
-
-**Upgrade Cerbo on every device that syncs the vault.** An older build on another device keeps writing `backrefs.ttl` files (they are ignored here, and removed again by the next full `cerbo index`), and it shows backlinks only from those files. To go back to an older build, restore the `backrefs.ttl` files from git or sync history, or run the older build's `cerbo index`.
-
 # SEMANTIC SEARCH
 
 `cerbo search`, `cerbo similar` and `cerbo index --embeddings` compare pages by meaning with text embeddings: each page (its title and `page.md`) becomes a vector of numbers, and pages with close vectors are about the same thing.
 
 - **Local only:** embeddings are computed on this machine. Page text is never sent anywhere; the only network access is the one-time model download.
 - **Opt-in per vault:** a vault has no embeddings until `cerbo index --embeddings` runs on it. Until then `search` and `similar` fail and say so. Embeddings are stored with the semantic index in the user cache, never in the vault, and survive `cerbo index`.
-- **Pinned model:** Cerbo uses `intfloat/multilingual-e5-small` (384 dimensions, 512-token window, Russian, English and about 100 other languages) at one fixed revision, with the SHA-256 checksum of every file built in. Every machine running the same Cerbo release uses byte-identical model files.
+- **Pinned model:** Cerbo uses `intfloat/multilingual-e5-small` (384 dimensions, 512-token window; English, Chinese, Hindi, Spanish, French and about 100 other languages) at one fixed revision, with the SHA-256 checksum of every file built in. Every machine running the same Cerbo release uses byte-identical model files.
 - **Download on first use:** the first command that needs the model downloads its files (about 490 MB) from Hugging Face into `$XDG_CACHE_HOME/cerbo/models/<revision>/`, with progress on stderr, and later commands reuse them. Each file is checked before use. A downloaded or cached file whose checksum differs is deleted and the command fails naming the file; run the command again to download it anew.
 - **`CERBO_MODEL_DIR`:** when set, the model files are read from that directory instead (laid out as in the model repository: `onnx/model.onnx`, `onnx/tokenizer.json`, `onnx/config.json`, `onnx/special_tokens_map.json` and `onnx/tokenizer_config.json`). They are checked against the pinned checksums, nothing is downloaded, and a mismatching file fails the command with its name (it is not deleted). Use this for machines without network access.
 - **Offline:** once the model is cached (or `CERBO_MODEL_DIR` is set), all three commands work without a network. If the model is neither cached nor downloadable, the command fails with "embedding model unavailable".
@@ -357,7 +325,7 @@ Cerbo uses a **UUID-based storage model** where all content is stored locally in
     +-- state.toml            # Application state
 ```
 
-Derived data is kept outside the vault, in the user cache: the semantic index (with the vault's embeddings) lives in `$XDG_CACHE_HOME/cerbo/index/` (see SEMANTIC INDEX), the embedding model in `$XDG_CACHE_HOME/cerbo/models/` (see SEMANTIC SEARCH), the record of objects already checked for the old metadata format in `$XDG_CACHE_HOME/cerbo/vocabulary/`, and the lock a running desktop app holds against automatic rewrites in `$XDG_CACHE_HOME/cerbo/desktop.lock` (see AUTOMATIC MIGRATION). Objects have no `backrefs.ttl`.
+Derived data is kept outside the vault, in the user cache: the semantic index (with the vault's embeddings) lives in `$XDG_CACHE_HOME/cerbo/index/` (see SEMANTIC INDEX), the embedding model in `$XDG_CACHE_HOME/cerbo/models/` (see SEMANTIC SEARCH), the file stamps `cerbo migrate vocabulary --if-needed` uses in `$XDG_CACHE_HOME/cerbo/vocabulary/`, and the lock a running desktop app holds in `$XDG_CACHE_HOME/cerbo/desktop.lock`.
 
 ## Object Types
 
@@ -368,7 +336,7 @@ Each object's `meta.ttl` records its type as `rdf:type` with a schema.org class 
 - **Attachment** (`schema:MediaObject`) - File attachments (future); the MIME type is in `schema:encodingFormat`
 - **Ontology** (`schema:DefinedTermSet`) - Ontology definitions (Schema.org, FOAF bundled by default)
 
-The title is `schema:name`; dates are `schema:dateCreated` and `schema:dateModified`. Further `rdf:type` values are ignored. An object carrying two or more of the four classes above is refused with an error naming its UUID. Files written by older Cerbo builds (`cerbo:type`, `cerbo:title`, ...) are still read; see `migrate vocabulary`.
+The title is `schema:name`; dates are `schema:dateCreated` and `schema:dateModified`. Further `rdf:type` values are ignored. An object carrying two or more of the four classes above is refused with an error naming its UUID.
 
 ## Links and Annotations
 
@@ -426,11 +394,6 @@ Preview, then run, the vocabulary migration of one vault:
 ```
 cerbo migrate vocabulary --vault /path/to/my/vault --dry-run
 cerbo migrate vocabulary --vault /path/to/my/vault
-```
-
-Migrate only what is still in the old format, in every registered vault (what the desktop launcher runs):
-```
-cerbo migrate vocabulary --if-needed
 ```
 
 Show configuration info:
@@ -493,7 +456,7 @@ cerbo symlink
 
 # SEE ALSO
 
-- Project repository: https://github.com/yourusername/cerbo
+- Project repository: https://github.com/antono/cerbo
 - Tauri framework: https://tauri.app/
 - Schema.org: https://schema.org/
 - FOAF ontology: http://xmlns.com/foaf/spec/
