@@ -11,6 +11,10 @@ let
     version = "0.1.0";
     src = ../.;
     cargoLock.lockFile = ../Cargo.lock;
+    # Build only the CLI crate: without -p, cargo builds the whole workspace
+    # and the install hook would copy the desktop binary in as well.
+    cargoBuildFlags = [ "-p" "cerbo" ];
+    cargoTestFlags = [ "-p" "cerbo" "-p" "cerbo-core" ];
     # bindgenHook provides libclang for oxigraph's bundled RocksDB.
     nativeBuildInputs = [
       pkgs.pkg-config
@@ -18,7 +22,6 @@ let
       pkgs.makeWrapper
       pkgs.rustPlatform.bindgenHook
     ];
-    buildInputs = tauri-deps;
     # Network-dependent tests are #[ignore]d; the rest run in the sandbox.
     doCheck = true;
     # Imports shell out to curl; the import-ontology tests fetch file:// URLs.
@@ -77,7 +80,10 @@ let
     version = "0.1.0";
     src = ../.;
     cargoLock.lockFile = ../Cargo.lock;
-    buildAndTestFocus = "cerbo-desktop";
+    # Build and test only the desktop crate; the CLI and core tests run in
+    # the `cerbo` package above, which this one depends on.
+    cargoBuildFlags = [ "-p" "cerbo-desktop" ];
+    cargoTestFlags = [ "-p" "cerbo-desktop" ];
     nativeBuildInputs = [
       pkgs.pkg-config
       pkgs.wrapGAppsHook3
@@ -87,9 +93,6 @@ let
       pkgs.rustPlatform.bindgenHook
     ];
     buildInputs = tauri-deps ++ [ pkgs.gtk3 pkgs.gsettings-desktop-schemas pkgs.adwaita-icon-theme ];
-    # The check phase also runs the CLI import-ontology tests, which shell out
-    # to curl for file:// URLs.
-    nativeCheckInputs = [ pkgs.curl ];
 
     postPatch = ''
       # Nullify devUrl and point frontendDist to the built frontend in the Nix store
@@ -161,8 +164,6 @@ let
     '';
 
     postInstall = ''
-      rm -f $out/bin/cerbo
-
       # Install desktop file. Its basename and StartupWMClass must equal the
       # program name (Wayland app_id and X11 WM_CLASS are both "cerbo-desktop"),
       # otherwise shells cannot match running windows to this entry and icon.

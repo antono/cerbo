@@ -10,7 +10,10 @@ license = "LGPL-3.0-or-later"
 
 [lib]
 name = "cerbo_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop only: main.rs links this crate as an rlib. The Tauri template's
+# staticlib and cdylib exist for mobile targets, and here they only added
+# a 230 MiB libcerbo_lib.{a,so} to every package.
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
