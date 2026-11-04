@@ -837,7 +837,7 @@ pub fn broken_links(ctx: &CerboContext, content: &str) -> Vec<String> {
 /// The vault that `ctx` writes objects into: its `config_dir` is the vault's
 /// `.cerbo/`. Any other context (the global XDG config, a bare test directory)
 /// has no semantic index.
-fn vault_of(ctx: &CerboContext) -> Option<crate::VaultContext> {
+pub(crate) fn vault_of(ctx: &CerboContext) -> Option<crate::VaultContext> {
     if ctx.config_dir.file_name()? != ".cerbo" {
         return None;
     }

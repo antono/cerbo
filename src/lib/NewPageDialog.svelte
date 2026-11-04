@@ -3,15 +3,16 @@
   import { Plus } from 'lucide-svelte';
   import { app, createPage, closeAllDialogs } from './stores.svelte';
   import { stringToSlug } from './slug';
+  import VirtualPathInput from './VirtualPathInput.svelte';
+  import { normalizeVirtualPath, virtualPathError } from './virtual-path';
 
   let { onClose }: { onClose: () => void } = $props();
 
   let title = $state('');
   let slug = $state('');
-  let virtualPath = $state('');
+  let virtualPath = $state(app.newPagePath);
   let slugAutoUpdateEnabled = $state(true);
-  let pathSuggestions = $state<string[]>([]);
-  let showPathSuggestions = $state(false);
+  let pathSuggestionsOpen = $state(false);
   let creating = $state(false);
   let error = $state('');
   let titleInputEl = $state<HTMLInputElement | null>(null);
@@ -24,60 +25,30 @@
 
   function onSlugInput() {
     slugAutoUpdateEnabled = false;
-    showPathSuggestions = false;
   }
 
   function validateSlug(s: string): boolean {
     return /^[a-z0-9\-_]+$/.test(s);
   }
 
-  function validateVirtualPath(p: string): boolean {
-    return /^[a-z0-9\-_\/]+$/.test(p);
-  }
-
-  function onPathInput(value: string) {
-    const existing = ['docs', 'docs/guides', 'docs/api', 'references', 'archive'];
-
-    if (!value.trim()) {
-      pathSuggestions = [];
-      showPathSuggestions = false;
-      return;
-    }
-
-    const lowerValue = value.toLowerCase();
-    pathSuggestions = existing
-      .filter(p => p.toLowerCase().startsWith(lowerValue))
-      .sort();
-
-    showPathSuggestions = pathSuggestions.length > 0;
-  }
-
-  function selectPathSuggestion(path: string) {
-    virtualPath = path;
-    showPathSuggestions = false;
-  }
-
   function onInputKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter') {
       e.preventDefault();
-      if (showPathSuggestions && pathSuggestions.length > 0) {
-        selectPathSuggestion(pathSuggestions[0]);
-      } else {
-        handleCreate();
-      }
+      handleCreate();
     }
   }
 
   async function handleCreate() {
     if (!title.trim() || !slug.trim() || creating) return;
-    if (!validateSlug(slug) || (virtualPath.trim() && !validateVirtualPath(virtualPath))) {
-      error = 'Invalid slug or path format';
+    const pathProblem = virtualPathError(virtualPath.trim());
+    if (!validateSlug(slug) || pathProblem) {
+      error = pathProblem ? `Invalid path: ${pathProblem}` : 'Invalid slug format';
       return;
     }
     creating = true;
     error = '';
     try {
-      await createPage(title.trim(), slug, virtualPath.trim() || undefined);
+      await createPage(title.trim(), slug, normalizeVirtualPath(virtualPath) ?? undefined);
       onClose();
     } catch (e) {
       error = String(e);
@@ -92,8 +63,14 @@
     function handleWindowKeydown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         e.preventDefault();
-        onClose();
-      } else if (e.key === 'Enter' && !showPathSuggestions) {
+        if (pathSuggestionsOpen) {
+          // Consumed here; the layout's Escape must not close the dialog.
+          e.stopPropagation();
+          pathSuggestionsOpen = false;
+        } else {
+          onClose();
+        }
+      } else if (e.key === 'Enter' && !pathSuggestionsOpen) {
         e.preventDefault();
         handleCreate();
       }
@@ -121,8 +98,9 @@
 
     <div class="input-wrap">
       <div class="field">
-        <label>Page Title</label>
+        <label for="new-page-title">Page Title</label>
         <input
+          id="new-page-title"
           bind:this={titleInputEl}
           bind:value={title}
           oninput={updateSlugFromTitle}
@@ -136,8 +114,9 @@
       </div>
 
       <div class="field">
-        <label>Slug {#if !slugAutoUpdateEnabled}<span class="badge">manual</span>{/if}</label>
+        <label for="new-page-slug">Slug {#if !slugAutoUpdateEnabled}<span class="badge">manual</span>{/if}</label>
         <input
+          id="new-page-slug"
           bind:value={slug}
           oninput={(e) => {
             slug = e.currentTarget.value;
@@ -156,35 +135,8 @@
       </div>
 
       <div class="field">
-        <label>Virtual Path <span class="optional">(optional)</span></label>
-        <div class="path-input-wrapper">
-          <input
-            bind:value={virtualPath}
-            oninput={(e) => onPathInput(e.currentTarget.value)}
-            onkeydown={onInputKeydown}
-            placeholder="docs/guides"
-            class="dialog-input"
-            spellcheck="false"
-            autocomplete="off"
-            disabled={creating}
-          />
-          {#if showPathSuggestions && pathSuggestions.length > 0}
-            <div class="suggestions">
-              {#each pathSuggestions as suggestion}
-                <button
-                  class="suggestion-item"
-                  onclick={() => selectPathSuggestion(suggestion)}
-                  disabled={creating}
-                >
-                  {suggestion}
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </div>
-        {#if virtualPath && !validateVirtualPath(virtualPath)}
-          <div class="error-msg">Only alphanumeric, hyphens, underscores, slashes</div>
-        {/if}
+        <label for="new-page-path">Folder <span class="optional">(optional)</span></label>
+        <VirtualPathInput id="new-page-path" bind:value={virtualPath} bind:suggestionsOpen={pathSuggestionsOpen} disabled={creating} />
       </div>
 
       {#if error}
@@ -308,52 +260,6 @@
 
   .dialog-input:focus {
     border-color: var(--primary);
-  }
-
-  .path-input-wrapper {
-    position: relative;
-  }
-
-  .suggestions {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-top: none;
-    border-radius: 0 0 var(--radius) var(--radius);
-    max-height: 200px;
-    overflow-y: auto;
-    z-index: 10;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-  }
-
-  .suggestion-item {
-    display: block;
-    width: 100%;
-    padding: 0.75rem 1rem;
-    text-align: left;
-    background: transparent;
-    border: none;
-    border-bottom: 1px solid var(--border);
-    color: var(--fg);
-    cursor: pointer;
-    font-size: 0.95rem;
-    transition: background-color 0.15s;
-  }
-
-  .suggestion-item:last-child {
-    border-bottom: none;
-  }
-
-  .suggestion-item:hover:not(:disabled) {
-    background-color: var(--sidebar-bg);
-  }
-
-  .suggestion-item:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
   }
 
   .error-msg {

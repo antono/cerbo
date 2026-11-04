@@ -61,11 +61,12 @@ Usage: `cerbo page <SUBCOMMAND>`
 
 ### Subcommands:
 
-- `cerbo page list [--json] [--vault <ID>]` - List all pages in the current vault (auto-discovered from CWD, or override with --vault): a header line naming the vault, then one `<uuid>: <title>` per page. With `--json`, a JSON array of objects with `uuid` and `title`.
+- `cerbo page list [--json] [--vault <ID>]` - List all pages in the current vault (auto-discovered from CWD, or override with --vault): a header line naming the vault, then one `<uuid>: <title>` per page, followed by ` [<virtual path>]` for a page inside a folder. With `--json`, a JSON array of objects with `uuid`, `title` and `virtualPath` (a string, or `null` at the root).
 - `cerbo page create <TITLE> [--json]` - Create a new page with the given title and print its UUID (`Created page with UUID: <uuid>`; with `--json`, `{"uuid": ...}`)
 - `cerbo page read <UUID> [--json]` - Print the markdown content of a page (with `--json`, `{"content": ...}`)
 - `cerbo page write <UUID> <CONTENT> [--json]` - Replace the whole content of a page with `CONTENT`; its links and annotations are re-extracted, and a link to a missing object is reported on stderr while the save still succeeds
 - `cerbo page delete <UUID> [--json]` - Delete a page by its UUID (moved to the trash, see below)
+- `cerbo page move <UUID> <PATH> [--json]` / `cerbo page move <UUID> --root [--json]` - Set the page's virtual path (its folder in the symlink tree and in the desktop sidebar) to `PATH`, or clear it with `--root`. Exactly one of `PATH` and `--root` is required. `PATH` is segments joined by `/` with no leading or trailing slash, no empty segment and no `.` or `..` segment; an invalid path exits non-zero with the broken rule on stderr and writes nothing. Only the page's own `meta.ttl` changes; slug, title and content stay. Imported Source pages can be moved. Prints `Moved <uuid> to <path>` (or `to root`); with `--json`, `{"uuid": ..., "virtualPath": <string or null>}`.
 - `cerbo page backlinks <UUID> [--json] [--vault <ID>]` - List the pages that link to an object, one per line as `<uuid>: <title>`, ordered by title then UUID. With `--json`, stdout is only a JSON array of objects with `uuid` and `title`. An unknown UUID exits non-zero with "Object not found".
 
 **Backlinks come from the semantic index.** A page's links are stored only in its own `page.md`; saving a page never writes to the objects it links to. Cerbo keeps a per-machine index of every page's links in the user cache (`$XDG_CACHE_HOME/cerbo/index/`, never inside the vault; see SEMANTIC INDEX) and answers `cerbo page backlinks` from it. Before answering, the index picks up pages that were added, edited or deleted outside Cerbo (by git, file sync or an editor), so a synced page that links here is listed without running `cerbo index`. The first command that needs the index builds it, with progress on stderr. While another Cerbo process (such as the desktop app) is using the index, the command waits up to 5 seconds and then fails with "index busy". Deleting the index directory loses nothing; it is rebuilt from the vault files.
@@ -77,6 +78,18 @@ Trashed objects are outside the live set: they do not appear in `cerbo page list
 Nothing prunes the trash. Remove entries yourself when you are sure, for example with `rm -rf .cerbo/trash/<entry>`.
 
 Source-type (imported) objects are read-only and cannot be deleted; the refusal happens before anything is moved.
+
+## folder
+
+Operate on the folders of the virtual tree. A folder is not stored anywhere: it exists while at least one page's `cerbo:virtualPath` is that path or lies under it, and it disappears when the last such page moves out.
+
+Usage: `cerbo folder <SUBCOMMAND>`
+
+### Subcommands:
+
+- `cerbo folder rename <OLD> <NEW> [--json]` - Replace the folder prefix `OLD` with `NEW` on every page whose virtual path is `OLD` or starts with `OLD/`; nested folders move along (`notes/rust` becomes `archive/rust` when `notes` is renamed to `archive`), and `notebook` is not under `notes`. Both paths must be non-empty and valid; that is checked before any page is written. Renaming onto an existing folder merges the two. Each page's `meta.ttl` is written on its own; a page that cannot be written is reported on stderr as `Error: could not move <uuid>: <reason>`, the others are still moved, and the command exits non-zero. Prints `Renamed <old> to <new> (<n> pages)`; with `--json`, `{"from": ..., "to": ..., "pages": <n>, "failed": [<uuid>, ...]}`. With no page under `OLD` it exits zero with `0 pages`.
+
+A slug collision inside the target folder (two pages that would share `<folder>/<slug>.md`) is not refused by `page move` or `folder rename`; `cerbo index` reports it and `cerbo symlink` refuses to build until it is resolved.
 
 ## resolve
 
@@ -452,6 +465,16 @@ cerbo sparql 'SELECT ?a ?b WHERE { ?a cerbo:similarTo ?b }'
 Build symlink tree:
 ```
 cerbo symlink
+```
+
+## Organise pages into folders
+
+```
+cerbo page move <uuid> notes/rust          # the page now lives in notes/rust
+cerbo page list                            # <uuid>: Ownership [notes/rust]
+cerbo folder rename notes archive          # every page under notes/ moves under archive/
+cerbo page move <uuid> --root              # back to the root
+cerbo symlink                              # the tree follows: cerbo/archive/rust/ownership.md
 ```
 
 # SEE ALSO

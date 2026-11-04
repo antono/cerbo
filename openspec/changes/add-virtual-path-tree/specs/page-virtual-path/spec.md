@@ -83,7 +83,7 @@ The result SHALL report the number of pages changed.
 - **THEN** the operation fails before any page is written
 
 #### Scenario: A failing page does not stop the rest
-- **WHEN** one page under the prefix has an unreadable `meta.ttl`
+- **WHEN** one page under the prefix has a `meta.ttl` that cannot be written
 - **THEN** the other pages under the prefix are still rewritten
 - **THEN** the operation reports the failing UUID and exits with an error
 

@@ -5,11 +5,13 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { ChevronDown, HelpCircle, Moon, Plus, Sun } from 'lucide-svelte';
   import cerboIcon from '../favicon.svg';
-  import { app, loadVaults, loadUiSettings, saveUiSettings, openVault, quickAddVault, quitApp, closeAllDialogs, openNextPage, openPrevPage, triggerRename, triggerDelete, goBack, goForward } from '#lib/stores.svelte.js';
+  import { app, loadVaults, loadUiSettings, saveUiSettings, openVault, quickAddVault, quitApp, closeAllDialogs, openNextPage, openPrevPage, triggerRename, triggerDelete, triggerMove, goBack, goForward } from '#lib/stores.svelte.js';
   import PageList from '#lib/PageList.svelte';
   import GlobalSearch from '#lib/GlobalSearch.svelte';
   import NewPageDialog from '#lib/NewPageDialog.svelte';
   import RenamePageDialog from '#lib/RenamePageDialog.svelte';
+  import MovePageDialog from '#lib/MovePageDialog.svelte';
+  import RenameFolderDialog from '#lib/RenameFolderDialog.svelte';
   import KeyboardHelp from '#lib/KeyboardHelp.svelte';
   import SparqlConsole from '#lib/SparqlConsole.svelte';
   import ExitConfirmation from '#lib/ExitConfirmation.svelte';
@@ -41,7 +43,7 @@
     function handleKeydown(e: KeyboardEvent) {
       // 1. Escape: Close active dialogs/forms
       if (e.key === 'Escape') {
-        if (app.showSearch || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.renameUuid || app.confirmDeleteUuid || app.showSparqlConsole) {
+        if (app.showSearch || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.renameUuid || app.confirmDeleteUuid || app.showSparqlConsole || app.moveUuid || app.renameFolderPath) {
           closeAllDialogs();
           return;
         }
@@ -88,7 +90,7 @@
       }
 
       // Ignore other global shortcuts if any modal is open
-      if (app.showSearch || app.showExitPrompt || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.confirmDeleteUuid || app.showSparqlConsole) return;
+      if (app.showSearch || app.showExitPrompt || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.renameUuid || app.confirmDeleteUuid || app.showSparqlConsole || app.moveUuid || app.renameFolderPath !== null) return;
 
       // 5. Go Back (Alt+Left) - only when not in input
       if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'Left') && !isInputFocused()) {
@@ -134,6 +136,12 @@
         if (e.key === 'r') {
           e.preventDefault();
           triggerRename();
+          return;
+        }
+        // Move current page to another folder
+        if (e.key === 'm') {
+          e.preventDefault();
+          triggerMove();
           return;
         }
         // Delete current page
@@ -389,11 +397,19 @@
 {/if}
 
 {#if app.showNewPageForm}
-  <NewPageDialog onClose={() => app.showNewPageForm = false} />
+  <NewPageDialog onClose={() => { app.showNewPageForm = false; app.newPagePath = ''; }} />
 {/if}
 
 {#if app.renameUuid}
   <RenamePageDialog onClose={() => app.renameUuid = null} />
+{/if}
+
+{#if app.moveUuid}
+  <MovePageDialog onClose={() => app.moveUuid = null} />
+{/if}
+
+{#if app.renameFolderPath !== null}
+  <RenameFolderDialog onClose={() => app.renameFolderPath = null} />
 {/if}
 
 {#if app.showHelp}

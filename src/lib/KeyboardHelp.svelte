@@ -33,11 +33,25 @@
       ],
     },
     {
+      title: 'Sidebar tree',
+      shortcuts: [
+        { keys: ['j', '↓'], sep: 'or', desc: 'Next row' },
+        { keys: ['k', '↑'], sep: 'or', desc: 'Previous row' },
+        { keys: ['h', '←'], sep: 'or', desc: 'Collapse folder, or go to its parent' },
+        { keys: ['l', '→'], sep: 'or', desc: 'Expand folder, or step into it' },
+        { keys: ['Enter'], desc: 'Open page / toggle folder' },
+        { keys: ['m'], desc: 'Move page / rename folder' },
+        { keys: ['r'], desc: 'Rename page or folder' },
+        { keys: ['Del'], desc: 'Delete page' },
+      ],
+    },
+    {
       title: 'Preview mode',
       shortcuts: [
         { keys: ['j', '↓'], sep: 'or', desc: 'Scroll down' },
         { keys: ['k', '↑'], sep: 'or', desc: 'Scroll up' },
         { keys: ['r'], desc: 'Rename current page' },
+        { keys: ['m'], desc: 'Move current page to a folder' },
         { keys: ['Del'], desc: 'Delete current page' },
       ],
     },

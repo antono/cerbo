@@ -47,6 +47,31 @@ pub async fn page_update_title(
     off_main(move || cerbo_core::page::page_update_title(&ctx, uuid, newTitle)).await
 }
 
+/// Set or clear a page's `cerbo:virtualPath` (spec `page-virtual-path`).
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn page_move(
+    app: AppHandle,
+    uuid: String,
+    virtualPath: Option<String>,
+) -> Result<(), String> {
+    let ctx = get_vault_ctx(&app)?;
+    off_main(move || cerbo_core::page::page_update_virtual_path(&ctx, uuid, virtualPath)).await
+}
+
+/// Rename a folder prefix on every page under it; the report lists the pages
+/// changed and those that failed, each with its error.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn folder_rename(
+    app: AppHandle,
+    oldPrefix: String,
+    newPrefix: String,
+) -> Result<cerbo_core::page::FolderRenameReport, String> {
+    let ctx = get_vault_ctx(&app)?;
+    off_main(move || cerbo_core::page::folder_rename(&ctx, &oldPrefix, &newPrefix)).await
+}
+
 #[tauri::command]
 #[allow(non_snake_case)]
 pub fn cursor_position_save(

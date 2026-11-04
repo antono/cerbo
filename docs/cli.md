@@ -27,7 +27,15 @@ cerbo page read  <uuid>
 cerbo page write <uuid> "New content"
 cerbo page delete <uuid>                # moves the object to .cerbo/trash/
 cerbo page backlinks <uuid>             # pages linking here (add --json for an array)
+cerbo page move <uuid> notes/rust       # put the page in a folder of the virtual tree
+cerbo page move <uuid> --root           # back to the root
+cerbo folder rename notes archive       # move every page under notes/ to archive/
 ```
+
+A page's folder is its `cerbo:virtualPath`: it nests the page in the symlink
+tree and in the desktop sidebar. Folders are not stored; one exists while a
+page is in it. `page list` shows the path after the title, and in `--json` as
+`virtualPath` (`null` at the root).
 
 Backlinks are answered from the semantic index in `$XDG_CACHE_HOME/cerbo/index/`.
 It is built on first use and picks up pages changed outside Cerbo before every

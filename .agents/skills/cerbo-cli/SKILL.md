@@ -40,12 +40,14 @@ cwd is auto-registered silently and shows as `(auto)` in `cerbo vault list`.
 | --- | --- |
 | `cerbo init` | Create `.cerbo/` in the cwd, bundle Schema.org and FOAF, add `/cerbo/` and `/.cerbo/trash/` to `.gitignore` |
 | `cerbo vault list\|add\|remove\|active\|approve` | Manage the vault registry (`add <NAME> <PATH>`, the others take a vault ID) |
-| `cerbo page list` | Header line, then `<uuid>: <title>` per page; the bundled ontology objects (`Ontology: …`) are listed too |
+| `cerbo page list` | Header line, then `<uuid>: <title> [<virtual path>]` per page (`--json`: `uuid`, `title`, `virtualPath` or null); the bundled ontology objects (`Ontology: …`) are listed too |
 | `cerbo page create <TITLE>` | New page; prints `Created page with UUID: <uuid>` |
 | `cerbo page read <UUID>` | Print the page's markdown |
 | `cerbo page write <UUID> <CONTENT>` | Replace the **whole** page content; links and annotations are re-extracted |
 | `cerbo page delete <UUID>` | Move the page to `.cerbo/trash/<timestamp>-<uuid>/` (nothing is erased) |
 | `cerbo page backlinks <UUID>` | Pages linking to the object, `<uuid>: <title>` per line |
+| `cerbo page move <UUID> <PATH>` / `--root` | Set the page's folder in the virtual tree (`notes/rust`), or clear it; exactly one of the two |
+| `cerbo folder rename <OLD> <NEW>` | Move every page whose path is `OLD` or under `OLD/` to `NEW`; `0 pages` is not an error |
 | `cerbo resolve <UUID>` | UUID to filesystem path of the object directory |
 | `cerbo info` | Config dir, cache dir, registered vaults |
 | `cerbo import <URL>` | A read-only Source object (`schema:WebPage`) for the URL |
@@ -85,6 +87,11 @@ Every command above takes `--json`. `search`, `similar` take `--limit N`,
   the index for more than 5 seconds. Retry, or close the app.
 - **SPARQL is read-only.** `INSERT`/`DELETE`/`LOAD` are refused; change data
   through `page write`.
+- **Folders are paths, not objects.** `page move` and `folder rename` only
+  rewrite `cerbo:virtualPath` in `meta.ttl`; a folder exists while a page is in
+  it. Paths are `a/b/c` with no leading or trailing slash and no `.`/`..`.
+  Moving two pages with the same slug into one folder is allowed but makes
+  `cerbo symlink` refuse until one slug or path changes.
 - **Don't edit `meta.ttl` / `annotations.ttl` by hand.** They are regenerated
   on save and by `cerbo index`.
 - A non-zero exit code always means failure; the message is on stderr (or in
@@ -103,7 +110,8 @@ cerbo page write <A> "# Trip to Berlin
 
 Went with [Alice](cerbo://<B>) to [Berlin]{schema:Place} in May."
 cerbo page backlinks <B>                           # <A>: Trip to Berlin
-cerbo symlink                                      # notes/cerbo/trip-to-berlin.md -> ../.cerbo/objects/<A>/page.md
+cerbo page move <A> travel/2026                    # folder in the tree; Moved <A> to travel/2026
+cerbo symlink                                      # notes/cerbo/travel/2026/trip-to-berlin.md -> ../../../.cerbo/objects/<A>/page.md
 ```
 
 ### Edit an existing page

@@ -97,6 +97,17 @@ fn ui_settings_save(
 }
 
 #[tauri::command]
+#[allow(non_snake_case)]
+fn ui_settings_set_collapsed_folders(
+    app: tauri::AppHandle,
+    vaultId: String,
+    paths: Vec<String>,
+) -> Result<(), String> {
+    let ctx = get_context(&app)?;
+    cerbo_core::ui_settings::set_collapsed_folders(&ctx, &vaultId, paths)
+}
+
+#[tauri::command]
 fn window_bounds_load(
     app: tauri::AppHandle,
 ) -> Result<Option<cerbo_core::ui_settings::WindowBounds>, String> {
@@ -164,6 +175,8 @@ pub fn run() {
             page::page_delete,
             page::page_list,
             page::page_update_title,
+            page::page_move,
+            page::folder_rename,
             page::cursor_position_save,
             page::cursor_position_load,
             page::attachment_list,
@@ -173,6 +186,7 @@ pub fn run() {
             page::attachment_open,
             ui_settings_load,
             ui_settings_save,
+            ui_settings_set_collapsed_folders,
             window_bounds_load,
             window_bounds_save,
             state_load,

@@ -46,7 +46,10 @@ fn print_pages_template(
 
     println!("Pages in \"{}\" ({}):", vault_name, vault_id);
     for p in pages {
-        println!("{}: {}", p.uuid, p.title);
+        match &p.virtual_path {
+            Some(path) => println!("{}: {} [{}]", p.uuid, p.title, path),
+            None => println!("{}: {}", p.uuid, p.title),
+        }
     }
 
     Ok(())
@@ -192,6 +195,11 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Rename a folder of the virtual tree (moves every page under it)
+    Folder {
+        #[command(subcommand)]
+        action: FolderCommands,
+    },
     /// Rewrite stored metadata into the current format
     Migrate {
         #[command(subcommand)]
@@ -292,10 +300,24 @@ enum MigrateCommands {
 }
 
 #[derive(Subcommand)]
+enum FolderCommands {
+    /// Replace the folder prefix OLD with NEW on every page whose virtual path is OLD or starts with OLD/
+    Rename {
+        /// Current folder path, e.g. notes
+        old: String,
+        /// New folder path, e.g. archive/notes
+        new: String,
+        /// Output the result as JSON ({"from", "to", "pages", "failed"})
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum PageCommands {
-    /// List all pages of the vault: a header line, then one `<uuid>: <title>` per page
+    /// List all pages of the vault: a header line, then one `<uuid>: <title> [<virtual path>]` per page
     List {
-        /// Print a JSON array of {"uuid", "title"}
+        /// Print a JSON array of {"uuid", "title", "virtualPath"}
         #[arg(long)]
         json: bool,
         /// Vault ID to list pages from. If omitted, the vault is discovered from the current directory
@@ -333,6 +355,20 @@ enum PageCommands {
         /// UUID of the page
         uuid: String,
         /// Output the result as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set a page's virtual path (its folder in the symlink tree and the desktop sidebar), or clear it with --root
+    #[command(group = clap::ArgGroup::new("target").required(true).args(["path", "root"]))]
+    Move {
+        /// UUID of the page
+        uuid: String,
+        /// The new folder path, e.g. notes/rust (no leading or trailing slash, no . or .. segments)
+        path: Option<String>,
+        /// Move the page to the root: remove its virtual path
+        #[arg(long)]
+        root: bool,
+        /// Output the result as JSON ({"uuid", "virtualPath"}; virtualPath is null at the root)
         #[arg(long)]
         json: bool,
     },
@@ -938,11 +974,7 @@ async fn main() -> Result<(), String> {
                 let pages = cerbo_core::page::page_list(&eff_ctx)?;
 
                 if json {
-                    let pages_json: Vec<PageJson> = pages.into_iter().map(|p| PageJson {
-                        uuid: p.uuid,
-                        title: p.title,
-                    }).collect();
-                    print_json(&pages_json);
+                    print_json(&pages);
                 } else {
                     print_pages_template(&ctx, &eff_ctx, &pages)?;
                 }
@@ -1005,6 +1037,22 @@ async fn main() -> Result<(), String> {
                     print_json_success("Page deleted");
                 } else {
                     println!("Deleted page");
+                }
+            }
+            PageCommands::Move { uuid, path, root, json } => {
+                let eff_ctx = resolve_vault_ctx(
+                    &ctx,
+                    None,
+                    cwd_vault_id.as_deref(),
+                    cwd_vault_root.as_deref(),
+                )?;
+                check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
+                let target = if root { None } else { path }.filter(|p| !p.is_empty());
+                cerbo_core::page::page_update_virtual_path(&eff_ctx, uuid.clone(), target.clone())?;
+                if json {
+                    print_json(&serde_json::json!({"uuid": uuid, "virtualPath": target}));
+                } else {
+                    println!("Moved {} to {}", uuid, target.as_deref().unwrap_or("root"));
                 }
             }
             PageCommands::Backlinks { uuid, json, vault } => {
@@ -1242,6 +1290,34 @@ async fn main() -> Result<(), String> {
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
+                }
+            }
+        },
+        Commands::Folder { action } => match action {
+            FolderCommands::Rename { old, new, json } => {
+                let eff_ctx = resolve_vault_ctx(
+                    &ctx,
+                    None,
+                    cwd_vault_id.as_deref(),
+                    cwd_vault_root.as_deref(),
+                )?;
+                check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
+                let report = cerbo_core::page::folder_rename(&eff_ctx, &old, &new)?;
+                for (uuid, err) in &report.failed {
+                    eprintln!("Error: could not move {uuid}: {err}");
+                }
+                if json {
+                    print_json(&serde_json::json!({
+                        "from": old,
+                        "to": new,
+                        "pages": report.changed.len(),
+                        "failed": report.failed.iter().map(|(u, _)| u).collect::<Vec<_>>(),
+                    }));
+                } else {
+                    println!("Renamed {} to {} ({} pages)", old, new, report.changed.len());
+                }
+                if !report.failed.is_empty() {
+                    return Err(format!("{} pages could not be moved", report.failed.len()));
                 }
             }
         },

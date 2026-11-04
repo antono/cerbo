@@ -6,8 +6,14 @@ its own vault selector) and edits the same `.cerbo/` store the CLI uses.
 
 ## Layout
 
-- **Left sidebar**: the pages of the open vault. `J`/`K` move, `Tab` cycles,
-  `Ctrl+P` searches by title.
+- **Left sidebar**: the pages of the open vault as a folder tree. A page's
+  folder is its `cerbo:virtualPath` (the same path `cerbo symlink` nests it
+  under); folders are not stored, one exists while a page is in it. Click a
+  folder to collapse or expand it (remembered per vault), drag a page onto a
+  folder or onto the root zone below the list to move it, or right-click a row
+  for **Move to…**, **Rename**, **Delete** on a page and **New page here**,
+  **Rename folder** on a folder. `J`/`K` move, `Tab` cycles, `Ctrl+P`
+  searches by title.
 - **Editor**: a write tab and a preview tab. Saves are queued and written
   atomically; a page changed on disk by another program shows a diff and asks
   before overwriting.
@@ -52,7 +58,9 @@ on macOS):
 | `Alt+←` / `Alt+→` | Back / forward in history |
 | `J` / `K`, `Tab` | Next / previous page, cycle pages in the sidebar |
 | `j` / `k` (preview) | Scroll down / up |
-| `r`, `Del` (preview) | Rename / delete the current page |
+| `r`, `m`, `Del` (preview) | Rename / move / delete the current page |
+| `j` `k` `h` `l` (sidebar) | Next / previous row, collapse or go to parent, expand or step in |
+| `Enter`, `m`, `r` (sidebar) | Open page or toggle folder, move page or rename folder, rename |
 | `Esc` | Close the active dialog |
 
 ## Startup

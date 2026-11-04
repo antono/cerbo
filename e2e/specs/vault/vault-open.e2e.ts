@@ -11,9 +11,10 @@ describe('launch with the fixture vault', () => {
   });
 
   it('lists the vault pages', async () => {
-    // test-vault/ holds a single page object, "Index".
+    // test-vault/ holds a single page object, "Index". Its row is a tree
+    // row whose title sits in `.label`; read the DOM text as above.
     const page = $('.page-list .page-btn');
     await page.waitForDisplayed({ timeout: 30_000 });
-    await expect(page).toHaveText('Index');
+    await expect(page.$('.label')).toHaveElementProperty('textContent', 'Index');
   });
 });

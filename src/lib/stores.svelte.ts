@@ -25,7 +25,16 @@ import {
   type SimilarNotesResponse,
   type SimilarState,
 } from './similar-notes';
-import { serialQueue } from './write-queue';
+import { serialQueue } from './write-queue';import {
+  buildPageTree,
+  carryCollapsed,
+  flattenVisible,
+  pruneCollapsed,
+  revealPath,
+  visiblePageUuids,
+  type TreeRow,
+} from './page-tree';
+
 
 // ── Types (mirror Rust structs) ───────────────────────────────────────────────
 
@@ -44,6 +53,8 @@ interface AppStateFile {
 export interface PageMeta {
   uuid: string;
   title: string;
+  /** The page's `cerbo:virtualPath`; null at the root. */
+  virtualPath: string | null;
 }
 
 export interface BacklinkEntry {
@@ -69,6 +80,8 @@ export interface UiSettings {
   rightSidebarVisible: boolean | null;
   windowBounds: { width: number; height: number } | null;
   lastSparqlQuery: string | null;
+  /** Collapsed sidebar folders per vault id; only collapsed ones are listed. */
+  collapsedFolders?: Record<string, string[]>;
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system';
@@ -112,6 +125,15 @@ export const app = $state({
   renameUuid: null as string | null,
   renameTitle: '',
   confirmDeleteUuid: null as string | null,
+  // Sidebar tree (spec `desktop-page-tree`): the page being moved, the folder
+  // being renamed, and the folder a new page is created in.
+  moveUuid: null as string | null,
+  renameFolderPath: null as string | null,
+  newPagePath: '',
+  // Collapsed folders of the open vault; only collapsed ones are stored.
+  collapsedFolders: [] as string[],
+  // Collapsed folders of every vault, as loaded from ui.toml.
+  uiCollapsedFolders: {} as Record<string, string[]>,
   showSparqlConsole: false,
   // Last query run in the SPARQL console, kept in ui.toml across restarts.
   lastSparqlQuery: null as string | null,
@@ -135,6 +157,7 @@ export async function loadUiSettings(): Promise<void> {
     if (typeof res.lastSparqlQuery === 'string') {
       app.lastSparqlQuery = res.lastSparqlQuery;
     }
+    app.uiCollapsedFolders = res.collapsedFolders ?? {};
     // `windowBounds` is applied by the desktop layer when the window opens
     // and saved by `app_exit`; the frontend never sends it (null keeps it).
   } catch (e) {
@@ -171,6 +194,9 @@ export function closeAllDialogs() {
   app.renameTitle = '';
   app.confirmDeleteUuid = null;
   app.showSparqlConsole = false;
+  app.moveUuid = null;
+  app.renameFolderPath = null;
+  app.newPagePath = '';
 }
 
 // ── Computed helpers ──────────────────────────────────────────────────────────
@@ -234,6 +260,7 @@ export async function openVault(vaultId: string): Promise<void> {
     app.activeVaultId = vaultId;
     await invoke('vault_set_active', { id: vaultId });
     await loadPages();
+    app.collapsedFolders = pruneCollapsed(app.uiCollapsedFolders[vaultId] ?? [], app.pages);
     await loadVaultObjects();
     // Before the first page renders, so mentions resolve on first paint.
     await loadPrefixMap();
@@ -368,6 +395,7 @@ export async function openPage(uuid: string, options?: OpenPageOptions): Promise
     const content = await invoke<string>('page_read', { uuid });
     app.currentUuid = uuid;
     app.currentContent = content;
+    revealPage(uuid);
     await invoke('vault_update_last_page', { vaultId: app.activeVaultId, uuid });
     const v = activeVault();
     if (v) v.lastOpenPage = uuid;
@@ -379,18 +407,117 @@ export async function openPage(uuid: string, options?: OpenPageOptions): Promise
   }
 }
 
+// Next/previous follow the sidebar: visible page rows in tree order.
 export async function openNextPage(): Promise<void> {
-  if (app.pages.length === 0) return;
-  const currentIndex = app.pages.findIndex(p => p.uuid === app.currentUuid);
-  const nextIndex = (currentIndex + 1) % app.pages.length;
-  await openPage(app.pages[nextIndex].uuid);
+  const order = visiblePageUuids(visibleRows());
+  if (order.length === 0) return;
+  const currentIndex = order.indexOf(app.currentUuid ?? '');
+  await openPage(order[(currentIndex + 1) % order.length]);
 }
 
 export async function openPrevPage(): Promise<void> {
-  if (app.pages.length === 0) return;
-  const currentIndex = app.pages.findIndex(p => p.uuid === app.currentUuid);
-  const prevIndex = (currentIndex - 1 + app.pages.length) % app.pages.length;
-  await openPage(app.pages[prevIndex].uuid);
+  const order = visiblePageUuids(visibleRows());
+  if (order.length === 0) return;
+  const currentIndex = order.indexOf(app.currentUuid ?? '');
+  const prevIndex = currentIndex < 0 ? order.length - 1 : (currentIndex - 1 + order.length) % order.length;
+  await openPage(order[prevIndex]);
+}
+
+// ── Sidebar tree (spec `desktop-page-tree`, design D5, D6) ───────────────────
+
+/** The sidebar rows: the tree of `app.pages` minus collapsed subtrees. */
+export function visibleRows(): TreeRow[] {
+  return flattenVisible(buildPageTree(app.pages), new Set(app.collapsedFolders));
+}
+
+/** Set the collapsed folders of the open vault and remember them in ui.toml. */
+export function setCollapsedFolders(paths: string[]): void {
+  const vaultId = app.activeVaultId;
+  if (!vaultId) return;
+  const next = pruneCollapsed(paths, app.pages);
+  const unchanged = next.length === app.collapsedFolders.length && next.every((p) => app.collapsedFolders.includes(p));
+  app.collapsedFolders = next;
+  if (unchanged) return;
+  app.uiCollapsedFolders[vaultId] = next;
+  invoke('ui_settings_set_collapsed_folders', { vaultId, paths: next }).catch((e) => {
+    console.error('Failed to save collapsed folders:', e);
+  });
+}
+
+export function collapseFolder(path: string): void {
+  if (!app.collapsedFolders.includes(path)) setCollapsedFolders([...app.collapsedFolders, path]);
+}
+
+export function expandFolder(path: string): void {
+  if (app.collapsedFolders.includes(path)) setCollapsedFolders(app.collapsedFolders.filter((p) => p !== path));
+}
+
+export function toggleFolder(path: string): void {
+  if (app.collapsedFolders.includes(path)) expandFolder(path);
+  else collapseFolder(path);
+}
+
+/** Expand every folder on the page's path so its row is visible. */
+export function revealPage(uuid: string): void {
+  const page = app.pages.find((p) => p.uuid === uuid);
+  if (!page) return;
+  const next = revealPath(app.collapsedFolders, page.virtualPath);
+  if (next.length !== app.collapsedFolders.length) setCollapsedFolders(next);
+}
+
+export interface FolderRenameReport {
+  changed: string[];
+  failed: [string, string][];
+}
+
+/** Move a page to `path` (null for the root) and show it in its new folder. */
+export async function movePage(uuid: string, path: string | null): Promise<void> {
+  if (!app.activeVaultId) throw new Error('No active vault');
+  // The reload is queued with the write, so two quick moves cannot leave
+  // `app.pages` showing the older listing.
+  await vaultWrite(async () => {
+    await invoke('page_move', { uuid, virtualPath: path });
+    await loadPages();
+  });
+  setCollapsedFolders(revealPath(app.collapsedFolders, path));
+}
+
+/**
+ * Rename the folder `from` to `to` on every page under it. Collapsed state
+ * follows the folder. Pages that could not be moved are reported in the error
+ * banner; the rest are moved.
+ */
+export async function renameFolder(from: string, to: string): Promise<FolderRenameReport> {
+  if (!app.activeVaultId) throw new Error('No active vault');
+  const report = await vaultWrite(async () => {
+    const r = await invoke<FolderRenameReport>('folder_rename', { oldPrefix: from, newPrefix: to });
+    await loadPages();
+    return r;
+  });
+  setCollapsedFolders(carryCollapsed(app.collapsedFolders, from, to));
+  if (report.failed.length > 0) {
+    const details = report.failed.map(([uuid, err]) => `${uuid}: ${err}`).join('; ');
+    setError(`${report.failed.length} pages could not be moved: ${details}`);
+  }
+  return report;
+}
+
+export function triggerMove(uuid?: string) {
+  const targetUuid = uuid || app.currentUuid;
+  if (!targetUuid || !app.pages.some((p) => p.uuid === targetUuid)) return;
+  closeAllDialogs();
+  app.moveUuid = targetUuid;
+}
+
+export function triggerRenameFolder(path: string) {
+  closeAllDialogs();
+  app.renameFolderPath = path;
+}
+
+export function triggerNewPageIn(path: string) {
+  closeAllDialogs();
+  app.newPagePath = path;
+  app.showNewPageForm = true;
 }
 
 // Page changes run off the main thread in the desktop layer; queue them so they
