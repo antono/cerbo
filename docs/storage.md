@@ -1,4 +1,4 @@
-# Cerbo Storage Layout (UUID-Based Model)
+# Storage layout
 
 ## Overview
 
@@ -152,28 +152,6 @@ convenience copy, and Cerbo never reads it back.
 have no schema.org equivalent stay in Cerbo's own namespace: `cerbo:slug`,
 `cerbo:virtualPath`, `cerbo:position` and `cerbo:unresolvedType`.
 
-#### Legacy vocabulary
-
-Vaults written by older Cerbo builds use Cerbo's private terms. They are still
-read: the parser rewrites them to the standard terms as it reads, and every write
-uses only the standard ones.
-
-| Legacy (read only) | Standard (read and write) |
-|---|---|
-| `cerbo:type` | `rdf:type` (`a`) |
-| `cerbo:Product` / `Source` / `Attachment` / `Ontology` | `schema:NoteDigitalDocument` / `WebPage` / `MediaObject` / `DefinedTermSet` |
-| `cerbo:title` | `schema:name` |
-| `cerbo:original-url` (literal) | `schema:url` (IRI; a literal is still read) |
-| `cerbo:mime-type` | `schema:encodingFormat` |
-| `<cerbo://ontology/schema/x>` | `<https://schema.org/x>` |
-| `cerbo:annotation` / `cerbo:concept` | `schema:mentions` / `schema:name` |
-
-Every CLI command that works on a vault, and the desktop launcher, rewrites the
-objects still in the legacy form before going on, and `cerbo migrate vocabulary`
-rewrites a whole vault on request (see
-[Migrating an old vault](#migrating-an-old-vault)). Saving an object also
-rewrites its `meta.ttl` in the standard form.
-
 ### annotations.ttl (Turtle RDF)
 
 Each annotation becomes an entity the page mentions. For a `page.md` whose third
@@ -268,19 +246,6 @@ path, so every vault on a machine has its own index.
   in the cache until removed by hand.
 - `cerbo sparql '<query>'` queries it read-only; see the man page.
 
-### Legacy `backrefs.ttl`
-
-Older Cerbo builds cached backlinks in a `backrefs.ttl` file inside each linked
-object (`<target> cerbo:hasBacklink <source>`), so saving one page rewrote other
-objects' files. Cerbo neither writes nor reads these files any more. A leftover
-file is ignored, and the next full `cerbo index` deletes every one in live
-objects and reports the count (`legacy_backrefs_removed` with `--json`).
-
-**Upgrade Cerbo on every device that syncs the vault.** An older build keeps
-writing `backrefs.ttl` (ignored here and removed again by the next full
-`cerbo index`) and reads backlinks only from those files. To roll back, restore
-the files from git or sync history, or run the older build's `cerbo index`.
-
 ## Other derived data in the user cache
 
 Besides the semantic index, `$XDG_CACHE_HOME/cerbo/` (`~/.cache/cerbo/` by
@@ -304,33 +269,70 @@ one full read of the vault on the next command.
 every vocabulary migration takes it exclusively, without waiting, and writes
 nothing when it cannot.
 
+## Configuration (outside the vault)
 
-
-## Link Format
-
-Cerbo uses `cerbo://<uuid>` links instead of wikilinks:
-
-```markdown
-Check out [this page](cerbo://123e4567-e89b-12d3-a456-426614174000) for details.
-
-[Bob]{schema:Person} works at [Acme Corp]{schema:Organization}.
-```
-
-Title-to-UUID resolution is a scan of the vault's `meta.ttl` files. There is no
-lookup index on disk to fall out of date.
-
-## Annotation Syntax (HackMD-style)
+`$XDG_CONFIG_HOME/cerbo/` (`~/.config/cerbo/` by default) holds:
 
 ```
-[Text]{prefix:Type}
+vaults.toml        # vaults registered with `cerbo vault add`: id, name, path
+vaults.auto.toml   # vaults discovered from the current directory (shown as "(auto)")
+ui.toml            # desktop settings: theme, window size, open vault and page
 ```
 
-Examples:
-- `[Bob]{schema:Person}` → the page mentions a `https://schema.org/Person` named "Bob"
-- `[Alice]{foaf:Person}` → the page mentions a `http://xmlns.com/foaf/0.1/Person` named "Alice"
-- `[Product X]{Product}` → no prefix: kept as `cerbo:unresolvedType "Product"`, with a warning
+`cerbo info` prints both directories and the registered vaults.
 
-## Migrating an old vault
+## Links and annotations
+
+Pages link with `cerbo://<uuid>` and annotate with `[Text]{prefix:Type}`; both
+are described in [links-and-annotations.md](links-and-annotations.md). The
+resulting `annotations.ttl` format is above.
+
+## Older vaults
+
+Cerbo still reads what older builds wrote, and brings it to the current format
+on the way. This section is the complete list of those older forms.
+
+### Legacy vocabulary
+
+Vaults written by older Cerbo builds use Cerbo's private terms. They are still
+read: the parser rewrites them to the standard terms as it reads, and every write
+uses only the standard ones.
+
+| Legacy (read only) | Standard (read and write) |
+|---|---|
+| `cerbo:type` | `rdf:type` (`a`) |
+| `cerbo:Product` / `Source` / `Attachment` / `Ontology` | `schema:NoteDigitalDocument` / `WebPage` / `MediaObject` / `DefinedTermSet` |
+| `cerbo:title` | `schema:name` |
+| `cerbo:original-url` (literal) | `schema:url` (IRI; a literal is still read) |
+| `cerbo:mime-type` | `schema:encodingFormat` |
+| `<cerbo://ontology/schema/x>` | `<https://schema.org/x>` |
+| `cerbo:annotation` / `cerbo:concept` | `schema:mentions` / `schema:name` |
+
+Every CLI command that works on a vault, and the desktop launcher, rewrites the
+objects still in the legacy form before going on, and `cerbo migrate vocabulary`
+rewrites a whole vault on request (see
+[Migrating](#migrating)). Saving an object also
+rewrites its `meta.ttl` in the standard form.
+
+### `backrefs.ttl`
+
+Older Cerbo builds cached backlinks in a `backrefs.ttl` file inside each linked
+object (`<target> cerbo:hasBacklink <source>`), so saving one page rewrote other
+objects' files. Cerbo neither writes nor reads these files any more. A leftover
+file is ignored, and the next full `cerbo index` deletes every one in live
+objects and reports the count (`legacy_backrefs_removed` with `--json`).
+
+**Upgrade Cerbo on every device that syncs the vault.** An older build keeps
+writing `backrefs.ttl` (ignored here and removed again by the next full
+`cerbo index`) and reads backlinks only from those files. To roll back, restore
+the files from git or sync history, or run the older build's `cerbo index`.
+
+### `index.json`
+
+Older builds kept a title-to-UUID lookup in `.cerbo/index.json`. Nothing reads
+it any more (titles are resolved from `meta.ttl`); delete it at any time.
+
+### Migrating
 
 Old files stay readable, so migration is optional, but it makes the files on
 disk match what standard RDF tools expect:
@@ -362,24 +364,7 @@ stops the command or the app.
 **Upgrade Cerbo on every device that syncs the vault.** Older builds cannot read
 the migrated files.
 
-## Key Differences from Slug-Based Model
+### Slug-based vaults
 
-| Feature | Old Model (Slug-Based) | New Model (UUID-Based) |
-|---------|------------------------|------------------------|
-| Storage | `<slug>/page.md` | `.cerbo/objects/<uuid>/page.md` |
-| Human-readable tree | The storage itself | `cerbo/` symlink projection |
-| Links | `[[Page Title]]` | `cerbo://<uuid>` |
-| Backlinks | Computed on-the-fly | Query over the semantic index in the user cache |
-| Annotations | Not supported | HackMD syntax → `annotations.ttl` |
-| Renaming | Updates all links | Updates `meta.ttl` only; links are UUIDs |
-| Delete | Removed the files | Moved to `.cerbo/trash/` |
-| Read-only | Not enforced | Enforced for Source type |
-
-## Breaking Change
-
-This is a **breaking change** by design. Old vaults using slug-based storage are
-not compatible. Users must create new vaults and manually migrate content if
-needed.
-
-A `.cerbo/index.json` from an older Cerbo is ignored: nothing reads it, and it may
-be deleted by hand at any time.
+Vaults from before the UUID store kept `<slug>/page.md` and `[[Title]]` links.
+They cannot be read: create a new vault and move the content over by hand.

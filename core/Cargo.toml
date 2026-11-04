@@ -29,6 +29,7 @@ ureq = { version = "3", default-features = false, features = ["rustls"], optiona
 sha2 = "0.10"
 
 [features]
+# Mock embedder for the CLI integration tests.
 test-utils = []
 embeddings = ["dep:fastembed", "dep:ureq"]
 

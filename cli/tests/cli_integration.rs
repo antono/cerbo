@@ -231,6 +231,177 @@ fn test_page_list() {
     assert!(output_str.contains("Page 3"));
 }
 
+fn vp_init(ctx: &TestContext, root: &Path) {
+    let output = ctx.cmd().arg("init").current_dir(root).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+fn vp_create(ctx: &TestContext, root: &Path, title: &str) -> String {
+    let output = page_create_in(ctx, root, title);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    stdout_json(&output)["uuid"].as_str().unwrap().to_string()
+}
+
+fn vp_run(ctx: &TestContext, root: &Path, args: &[&str]) -> std::process::Output {
+    ctx.cmd().args(args).current_dir(root).output().unwrap()
+}
+
+fn vp_path_of(ctx: &TestContext, root: &Path, uuid: &str) -> serde_json::Value {
+    let pages = stdout_json(&page_list_in(ctx, root));
+    pages
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["uuid"] == uuid)
+        .unwrap_or_else(|| panic!("{uuid} not listed in {pages}"))["virtualPath"]
+        .clone()
+}
+
+#[test]
+fn test_page_move_sets_and_clears_the_virtual_path() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    vp_init(&ctx, root);
+    let uuid = vp_create(&ctx, root, "Ownership");
+
+    let output = vp_run(&ctx, root, &["page", "move", &uuid, "notes/rust"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), format!("Moved {uuid} to notes/rust"));
+    assert!(meta_of(root, &uuid).contains("virtualPath"));
+    assert_eq!(vp_path_of(&ctx, root, &uuid), "notes/rust");
+
+    let output = vp_run(&ctx, root, &["page", "move", &uuid, "--root", "--json"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let json = stdout_json(&output);
+    assert_eq!(json["uuid"], uuid.as_str());
+    assert!(json["virtualPath"].is_null(), "{json}");
+    assert!(!meta_of(root, &uuid).contains("virtualPath"));
+    assert!(vp_path_of(&ctx, root, &uuid).is_null());
+}
+
+#[test]
+fn test_page_move_rejects_an_invalid_path_without_writing() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    vp_init(&ctx, root);
+    let uuid = vp_create(&ctx, root, "Ownership");
+    let before = meta_of(root, &uuid);
+
+    let output = vp_run(&ctx, root, &["page", "move", &uuid, "notes/"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("leading or trailing slash"), "{stderr}");
+    assert_eq!(meta_of(root, &uuid), before);
+}
+
+#[test]
+fn test_page_move_needs_exactly_one_target() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    vp_init(&ctx, root);
+    let uuid = vp_create(&ctx, root, "Ownership");
+
+    let both = vp_run(&ctx, root, &["page", "move", &uuid, "notes", "--root"]);
+    assert!(!both.status.success());
+    let stderr = String::from_utf8_lossy(&both.stderr);
+    assert!(stderr.contains("cannot be used with") || stderr.contains("Usage"), "{stderr}");
+
+    let neither = vp_run(&ctx, root, &["page", "move", &uuid]);
+    assert!(!neither.status.success());
+    let stderr = String::from_utf8_lossy(&neither.stderr);
+    assert!(stderr.contains("required") || stderr.contains("Usage"), "{stderr}");
+}
+
+#[test]
+fn test_page_move_unknown_uuid_fails() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    vp_init(&ctx, root);
+
+    let output = vp_run(&ctx, root, &["page", "move", "00000000-0000-0000-0000-000000000000", "notes"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Object not found"), "{stderr}");
+}
+
+#[test]
+fn test_folder_rename_moves_nested_pages() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    vp_init(&ctx, root);
+    let a = vp_create(&ctx, root, "A");
+    let b = vp_create(&ctx, root, "B");
+    let c = vp_create(&ctx, root, "C");
+    assert!(vp_run(&ctx, root, &["page", "move", &a, "notes"]).status.success());
+    assert!(vp_run(&ctx, root, &["page", "move", &b, "notes/rust"]).status.success());
+    assert!(vp_run(&ctx, root, &["page", "move", &c, "other"]).status.success());
+
+    let output = vp_run(&ctx, root, &["folder", "rename", "notes", "archive"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "Renamed notes to archive (2 pages)");
+    assert_eq!(vp_path_of(&ctx, root, &a), "archive");
+    assert_eq!(vp_path_of(&ctx, root, &b), "archive/rust");
+    assert_eq!(vp_path_of(&ctx, root, &c), "other");
+
+    let output = vp_run(&ctx, root, &["folder", "rename", "archive", "notes", "--json"]);
+    assert!(output.status.success());
+    let json = stdout_json(&output);
+    assert_eq!(json["from"], "archive");
+    assert_eq!(json["to"], "notes");
+    assert_eq!(json["pages"], 2);
+    assert_eq!(json["failed"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn test_folder_rename_with_no_matching_pages_reports_zero() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    vp_init(&ctx, root);
+    vp_create(&ctx, root, "A");
+
+    let output = vp_run(&ctx, root, &["folder", "rename", "nothing", "here"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("(0 pages)"));
+}
+
+#[test]
+fn test_folder_rename_rejects_an_invalid_new_prefix_before_writing() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    vp_init(&ctx, root);
+    let a = vp_create(&ctx, root, "A");
+    assert!(vp_run(&ctx, root, &["page", "move", &a, "notes"]).status.success());
+    let before = meta_of(root, &a);
+
+    let output = vp_run(&ctx, root, &["folder", "rename", "notes", "/archive"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("leading or trailing slash"));
+    assert_eq!(meta_of(root, &a), before);
+}
+
+#[test]
+fn test_page_list_shows_virtual_paths() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    vp_init(&ctx, root);
+    let nested = vp_create(&ctx, root, "Ownership");
+    let plain = vp_create(&ctx, root, "Home");
+    assert!(vp_run(&ctx, root, &["page", "move", &nested, "notes/rust"]).status.success());
+
+    let output = vp_run(&ctx, root, &["page", "list"]);
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains(&format!("{nested}: Ownership [notes/rust]")), "{text}");
+    assert!(text.contains(&format!("{plain}: Home\n")), "{text}");
+
+    let pages = stdout_json(&page_list_in(&ctx, root));
+    for p in pages.as_array().unwrap() {
+        assert!(p.get("virtualPath").is_some(), "{p}");
+    }
+    assert_eq!(vp_path_of(&ctx, root, &nested), "notes/rust");
+    assert!(vp_path_of(&ctx, root, &plain).is_null());
+}
+
 #[test]
 fn test_resolve_command() {
     let ctx = setup();

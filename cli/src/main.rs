@@ -46,7 +46,10 @@ fn print_pages_template(
 
     println!("Pages in \"{}\" ({}):", vault_name, vault_id);
     for p in pages {
-        println!("{}: {}", p.uuid, p.title);
+        match &p.virtual_path {
+            Some(path) => println!("{}: {} [{}]", p.uuid, p.title, path),
+            None => println!("{}: {}", p.uuid, p.title),
+        }
     }
 
     Ok(())
@@ -78,7 +81,14 @@ struct PageJson {
 #[derive(Parser)]
 #[command(name = "cerbo")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
-#[command(about = "A local-first markdown wiki CLI", long_about = None)]
+#[command(
+    about = "Semantic knowledge management tool for agents and humans",
+    long_about = "Cerbo is a local-first markdown wiki: every page is an object stored by UUID \
+under .cerbo/objects/, linked with cerbo://<uuid> and annotated with [Text]{prefix:Type}.\n\n\
+Commands find the vault like Git, by walking up from the current directory to a .cerbo/ \
+directory, so --vault is rarely needed. Most commands take --json for scripting.\n\n\
+Full reference: man cerbo"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -86,53 +96,61 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize a new vault (creates .cerbo/ directory)
+    /// Initialize a new vault in the current directory (creates .cerbo/, bundles Schema.org and FOAF)
     Init {
+        /// Output the result as JSON
         #[arg(long)]
         json: bool,
     },
-    /// Vault management
+    /// Manage registered vaults (workspaces)
     Vault {
         #[command(subcommand)]
         action: VaultCommands,
     },
-    /// Page management
+    /// Create, read, write, delete pages and list their backlinks
     Page {
         #[command(subcommand)]
         action: PageCommands,
     },
-    /// Resolve object UUID to local filesystem path
+    /// Resolve an object UUID to its local filesystem path
     Resolve {
+        /// UUID of the object
         uuid: String,
+        /// Output the result as JSON ({"path"})
         #[arg(long)]
         json: bool,
     },
-    /// Show configuration and vault info
+    /// Show the config dir, cache dir and registered vaults
     Info {
+        /// Output the result as JSON ({"config_dir", "cache_dir", "vaults"})
         #[arg(long)]
         json: bool,
     },
-    /// Import URL as Source object (read-only)
+    /// Import a URL as a read-only Source object (rdf:type schema:WebPage)
     Import {
+        /// The URL to import
         url: String,
+        /// Output the result as JSON ({"uuid", "url"})
         #[arg(long)]
         json: bool,
     },
-    /// Import ontology (creates an Ontology object, rdf:type schema:DefinedTermSet)
+    /// Import an ontology file as an Ontology object (rdf:type schema:DefinedTermSet)
     ImportOntology {
+        /// URL of the ontology file (e.g. Schema.org or FOAF)
         url: String,
         /// Annotation prefix to register for this ontology (needs --namespace)
         #[arg(long, requires = "namespace")]
         prefix: Option<String>,
-        /// Namespace IRI the prefix expands to (needs --prefix)
+        /// Namespace IRI the prefix expands to, e.g. https://example.org/vocab# (needs --prefix)
         #[arg(long, requires = "prefix")]
         namespace: Option<String>,
+        /// Output the result as JSON ({"uuid", "url", "prefix", "namespace"})
         #[arg(long)]
         json: bool,
     },
     /// Rebuild page metadata (annotations.ttl) and the semantic index of every vault, and report broken links
     Index {
-        /// Specific page UUID to index (incremental)
+        /// Index only this page (incremental); cannot be combined with --vault
         #[arg(long)]
         page: Option<String>,
         /// Index only this vault: a vault ID, or a vault path (default: every registered vault)
@@ -144,7 +162,7 @@ enum Commands {
         /// Also embed every page whose content changed and refresh the similarity links
         #[arg(long)]
         embeddings: bool,
-        /// Output as JSON
+        /// Output the statistics as JSON
         #[arg(long)]
         json: bool,
     },
@@ -177,17 +195,22 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Rename a folder of the virtual tree (moves every page under it)
+    Folder {
+        #[command(subcommand)]
+        action: FolderCommands,
+    },
     /// Rewrite stored metadata into the current format
     Migrate {
         #[command(subcommand)]
         action: MigrateCommands,
     },
-    /// Build the human-readable symlink tree at <repo-root>/cerbo/
+    /// Build (or rebuild) the human-readable symlink tree at <vault>/cerbo/
     Symlink {
         /// Explicit vault path (default: discover from CWD like Git)
         #[arg(long)]
         vault: Option<String>,
-        /// Output as JSON
+        /// Output the statistics as JSON ({"objects_scanned", "leaves_created", "dirs_created"})
         #[arg(long)]
         json: bool,
     },
@@ -215,33 +238,43 @@ struct SearchArgs {
 
 #[derive(Subcommand)]
 enum VaultCommands {
-    /// List all vaults
+    /// List all registered vaults; auto-discovered ones are marked (auto)
     List {
+        /// Output a JSON list; each vault has an "is_auto" field
         #[arg(long)]
         json: bool,
     },
-    /// Add a new vault
+    /// Register a vault under a name
     Add {
+        /// Display name of the vault
         name: String,
+        /// Path to the vault directory (the one containing .cerbo/)
         path: String,
+        /// Output the result as JSON
         #[arg(long)]
         json: bool,
     },
-    /// Remove a vault
+    /// Remove a vault from the registry (manual or auto); its files are kept
     Remove {
+        /// Vault ID, as shown by `cerbo vault list`
         id: String,
+        /// Output the result as JSON
         #[arg(long)]
         json: bool,
     },
-    /// Set the active vault
+    /// Set the active vault, used when no vault is found around the current directory
     Active {
+        /// Vault ID, as shown by `cerbo vault list`
         id: String,
+        /// Output the result as JSON
         #[arg(long)]
         json: bool,
     },
     /// Promote an auto-registered vault to the manual registry
     Approve {
+        /// Vault ID, as shown by `cerbo vault list`
         id: String,
+        /// Output the result as JSON
         #[arg(long)]
         json: bool,
     },
@@ -267,47 +300,86 @@ enum MigrateCommands {
 }
 
 #[derive(Subcommand)]
-enum PageCommands {
-    /// List all pages
-    List {
+enum FolderCommands {
+    /// Replace the folder prefix OLD with NEW on every page whose virtual path is OLD or starts with OLD/
+    Rename {
+        /// Current folder path, e.g. notes
+        old: String,
+        /// New folder path, e.g. archive/notes
+        new: String,
+        /// Output the result as JSON ({"from", "to", "pages", "failed"})
         #[arg(long)]
         json: bool,
-        /// Optional vault ID to list pages from. If omitted, uses the current active vault.
+    },
+}
+
+#[derive(Subcommand)]
+enum PageCommands {
+    /// List all pages of the vault: a header line, then one `<uuid>: <title> [<virtual path>]` per page
+    List {
+        /// Print a JSON array of {"uuid", "title", "virtualPath"}
+        #[arg(long)]
+        json: bool,
+        /// Vault ID to list pages from. If omitted, the vault is discovered from the current directory
         #[arg(long)]
         vault: Option<String>,
     },
-    /// Create a new page
+    /// Create a new page and print its UUID
     Create {
+        /// Title of the new page
         title: String,
+        /// Output the result as JSON
         #[arg(long)]
         json: bool,
     },
-    /// Read page content
+    /// Print the markdown content of a page
     Read {
+        /// UUID of the page
         uuid: String,
+        /// Output the result as JSON
         #[arg(long)]
         json: bool,
     },
-    /// Write page content
+    /// Replace the content of a page; links and annotations are re-extracted
     Write {
+        /// UUID of the page
         uuid: String,
+        /// The new markdown content (the whole page)
         content: String,
+        /// Output the result as JSON
         #[arg(long)]
         json: bool,
     },
-    /// Delete a page
+    /// Move a page to the trash (.cerbo/trash/); imported Source objects cannot be deleted
     Delete {
+        /// UUID of the page
         uuid: String,
+        /// Output the result as JSON
         #[arg(long)]
         json: bool,
     },
-    /// List the pages that link to an object
+    /// Set a page's virtual path (its folder in the symlink tree and the desktop sidebar), or clear it with --root
+    #[command(group = clap::ArgGroup::new("target").required(true).args(["path", "root"]))]
+    Move {
+        /// UUID of the page
+        uuid: String,
+        /// The new folder path, e.g. notes/rust (no leading or trailing slash, no . or .. segments)
+        path: Option<String>,
+        /// Move the page to the root: remove its virtual path
+        #[arg(long)]
+        root: bool,
+        /// Output the result as JSON ({"uuid", "virtualPath"}; virtualPath is null at the root)
+        #[arg(long)]
+        json: bool,
+    },
+    /// List the pages that link to an object, one per line as `<uuid>: <title>`
     Backlinks {
+        /// UUID of the object
         uuid: String,
         /// Print a JSON array of {"uuid", "title"}
         #[arg(long)]
         json: bool,
-        /// Vault ID to read from. If omitted, the vault is resolved like other page commands.
+        /// Vault ID to read from. If omitted, the vault is resolved like other page commands
         #[arg(long)]
         vault: Option<String>,
     },
@@ -490,7 +562,7 @@ fn print_build_progress(progress: cerbo_core::semantic::BuildProgress) {
 /// Report embedding progress on stderr, about every tenth of the pages.
 fn print_embed_progress(done: usize, total: usize) {
     let step = (total / 10).max(1);
-    if done == total || done % step == 0 {
+    if done == total || done.is_multiple_of(step) {
         eprintln!("Embedded {} of {} pages", done, total);
     }
 }
@@ -902,11 +974,7 @@ async fn main() -> Result<(), String> {
                 let pages = cerbo_core::page::page_list(&eff_ctx)?;
 
                 if json {
-                    let pages_json: Vec<PageJson> = pages.into_iter().map(|p| PageJson {
-                        uuid: p.uuid,
-                        title: p.title,
-                    }).collect();
-                    print_json(&pages_json);
+                    print_json(&pages);
                 } else {
                     print_pages_template(&ctx, &eff_ctx, &pages)?;
                 }
@@ -969,6 +1037,22 @@ async fn main() -> Result<(), String> {
                     print_json_success("Page deleted");
                 } else {
                     println!("Deleted page");
+                }
+            }
+            PageCommands::Move { uuid, path, root, json } => {
+                let eff_ctx = resolve_vault_ctx(
+                    &ctx,
+                    None,
+                    cwd_vault_id.as_deref(),
+                    cwd_vault_root.as_deref(),
+                )?;
+                check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
+                let target = if root { None } else { path }.filter(|p| !p.is_empty());
+                cerbo_core::page::page_update_virtual_path(&eff_ctx, uuid.clone(), target.clone())?;
+                if json {
+                    print_json(&serde_json::json!({"uuid": uuid, "virtualPath": target}));
+                } else {
+                    println!("Moved {} to {}", uuid, target.as_deref().unwrap_or("root"));
                 }
             }
             PageCommands::Backlinks { uuid, json, vault } => {
@@ -1206,6 +1290,34 @@ async fn main() -> Result<(), String> {
                 Err(e) => {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
+                }
+            }
+        },
+        Commands::Folder { action } => match action {
+            FolderCommands::Rename { old, new, json } => {
+                let eff_ctx = resolve_vault_ctx(
+                    &ctx,
+                    None,
+                    cwd_vault_id.as_deref(),
+                    cwd_vault_root.as_deref(),
+                )?;
+                check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
+                let report = cerbo_core::page::folder_rename(&eff_ctx, &old, &new)?;
+                for (uuid, err) in &report.failed {
+                    eprintln!("Error: could not move {uuid}: {err}");
+                }
+                if json {
+                    print_json(&serde_json::json!({
+                        "from": old,
+                        "to": new,
+                        "pages": report.changed.len(),
+                        "failed": report.failed.iter().map(|(u, _)| u).collect::<Vec<_>>(),
+                    }));
+                } else {
+                    println!("Renamed {} to {} ({} pages)", old, new, report.changed.len());
+                }
+                if !report.failed.is_empty() {
+                    return Err(format!("{} pages could not be moved", report.failed.len()));
                 }
             }
         },

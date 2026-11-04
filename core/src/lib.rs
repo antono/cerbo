@@ -99,5 +99,3 @@ pub mod vault_symlink;
 pub mod vocabulary_check;
 pub mod vocabulary_migration;
 
-#[cfg(any(test, feature = "test-utils"))]
-pub mod fixtures;

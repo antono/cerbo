@@ -535,6 +535,8 @@ fn mark_stale(vault_ctx: &VaultContext) {
 }
 
 #[cfg(test)]
+// Fixtures write files directly; the atomic-write rule guards vault code, not setup.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use crate::object::{object_create, object_delete, ObjectType};
@@ -924,6 +926,43 @@ mod tests {
     }
 
     // ── 2.7 queries (spec graph-query) ─────────────────────────
+
+    #[test]
+    fn moving_a_page_updates_its_virtual_path_in_the_index() {
+        let vault = TestVault::new();
+        let a = vault.page("Ownership", "");
+        let b = vault.page("Lifetimes", "");
+        let at = |path: &str| {
+            column(&vault.query(&format!("SELECT ?p WHERE {{ ?p cerbo:virtualPath \"{path}\" }}")))
+        };
+        assert!(at("notes/rust").is_empty());
+
+        crate::page::page_update_virtual_path(&vault.cerbo(), a.clone(), Some("notes/rust".into())).unwrap();
+        assert_eq!(at("notes/rust"), [format!("cerbo://objects/{a}")]);
+
+        // The index as it is, with no catch-up from the files. Dropped before
+        // the next write, since an open index holds the lock.
+        {
+            let opened = SemanticIndex::open(&vault.ctx, IndexOptions::default()).unwrap();
+            let direct = opened
+                .query("SELECT ?p WHERE { ?p cerbo:virtualPath \"notes/rust\" }")
+                .unwrap();
+            assert_eq!(column(&direct), [format!("cerbo://objects/{a}")]);
+        }
+
+        crate::page::page_update_virtual_path(&vault.cerbo(), b.clone(), Some("notes/rust".into())).unwrap();
+        let report = crate::page::folder_rename(&vault.cerbo(), "notes", "archive").unwrap();
+        assert_eq!(report.changed.len(), 2);
+        assert!(at("notes/rust").is_empty());
+        let mut moved = at("archive/rust");
+        moved.sort();
+        let mut expected = [format!("cerbo://objects/{a}"), format!("cerbo://objects/{b}")];
+        expected.sort();
+        assert_eq!(moved, expected);
+
+        crate::page::page_update_virtual_path(&vault.cerbo(), a.clone(), None).unwrap();
+        assert_eq!(at("archive/rust"), [format!("cerbo://objects/{b}")]);
+    }
 
     #[test]
     fn list_page_titles() {

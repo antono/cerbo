@@ -201,6 +201,8 @@ fn io_error(path: &Path, e: io::Error) -> SemanticError {
 }
 
 #[cfg(test)]
+// Fixtures write files directly; the atomic-write rule guards vault code, not setup.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use std::fs;

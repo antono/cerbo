@@ -837,7 +837,7 @@ pub fn broken_links(ctx: &CerboContext, content: &str) -> Vec<String> {
 /// The vault that `ctx` writes objects into: its `config_dir` is the vault's
 /// `.cerbo/`. Any other context (the global XDG config, a bare test directory)
 /// has no semantic index.
-fn vault_of(ctx: &CerboContext) -> Option<crate::VaultContext> {
+pub(crate) fn vault_of(ctx: &CerboContext) -> Option<crate::VaultContext> {
     if ctx.config_dir.file_name()? != ".cerbo" {
         return None;
     }
@@ -1450,7 +1450,7 @@ mod tests {
                 "    schema:dateModified \"2024-01-01T00:00:00Z\"^^xsd:dateTime .\n",
                 "    cerbo:slug \"rdf-type-source-notes\" .\n",
             ),
-            format!("objects/<{}>", "uuid")
+            format_args!("objects/<{}>", "uuid")
         );
         fs::write(&path, damaged).unwrap();
         let before = fs::read(&path).unwrap();

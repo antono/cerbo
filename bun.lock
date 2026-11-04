@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "tmpcerbo-scaffold",
+      "name": "cerbo",
       "dependencies": {
         "@cartamd/plugin-anchor": "^2.2.0",
         "@cartamd/plugin-attachment": "^4.2.0",

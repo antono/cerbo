@@ -1,5 +1,5 @@
 {
-  "name": "tmpcerbo-scaffold",
+  "name": "cerbo",
   "version": "0.1.0",
   "description": "",
   "type": "module",
@@ -58,7 +58,6 @@
     "webdriverio": "10.1.0"
   },
   "imports": {
-    "#lib": "./src/lib/index.js",
     "#lib/*": "./src/lib/*"
   }
 }

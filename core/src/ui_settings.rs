@@ -1,6 +1,7 @@
 use crate::paths;
 use crate::CerboContext;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +17,12 @@ pub struct UiSettings {
     /// vault. Absent in a `ui.toml` written before the console existed.
     #[serde(default)]
     pub last_sparql_query: Option<String>,
+    /// Folders of the desktop sidebar tree the user collapsed, per vault id
+    /// (spec `desktop-page-tree`, "Folders expand and collapse"). Only
+    /// collapsed folders are listed, so a new folder starts expanded. Absent
+    /// in a `ui.toml` written before the tree existed.
+    #[serde(default)]
+    pub collapsed_folders: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,10 +70,26 @@ pub fn merge_ui_settings(
         right_sidebar_visible: right_sidebar_visible.or(base.right_sidebar_visible),
         window_bounds: window_bounds.or_else(|| base.window_bounds.clone()),
         last_sparql_query: last_sparql_query.or_else(|| base.last_sparql_query.clone()),
+        collapsed_folders: base.collapsed_folders.clone(),
     }
 }
 
+/// Remember which folders of `vault_id`'s sidebar tree are collapsed. An
+/// empty list removes the vault's entry, so `ui.toml` never grows a table for
+/// a vault whose folders are all expanded.
+pub fn set_collapsed_folders(ctx: &CerboContext, vault_id: &str, paths: Vec<String>) -> Result<(), String> {
+    let mut settings = load_ui_settings(ctx)?;
+    if paths.is_empty() {
+        settings.collapsed_folders.remove(vault_id);
+    } else {
+        settings.collapsed_folders.insert(vault_id.to_string(), paths);
+    }
+    save_ui_settings(ctx, &settings)
+}
+
 #[cfg(test)]
+// Fixtures write files directly; the atomic-write rule guards vault code, not setup.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
@@ -101,6 +124,7 @@ mod tests {
             right_sidebar_visible: Some(false),
             window_bounds: None,
             last_sparql_query: None,
+            collapsed_folders: BTreeMap::new(),
         };
         save_ui_settings(&ctx, &settings).unwrap();
 
@@ -141,5 +165,40 @@ mod tests {
         // Saving other settings keeps the query.
         let kept = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None);
         assert_eq!(kept.last_sparql_query.as_deref(), Some(query));
+    }
+
+    #[test]
+    fn collapsed_folders_round_trip_and_old_file_without_them() {
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("config");
+        let ctx = CerboContext {
+            config_dir: config_dir.clone(),
+            cache_dir: tmp.path().join("cache"),
+        };
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(config_dir.join("ui.toml"), "theme = \"dark\"\nsidebarWidth = 137\n").unwrap();
+
+        let loaded = load_ui_settings(&ctx).unwrap();
+        assert!(loaded.collapsed_folders.is_empty());
+
+        set_collapsed_folders(&ctx, "vault-a", vec!["notes".into(), "archive/2025".into()]).unwrap();
+        set_collapsed_folders(&ctx, "vault-b", vec!["notes".into()]).unwrap();
+        let loaded = load_ui_settings(&ctx).unwrap();
+        assert_eq!(loaded.collapsed_folders["vault-a"], vec!["notes", "archive/2025"]);
+        assert_eq!(loaded.collapsed_folders["vault-b"], vec!["notes"]);
+        assert_eq!(loaded.sidebar_width, Some(137), "other settings survive");
+
+        // Saving through the merge keeps the folders.
+        let merged = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None);
+        save_ui_settings(&ctx, &merged).unwrap();
+        let loaded = load_ui_settings(&ctx).unwrap();
+        assert_eq!(loaded.theme.as_deref(), Some("light"));
+        assert_eq!(loaded.collapsed_folders.len(), 2);
+
+        // An empty list drops the vault's entry.
+        set_collapsed_folders(&ctx, "vault-a", vec![]).unwrap();
+        let loaded = load_ui_settings(&ctx).unwrap();
+        assert!(!loaded.collapsed_folders.contains_key("vault-a"));
+        assert!(!std::fs::read_to_string(config_dir.join("ui.toml")).unwrap().contains("vault-a"));
     }
 }

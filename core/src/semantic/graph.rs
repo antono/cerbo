@@ -286,6 +286,8 @@ fn similarity_quads(tx: &Transaction<'_>, uuid: &str, incoming: bool) -> Result<
 }
 
 #[cfg(test)]
+// Fixtures write files directly; the atomic-write rule guards vault code, not setup.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
     use crate::rdf::{object_iri, schema};
