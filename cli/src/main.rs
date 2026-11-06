@@ -163,6 +163,33 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Import an Obsidian or Tolaria vault (a folder of Markdown notes) as pages; the folder is only read
+    #[command(group = clap::ArgGroup::new("target").args(["vault", "new"]))]
+    ImportVault {
+        /// The folder to import (the Obsidian or Tolaria vault)
+        dir: std::path::PathBuf,
+        /// Source format, when detection fails or guesses wrong: obsidian or tolaria
+        #[arg(long, value_name = "FORMAT")]
+        from: Option<cerbo_core::vault_import::Format>,
+        /// Import into this registered vault (an ID from `cerbo vault list`)
+        #[arg(long, value_name = "ID")]
+        vault: Option<String>,
+        /// Create a new vault in this empty folder (as `cerbo init` does), register it and import into it
+        #[arg(long, value_name = "PATH")]
+        new: Option<std::path::PathBuf>,
+        /// Name of the vault created by --new (default: the source folder name)
+        #[arg(long, requires = "new")]
+        name: Option<String>,
+        /// Import again even though this folder was already imported into the vault (makes a second copy)
+        #[arg(long)]
+        force: bool,
+        /// Print the report without asking for a vault or writing anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Print only the report, as one JSON object
+        #[arg(long)]
+        json: bool,
+    },
     /// Rebuild page metadata (annotations.ttl) and the semantic index of every vault, and report broken links
     Index {
         /// Index only this page (incremental); cannot be combined with --vault
@@ -432,42 +459,6 @@ enum PageCommands {
         #[arg(long)]
         vault: Option<String>,
     },
-}
-
-/// Ensure the vault's ignore rules cover the symlink tree and the trash.
-///
-/// Missing entries are appended; existing content keeps its order, and an entry
-/// already covered by any equivalent spelling is left alone.
-fn ensure_gitignore(vault_root: &std::path::Path) -> Result<(), String> {
-    let gitignore_path = vault_root.join(".gitignore");
-    let existing = std::fs::read_to_string(&gitignore_path).unwrap_or_default();
-
-    let wanted: [(&str, &[&str]); 2] = [
-        ("/cerbo/", &["/cerbo/", "cerbo/"]),
-        (
-            "/.cerbo/trash/",
-            &["/.cerbo/trash/", ".cerbo/trash/", "/.cerbo/", ".cerbo/"],
-        ),
-    ];
-
-    let mut content = existing.clone();
-    for (entry, aliases) in wanted {
-        if content.lines().any(|l| aliases.contains(&l.trim())) {
-            continue;
-        }
-        if !content.is_empty() && !content.ends_with('\n') {
-            content.push('\n');
-        }
-        content.push_str(entry);
-        content.push('\n');
-    }
-
-    if content == existing {
-        return Ok(());
-    }
-
-    cerbo_core::fsio::write_atomic_str(&gitignore_path, &content)
-        .map_err(|e| format!("Failed to write .gitignore: {}", e))
 }
 
 /// The vaults `cerbo migrate vocabulary` works on, as (label, root) pairs.
@@ -785,6 +776,291 @@ fn run_search(
     Ok(())
 }
 
+// ── import-vault ──────────────────────────────────────────────────────────────
+
+const NO_TARGET: &str = "no target vault: pass --vault <ID> or --new <PATH>";
+
+/// Where `cerbo import-vault` writes.
+#[derive(Debug)]
+enum ImportTarget {
+    /// A registered vault.
+    Existing(cerbo_core::vault::Vault),
+    /// A vault to create, initialise and register, once the plan succeeded.
+    New { path: std::path::PathBuf, name: String },
+}
+
+/// `~/x` → `$HOME/x`, so a path typed at the prompt works as on a shell line.
+fn expand_tilde(input: &str) -> std::path::PathBuf {
+    match (input.strip_prefix("~/").or((input == "~").then_some("")), std::env::var_os("HOME")) {
+        (Some(rest), Some(home)) => std::path::Path::new(&home).join(rest),
+        _ => std::path::PathBuf::from(input),
+    }
+}
+
+/// Ask on `out` (stderr) which vault to import into, reading answers from
+/// `input` (stdin): the registered vaults by number, then "Create a new
+/// vault", which asks for a path and a name. A wrong number asks again; end of
+/// input gives up.
+fn prompt_import_target(
+    vaults: &[cerbo_core::vault::Vault],
+    default_name: &str,
+    input: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+) -> Result<ImportTarget, String> {
+    fn ask(question: &str, input: &mut dyn std::io::BufRead, out: &mut dyn std::io::Write) -> Result<String, String> {
+        write!(out, "{}", question).and_then(|_| out.flush()).map_err(|e| e.to_string())?;
+        let mut line = String::new();
+        match input.read_line(&mut line) {
+            Ok(0) => Err(NO_TARGET.to_string()),
+            Ok(_) => Ok(line.trim().to_string()),
+            Err(e) => Err(format!("Failed to read the answer: {}", e)),
+        }
+    }
+
+    let io = |e: std::io::Error| e.to_string();
+    writeln!(out, "Import into which vault?").map_err(io)?;
+    for (i, v) in vaults.iter().enumerate() {
+        writeln!(out, "  {}. {} ({})", i + 1, v.name, v.path.display()).map_err(io)?;
+    }
+    let create = vaults.len() + 1;
+    writeln!(out, "  {}. Create a new vault", create).map_err(io)?;
+
+    let choice = loop {
+        let answer = ask(&format!("Choose 1-{}: ", create), input, out)?;
+        match answer.parse::<usize>() {
+            Ok(n) if (1..=create).contains(&n) => break n,
+            _ => writeln!(out, "Enter a number from 1 to {}.", create).map_err(io)?,
+        }
+    };
+    if choice < create {
+        return Ok(ImportTarget::Existing(vaults[choice - 1].clone()));
+    }
+
+    let path = loop {
+        let answer = ask("Folder for the new vault: ", input, out)?;
+        if !answer.is_empty() {
+            break expand_tilde(&answer);
+        }
+    };
+    let name = ask(&format!("Vault name [{}]: ", default_name), input, out)?;
+    let name = if name.is_empty() { default_name.to_string() } else { name };
+    Ok(ImportTarget::New { path, name })
+}
+
+/// `1536` → `1.5 KB`.
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if bytes < 1024 {
+        return format!("{} B", bytes);
+    }
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{:.1} {}", value, UNITS[unit])
+}
+
+/// Print the human-readable import report on stdout; warnings go to stderr.
+fn print_import_report(report: &cerbo_core::vault_import::ImportReport) {
+    let count = |n: usize, word: &str| format!("{} {}{}", n, word, if n == 1 { "" } else { "s" });
+    let what = format!(
+        "{} and {} ({})",
+        count(report.pages, "page"),
+        count(report.attachments, "attachment"),
+        format_bytes(report.attachment_bytes)
+    );
+    match &report.vault {
+        Some(v) if !report.dry_run => {
+            let label = match (&v.name, &v.id) {
+                (Some(name), Some(id)) => format!("\"{}\" ({})", name, id),
+                _ => v.path.clone(),
+            };
+            println!("Imported {} into {}", what, label);
+            println!("Vault: {}", v.path);
+        }
+        _ => println!("Dry run: would import {}; nothing was written", what),
+    }
+    println!("Source: {} ({}, {})", report.source, report.format.display_name(), report.format_reason);
+    let prefix = report.ontology.prefix.as_deref().map(|p| format!(", prefix {}", p)).unwrap_or_default();
+    println!(
+        "Ontology: {} ({}{}) <{}>",
+        report.ontology.title, report.ontology.uuid, prefix, report.ontology.namespace
+    );
+    println!(
+        "Links rewritten: {}, relations: {}, heading fragments dropped: {}",
+        report.links, report.relations, report.dropped_fragments
+    );
+    if report.recovered > 0 {
+        println!("Moved {} objects of an interrupted import to the trash", report.recovered);
+    }
+
+    let section = |title: &str, lines: Vec<String>| {
+        if !lines.is_empty() {
+            println!("{} ({}):", title, lines.len());
+            for line in lines {
+                // A YAML error spans several lines; keep them under their entry.
+                println!("  {}", line.trim_end().replace('\n', "\n    "));
+            }
+        }
+    };
+    section("Skipped", report.skipped.clone());
+    section("Unreferenced files, not imported", report.unreferenced.clone());
+    section(
+        "Unresolved links",
+        report
+            .unresolved
+            .iter()
+            .map(|u| match &u.property {
+                Some(key) => format!("{}: {} (in {})", u.note, u.link, key),
+                None => format!("{}: {}", u.note, u.link),
+            })
+            .collect(),
+    );
+    section(
+        "Ambiguous links",
+        report
+            .ambiguous
+            .iter()
+            .map(|a| format!("{}: {} -> {} (candidates: {})", a.note, a.link, a.chosen, a.candidates.join(", ")))
+            .collect(),
+    );
+    section(
+        "Renamed slugs",
+        report.renamed_slugs.iter().map(|r| format!("{}: {} -> {}", r.note, r.from, r.to)).collect(),
+    );
+    section(
+        "Frontmatter kept as a yaml block",
+        report.frontmatter_errors.iter().map(|f| format!("{}: {}", f.note, f.error)).collect(),
+    );
+    for warning in &report.warnings {
+        eprintln!("Warning: {}", warning);
+    }
+}
+
+/// Fail `cerbo import-vault`: a JSON error object with --json, else stderr.
+fn import_vault_fail(json: bool, message: &str) -> ! {
+    if json {
+        print_json_error(message);
+    } else {
+        eprintln!("Error: {}", message);
+    }
+    std::process::exit(1);
+}
+
+/// Run `cerbo import-vault`. The order keeps every failure before the first
+/// write: target flags are checked, then the plan is built (it only reads the
+/// source), then the target is asked for or created, then the import runs.
+#[allow(clippy::too_many_arguments)]
+fn run_import_vault(
+    ctx: &CerboContext,
+    dir: &std::path::Path,
+    from: Option<cerbo_core::vault_import::Format>,
+    vault: Option<String>,
+    new: Option<std::path::PathBuf>,
+    name: Option<String>,
+    force: bool,
+    dry_run: bool,
+    json: bool,
+) -> Result<(), String> {
+    use cerbo_core::vault_import::{
+        ImportOptions, ReportVault, check_repeat, check_target_outside_source, plan_import, run_import,
+    };
+    use std::io::IsTerminal;
+
+    // Checked before the (possibly long) scan, so a wrong flag fails at once.
+    let mut target = match (vault, new) {
+        (Some(id), _) => Some(ImportTarget::Existing(
+            cerbo_core::vault::vault_list(ctx)?
+                .vaults
+                .into_iter()
+                .find(|v| v.id == id)
+                .ok_or_else(|| format!("Vault not found: {}", id))?,
+        )),
+        (None, Some(path)) => {
+            cerbo_core::vault::check_new_vault_dir(&path)?;
+            Some(ImportTarget::New { path, name: String::new() })
+        }
+        (None, None) if dry_run || std::io::stdin().is_terminal() => None,
+        (None, None) => return Err(NO_TARGET.to_string()),
+    };
+
+    let plan = plan_import(dir, from)?;
+    // A target from the prompt is checked once it is picked, below.
+    match &target {
+        Some(ImportTarget::Existing(v)) => check_target_outside_source(&plan.source, &v.path)?,
+        Some(ImportTarget::New { path, .. }) => check_target_outside_source(&plan.source, path)?,
+        None => {}
+    }
+    if dry_run {
+        let report = plan.report();
+        if json {
+            print_json(&report);
+        } else {
+            print_import_report(&report);
+        }
+        return Ok(());
+    }
+
+    // The default vault name: the source folder's own name.
+    let default_name = plan
+        .source
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Imported vault".to_string());
+    if let Some(ImportTarget::New { name: n, .. }) = &mut target {
+        *n = name.unwrap_or_else(|| default_name.clone());
+    }
+    let target = match target {
+        Some(target) => target,
+        None => {
+            let vaults = cerbo_core::vault::vault_list(ctx)?.vaults;
+            let stdin = std::io::stdin();
+            prompt_import_target(&vaults, &default_name, &mut stdin.lock(), &mut std::io::stderr())?
+        }
+    };
+
+    let vault = match target {
+        ImportTarget::Existing(v) => {
+            check_target_outside_source(&plan.source, &v.path)?;
+            if !v.path.join(".cerbo").is_dir() {
+                return Err(format!("Not a Cerbo vault (no .cerbo/ directory): {}", v.path.display()));
+            }
+            // Read-only, so a refused repeat import writes nothing at all,
+            // not even the vocabulary migration below.
+            if !force {
+                let vault_ctx = cerbo_core::VaultContext { vault_path: v.path.clone(), global: ctx.clone() };
+                check_repeat(&vault_ctx, &plan)?;
+            }
+            check_old_vocabulary(ctx, &v.path);
+            v
+        }
+        ImportTarget::New { path, name } => {
+            check_target_outside_source(&plan.source, &path)?;
+            let (v, init) = cerbo_core::vault::vault_create(ctx, &path, name, true)?;
+            for (bundle, result) in &init.bundled {
+                if let Err(e) = result {
+                    eprintln!("Warning: Failed to bundle {}: {}", bundle, e);
+                }
+            }
+            eprintln!("Created vault \"{}\" ({}) in {}", v.name, v.id, v.path.display());
+            v
+        }
+    };
+
+    let vault_ctx = cerbo_core::VaultContext { vault_path: vault.path.clone(), global: ctx.clone() };
+    let mut report = run_import(&vault_ctx, &plan, ImportOptions { force })?;
+    let path = report.vault.as_ref().map(|v| v.path.clone()).unwrap_or_else(|| vault.path.display().to_string());
+    report.vault = Some(ReportVault { id: Some(vault.id), name: Some(vault.name), path });
+    if json {
+        print_json(&report);
+    } else {
+        print_import_report(&report);
+    }
+    Ok(())
+}
+
 /// Always returns the XDG global context used for vault registry operations.
 fn get_context() -> Result<CerboContext, String> {
     let core = CoreContext::new()?;
@@ -881,7 +1157,9 @@ async fn main() -> Result<(), String> {
     // on the current directory, and the desktop launcher runs it from wherever
     // the app was started: registering that directory's vault would be a side
     // effect nobody asked for, and the migration would then rewrite it.
-    let registers_cwd_vault = !matches!(cli.command, Commands::Migrate { .. });
+    // `cerbo import-vault` picks its target from --vault, --new or the prompt,
+    // never from the current directory, and a refused import writes nothing.
+    let registers_cwd_vault = !matches!(cli.command, Commands::Migrate { .. } | Commands::ImportVault { .. });
     if let (true, Some(root), None) = (registers_cwd_vault, cwd_vault_root.as_ref(), cwd_vault_id.as_ref()) {
         let _ = cerbo_core::vault::auto_vault_register(&ctx, root);
         cwd_vault_id = cerbo_core::vault::vault_id_from_path(&ctx, root);
@@ -893,56 +1171,30 @@ async fn main() -> Result<(), String> {
                 .map_err(|e| format!("Failed to get current directory: {}", e))?;
             let cerbo_dir = current_dir.join(".cerbo");
 
-            if cerbo_dir.exists() {
+            // Also runs on an already-initialised vault, so an existing one
+            // picks up any newly required ignore rule.
+            let init = cerbo_core::vault::vault_init(&ctx.cache_dir, &current_dir, true)?;
+            if !init.created {
                 if json {
                     print_json_success("Vault already initialized");
                 } else {
                     println!("Vault already initialized in {}", cerbo_dir.display());
                 }
             } else {
-                // Create .cerbo/objects/ directory
-                let objects_dir = cerbo_dir.join("objects");
-                std::fs::create_dir_all(&objects_dir)
-                    .map_err(|e| format!("Failed to create objects dir: {}", e))?;
-
-                // Create an empty v2 ontology-map.json
-                cerbo_core::prefix_map::PrefixMap::default().save(&cerbo_dir)?;
-
-                // Use a context rooted at the new local vault, not the global XDG ctx.
-                // get_context() falls back to XDG when .cerbo/ didn't exist at startup.
-                // The cache stays global: the semantic index never lives in a vault.
-                let local_ctx = CerboContext {
-                    config_dir: cerbo_dir.clone(),
-                    cache_dir: ctx.cache_dir.clone(),
-                };
-
-                // Bundle Schema.org and FOAF. Both prefixes are built in, so the
-                // map entry only records which object documents the namespace.
-                let bundled = [
-                    ("Schema.org", "schema", "https://schema.org/version/latest/schema.ttl"),
-                    ("FOAF", "foaf", "http://xmlns.com/foaf/spec/index.rdf"),
-                ];
-                for (name, prefix, url) in bundled {
-                    let namespace = cerbo_core::prefix_map::builtin_namespace(prefix)
-                        .expect("bundled prefixes are built in");
-                    match cerbo_core::object::object_import_ontology(&local_ctx, url, Some((prefix, namespace))) {
-                        Ok(uuid) => if !json {
-                            println!("Bundled {} ontology with UUID: {}", name, uuid);
-                        },
-                        Err(e) => if !json { println!("Warning: Failed to bundle {}: {}", name, e); },
+                if !json {
+                    for (name, result) in &init.bundled {
+                        match result {
+                            Ok(uuid) => println!("Bundled {} ontology with UUID: {}", name, uuid),
+                            Err(e) => println!("Warning: Failed to bundle {}: {}", name, e),
+                        }
                     }
                 }
-
                 if json {
                     print_json_success("Vault initialized with bundled ontologies");
                 } else {
                     println!("Vault initialized in {}", cerbo_dir.display());
                 }
             }
-
-            // Idempotent, and runs on an already-initialised vault too so an
-            // existing one picks up any newly required ignore rule.
-            let _ = ensure_gitignore(&current_dir);
         }
         Commands::Vault { action } => match action {
             VaultCommands::List { json } => {
@@ -1198,6 +1450,11 @@ async fn main() -> Result<(), String> {
                 if let (Some(prefix), Some(namespace)) = (&prefix, &namespace) {
                     println!("Registered prefix {}: <{}>", prefix, namespace);
                 }
+            }
+        },
+        Commands::ImportVault { dir, from, vault, new, name, force, dry_run, json } => {
+            if let Err(e) = run_import_vault(&ctx, &dir, from, vault, new, name, force, dry_run, json) {
+                import_vault_fail(json, &e);
             }
         },
         Commands::Index { page, vault, no_backfill_slug, embeddings, json } => {
@@ -1681,4 +1938,100 @@ struct InfoJson {
     config_dir: String,
     cache_dir: String,
     vaults: Vec<VaultInfoJson>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cerbo_core::vault::Vault;
+
+    fn vaults() -> Vec<Vault> {
+        ["Work", "Home"]
+            .iter()
+            .enumerate()
+            .map(|(i, name)| Vault {
+                id: format!("id-{}", i + 1),
+                name: name.to_string(),
+                path: std::path::PathBuf::from(format!("/vaults/{}", name.to_lowercase())),
+                is_auto: false,
+            })
+            .collect()
+    }
+
+    /// Run the prompt on `answers`, returning its result and what it printed.
+    fn prompt(answers: &str) -> (Result<ImportTarget, String>, String) {
+        let mut out = Vec::new();
+        let result = prompt_import_target(&vaults(), "Notes", &mut answers.as_bytes(), &mut out);
+        (result, String::from_utf8(out).unwrap())
+    }
+
+    #[test]
+    fn prompt_lists_vaults_and_picks_one() {
+        let (result, out) = prompt("2\n");
+        assert!(out.contains("  1. Work (/vaults/work)"), "{out}");
+        assert!(out.contains("  2. Home (/vaults/home)"), "{out}");
+        assert!(out.contains("  3. Create a new vault"), "{out}");
+        match result.unwrap() {
+            ImportTarget::Existing(v) => assert_eq!(v.id, "id-2"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn prompt_asks_again_after_a_wrong_number() {
+        let (result, out) = prompt("0\nfoo\n1\n");
+        assert_eq!(out.matches("Enter a number from 1 to 3.").count(), 2, "{out}");
+        assert!(matches!(result.unwrap(), ImportTarget::Existing(v) if v.id == "id-1"));
+    }
+
+    #[test]
+    fn prompt_creates_a_new_vault_with_path_and_name() {
+        let (result, _) = prompt("3\n/tmp/notes\nMy Notes\n");
+        match result.unwrap() {
+            ImportTarget::New { path, name } => {
+                assert_eq!(path, std::path::PathBuf::from("/tmp/notes"));
+                assert_eq!(name, "My Notes");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn prompt_new_vault_name_defaults_to_the_source_folder() {
+        let (result, out) = prompt("3\n\n/tmp/notes\n\n");
+        assert!(out.contains("Vault name [Notes]: "), "{out}");
+        assert!(matches!(result.unwrap(), ImportTarget::New { name, .. } if name == "Notes"));
+    }
+
+    #[test]
+    fn prompt_fails_at_end_of_input() {
+        assert_eq!(prompt("").0.unwrap_err(), NO_TARGET);
+        assert_eq!(prompt("3\n/tmp/x\n").0.unwrap_err(), NO_TARGET);
+    }
+
+    #[test]
+    fn prompt_with_no_registered_vault_offers_only_create() {
+        let mut out = Vec::new();
+        let result = prompt_import_target(&[], "Notes", &mut "1\n~/n\nN\n".as_bytes(), &mut out);
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("  1. Create a new vault"), "{out}");
+        assert!(matches!(result.unwrap(), ImportTarget::New { .. }));
+    }
+
+    #[test]
+    fn tilde_expands_to_home() {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        if let Some(home) = home {
+            assert_eq!(expand_tilde("~/cerbo/notes"), home.join("cerbo/notes"));
+            assert_eq!(expand_tilde("~"), home.join(""));
+        }
+        assert_eq!(expand_tilde("rel/~x"), std::path::PathBuf::from("rel/~x"));
+    }
+
+    #[test]
+    fn bytes_are_human_readable() {
+        assert_eq!(format_bytes(137), "137 B");
+        assert_eq!(format_bytes(1536), "1.5 KB");
+        assert_eq!(format_bytes(3 * 1024 * 1024), "3.0 MB");
+    }
 }

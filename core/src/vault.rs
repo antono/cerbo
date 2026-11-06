@@ -298,6 +298,114 @@ fn vault_root(ctx: &CerboContext, vault_id: &str) -> Result<PathBuf, String> {
     Ok(vault.path.clone())
 }
 
+// ── Creating a vault ──────────────────────────────────────────────────────────
+
+/// What [`vault_init`] did.
+#[derive(Debug, Default)]
+pub struct VaultInit {
+    /// `false` when `.cerbo/` was already there and was left alone.
+    pub created: bool,
+    /// Each bundled ontology by name: its object UUID, or why it failed.
+    pub bundled: Vec<(String, Result<String, String>)>,
+}
+
+/// The ontologies `cerbo init` bundles: (name, prefix, URL). Both prefixes are
+/// built in, so the map entry only records which object documents them.
+pub const BUNDLED_ONTOLOGIES: &[(&str, &str, &str)] = &[
+    ("Schema.org", "schema", "https://schema.org/version/latest/schema.ttl"),
+    ("FOAF", "foaf", "http://xmlns.com/foaf/spec/index.rdf"),
+];
+
+/// Initialise a vault in `root` as `cerbo init` does: `.cerbo/objects/`, an
+/// empty v2 prefix map, the bundled ontologies (fetched over the network, so
+/// optional; a failure is recorded, never fatal), and the vault's
+/// `.gitignore` rules. An existing `.cerbo/` is left as it is.
+///
+/// `cache_dir` is the global cache; the semantic index never lives in a vault.
+pub fn vault_init(cache_dir: &Path, root: &Path, bundle_ontologies: bool) -> Result<VaultInit, String> {
+    let cerbo_dir = root.join(".cerbo");
+    let mut init = VaultInit::default();
+    if !cerbo_dir.exists() {
+        std::fs::create_dir_all(cerbo_dir.join("objects"))
+            .map_err(|e| format!("Failed to create objects dir: {}", e))?;
+        crate::prefix_map::PrefixMap::default().save(&cerbo_dir)?;
+        init.created = true;
+
+        if bundle_ontologies {
+            let local_ctx = CerboContext { config_dir: cerbo_dir.clone(), cache_dir: cache_dir.to_path_buf() };
+            for (name, prefix, url) in BUNDLED_ONTOLOGIES {
+                let namespace = crate::prefix_map::builtin_namespace(prefix).expect("bundled prefixes are built in");
+                let result = crate::object::object_import_ontology(&local_ctx, url, Some((prefix, namespace)));
+                init.bundled.push((name.to_string(), result));
+            }
+        }
+    }
+    ensure_gitignore(root)?;
+    Ok(init)
+}
+
+/// Add the vault's ignore rules to `root/.gitignore`. Idempotent.
+pub fn ensure_gitignore(root: &Path) -> Result<(), String> {
+    let gitignore_path = root.join(".gitignore");
+    let existing = std::fs::read_to_string(&gitignore_path).unwrap_or_default();
+
+    let wanted: [(&str, &[&str]); 2] = [
+        ("/cerbo/", &["/cerbo/", "cerbo/"]),
+        ("/.cerbo/trash/", &["/.cerbo/trash/", ".cerbo/trash/", "/.cerbo/", ".cerbo/"]),
+    ];
+
+    let mut content = existing.clone();
+    for (entry, aliases) in wanted {
+        if content.lines().any(|l| aliases.contains(&l.trim())) {
+            continue;
+        }
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(entry);
+        content.push('\n');
+    }
+
+    if content == existing {
+        return Ok(());
+    }
+    crate::fsio::write_atomic_str(&gitignore_path, &content).map_err(|e| format!("Failed to write .gitignore: {}", e))
+}
+
+/// Refuse `path` as the home of a new vault when it holds anything but `.git`.
+/// A missing folder is fine; it is created.
+pub fn check_new_vault_dir(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if !path.is_dir() {
+        return Err(format!("Not a folder: {}", path.display()));
+    }
+    let entries = std::fs::read_dir(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
+    for entry in entries.flatten() {
+        if entry.file_name() != ".git" {
+            return Err(format!("Folder is not empty: {}", path.display()));
+        }
+    }
+    Ok(())
+}
+
+/// Create a vault at `path` (empty or missing), initialise it with
+/// [`vault_init`] and register it as `name`.
+pub fn vault_create(
+    ctx: &CerboContext,
+    path: &Path,
+    name: String,
+    bundle_ontologies: bool,
+) -> Result<(Vault, VaultInit), String> {
+    check_new_vault_dir(path)?;
+    std::fs::create_dir_all(path).map_err(|e| format!("Failed to create {}: {e}", path.display()))?;
+    let root = path.canonicalize().map_err(|e| format!("Cannot resolve {}: {e}", path.display()))?;
+    let init = vault_init(&ctx.cache_dir, &root, bundle_ontologies)?;
+    let vault = vault_add(ctx, name, root.to_string_lossy().into_owned())?;
+    Ok((vault, init))
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 #[cfg(test)]
 // Fixtures write files directly; the atomic-write rule guards vault code, not setup.

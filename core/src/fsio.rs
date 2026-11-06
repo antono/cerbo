@@ -89,6 +89,35 @@ pub mod audit {
     }
 }
 
+/// Atomically and durably copy the file at `src` to `dest`, streaming rather
+/// than reading it into memory: the same temporary-file-and-rename discipline
+/// as [`write_atomic`], for large files such as attachments. Returns the
+/// number of bytes copied.
+pub fn copy_atomic(src: &Path, dest: &Path) -> io::Result<u64> {
+    let parent = dest.parent().unwrap_or(Path::new("."));
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+
+    let mut input = File::open(src)?;
+    let mut tmp = tempfile::Builder::new()
+        .prefix(TEMP_PREFIX)
+        .tempfile_in(parent)?;
+    let copied = io::copy(&mut input, tmp.as_file_mut())?;
+    tmp.flush()?;
+    preserve_mode(dest, tmp.as_file())?;
+    tmp.as_file().sync_data()?;
+    tmp.persist(dest).map_err(|e| e.error)?;
+    sync_dir(parent)?;
+
+    #[cfg(test)]
+    audit::record(dest);
+
+    Ok(copied)
+}
+
 /// [`write_atomic`] for text content.
 pub fn write_atomic_str(dest: &Path, content: &str) -> io::Result<()> {
     write_atomic(dest, content.as_bytes())
@@ -112,12 +141,12 @@ fn preserve_mode(_dest: &Path, _tmp: &File) -> io::Result<()> {
 /// Flush the directory entry created by the rename, so the new name — not just
 /// the new content — survives power loss.
 #[cfg(unix)]
-fn sync_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
     File::open(dir)?.sync_all()
 }
 
 #[cfg(not(unix))]
-fn sync_dir(_dir: &Path) -> io::Result<()> {
+pub(crate) fn sync_dir(_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
@@ -137,6 +166,16 @@ mod tests {
         // Rewriting replaces rather than appends.
         write_atomic(&dest, b"replaced").unwrap();
         assert_eq!(fs::read(&dest).unwrap(), b"replaced");
+    }
+
+    #[test]
+    fn copies_a_file() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("photo.png");
+        write_atomic(&src, b"\x89PNG fixture").unwrap();
+        let dest = tmp.path().join("copy.png");
+        assert_eq!(copy_atomic(&src, &dest).unwrap(), 12);
+        assert_eq!(fs::read(&dest).unwrap(), b"\x89PNG fixture");
     }
 
     #[test]

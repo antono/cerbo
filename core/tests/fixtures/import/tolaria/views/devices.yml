@@ -1,0 +1,8 @@
+name: Devices
+icon: cpu
+sort: title:asc
+filters:
+  any:
+    - field: type
+      op: equals
+      value: Device
