@@ -16,4 +16,8 @@ tokio = { version = "1", features = ["full"] }
 cerbo-core = { path = "../core", features = ["test-utils"] }
 tempfile = "3"
 
+[target.'cfg(unix)'.dev-dependencies]
+# Opens a pseudo-terminal for the interactive import-vault test.
+libc = "0.2"
+
 [build-dependencies]

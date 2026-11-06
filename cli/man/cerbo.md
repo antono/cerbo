@@ -142,6 +142,72 @@ Options:
 - `--namespace <IRI>` - Namespace IRI the prefix expands to, e.g. `https://example.org/vocab#` (requires `--prefix`)
 - `--json` - Output result as JSON with uuid, url, prefix and namespace fields
 
+## import-vault
+
+Import an Obsidian or Tolaria vault (a folder of Markdown notes with YAML frontmatter and `[[wikilinks]]`) into a Cerbo vault. Every note becomes a page, links become `cerbo://` links, referenced files become Attachment objects, and frontmatter becomes RDF in `meta.ttl`. The source folder is only read: no file under it is created, changed, moved or deleted.
+
+Usage: `cerbo import-vault <DIR> [--from obsidian|tolaria] [--vault <ID> | --new <PATH> [--name <NAME>]] [--force] [--dry-run] [--json]`
+
+Arguments:
+- `DIR` - The folder to import (the Obsidian or Tolaria vault)
+
+Options:
+- `--from <FORMAT>` - Source format, `obsidian` or `tolaria`; overrides detection
+- `--vault <ID>` - Import into this registered vault (an ID from `cerbo vault list`). An unknown ID fails with "Vault not found" and writes nothing.
+- `--new <PATH>` - Create a vault in `PATH` (missing, or empty but for `.git`), initialise it as `cerbo init` does, register it, and import into it. A folder holding other files is refused. The vault is created only after the source has been read and planned, so a source that cannot be imported leaves no empty vault behind.
+- `--name <NAME>` - Name of the vault created by `--new` (default: the source folder name). Needs `--new`.
+- `--force` - Import a folder that was already imported into this vault: makes a second, separate copy with its own ontology and prefix
+- `--dry-run` - Read the source and print the report without asking for a vault or writing anything (no vault, no registry file)
+- `--json` - Print only the report, as one JSON object (see below). An error prints `{"error": true, "message": ...}`.
+
+`--vault` and `--new` cannot be combined: that is a usage error (exit status 2).
+
+**Target vault:** without `--vault` or `--new`, on a terminal, the command lists the registered vaults by number (name and path) plus "Create a new vault" on stderr and reads the answer from stdin; "Create a new vault" then asks for a folder (`~/` is expanded) and a name. When stdin is not a terminal the command fails with "no target vault: pass --vault <ID> or --new <PATH>" and writes nothing.
+
+**Format detection:** a folder with `.obsidian/` is Obsidian. A folder without it that has a `views/` folder of `.yml` files, or a Markdown note with a `type:` frontmatter field, is Tolaria. Anything else fails with "cannot detect vault format, pass --from obsidian|tolaria". A folder holding `.cerbo/` is a Cerbo vault and is refused, also with `--from`. The report says which format was used and why.
+
+**Mapping:**
+- Note (`*.md`) - a page (`rdf:type schema:NoteDigitalDocument`); `page.md` holds the body without its frontmatter
+- Title - Tolaria: the first H1, else the file stem; Obsidian: the file stem. `# <title>` is prepended when the body does not start with it.
+- Folder - `cerbo:virtualPath` (the page's folder in the sidebar and symlink tree)
+- File stem - `cerbo:slug`, transliterated to ASCII; a second note in one folder with the same slug gets `-2`, then `-3`, and is listed under renamed slugs
+- File times - `schema:dateCreated` (birth time, else modification time) and `schema:dateModified`
+- `[[Note]]`, `[[Note|text]]`, `[[Note#Heading]]`, `![[Note]]` - `[text](cerbo://<uuid>)`, where text is the `|text` part, else the target's title; the `#Heading` is dropped and counted. A target matches a note by relative path, then file stem, then title, then Obsidian alias, ignoring case; with several matches the one nearest the linking note's folder wins and the link is listed as ambiguous.
+- `[text](other.md)`, `[text](../other%20note.md)` - `[text](cerbo://<uuid>)`; external URLs are left alone
+- `![[photo.png]]`, `![alt](path)`, `[text](path)` to a local file - one Attachment object per file, however many notes use it, linked as `![alt](cerbo://<uuid>)` or `[text](cerbo://<uuid>)`. Files are matched by relative path, then by file name anywhere in the vault. Files no note references are listed, not imported.
+- Links inside code blocks and inline code - left unchanged
+- Unresolved links - kept as written and listed in the report
+- Frontmatter `type: X` (Tolaria) - a second `rdf:type <ns>X`; a note with `type: Type` declares the class `X` in the import's ontology, labelled with its title
+- Frontmatter values holding `[[wikilinks]]` - one `<ns><key> <cerbo://objects/<uuid>>` relation per resolved link; an unresolved one is kept as a string and listed
+- Other frontmatter values - literals `<ns><key>`: strings, booleans, integers, ISO dates and date-times with their XSD type, one triple per list item, nested maps as a YAML string. Keys are percent-encoded where they are not IRI-safe (`Belongs to` - `Belongs%20to`).
+- Keys starting with `_` (Tolaria app state such as `_favorite`) - dropped
+- Obsidian `tags` / `aliases` - `schema:keywords` (without `#`) / `schema:alternateName`; aliases also resolve wikilinks. Inline `#tags` stay text.
+- Frontmatter that cannot be parsed - kept at the top of `page.md` in a `yaml` code block and listed in the report
+- Skipped and listed: Obsidian `.canvas` and `.excalidraw.md` files, Tolaria `views/`, symbolic links. Left out silently: `.obsidian/`, `.git/`, `.trash/` and every other hidden file or folder.
+
+`<ns>` is the import's own namespace `cerbo://vocab/<uuid>/`, owned by one Ontology object titled `<Format>: <source folder name>`. That object records the source as a `file://` URL (`schema:url`), the format (`cerbo:importFormat`) and the import time, and its `meta.ttl` declares every class and property the import used. Its prefix, the source folder name slugified (`braindump`, or `braindump-2` when taken), is registered in `.cerbo/ontology-map.json`, so annotations can write `[Text]{braindump:Journal}`.
+
+**One import per source:** importing a folder into a vault that already holds an import of the same folder (same canonical path, in any format) fails before anything is written, naming the earlier import's date and format. `--force` imports a second copy. Updating an earlier import is not supported.
+
+**Target outside the source:** the target vault (from `--vault`, `--new` or the prompt) may not be the source folder or lie inside it, since the source is never written; such a target is refused before anything is created. Only one import runs into a vault at a time; a second one started meanwhile is refused.
+
+**All or nothing:** objects are written to `.cerbo/import-staging/` first and then moved into `.cerbo/objects/`; the prefix map is updated last. A failed import leaves the vault's pages and prefix map as they were; should some moved objects not go back to the trash, the next import into that vault finishes the cleanup. If an import was interrupted while moving, the next `cerbo import-vault` into that vault moves its objects to the trash first and reports how many. After the import the semantic index is brought up to date, so `cerbo page backlinks` and `cerbo sparql` see the new pages without `cerbo index`; should that fail, the import still succeeds and the report carries a warning.
+
+**Report:** the human report says `Imported N pages and M attachments (size) into "<vault>" (<id>)` (`Dry run: would import ...` with `--dry-run`), the source and format, the ontology and prefix, the counts of rewritten links, relations and dropped heading fragments, then the lists that need attention: skipped files, unreferenced files, unresolved links (with the note and, for frontmatter, the key), ambiguous links (with the chosen target and the candidates), renamed slugs and frontmatter errors. Warnings go to stderr. With `--json` the report is one JSON object with the fields `vault` (`{id, name, path}`; `null` on a dry run), `source`, `format`, `formatReason`, `dryRun`, `pages`, `attachments`, `attachmentBytes`, `relations`, `links`, `droppedFragments`, `ontology` (`{uuid, title, namespace, prefix}`), `skipped`, `unreferenced`, `unresolved` (`[{note, link, property}]`), `ambiguous` (`[{note, link, chosen, candidates}]`), `renamedSlugs` (`[{note, from, to}]`), `frontmatterErrors` (`[{note, error}]`), `recovered` and `warnings`.
+
+Examples:
+
+```
+# See what an Obsidian vault would become, without writing anything
+cerbo import-vault ~/Notes --dry-run
+
+# Import it into a registered vault
+cerbo import-vault ~/Notes --vault 3f2a
+
+# Import a Tolaria vault into a new vault named Braindump
+cerbo import-vault ~/Sync/Tolaria/Braindump --from tolaria --new ~/cerbo/braindump --name Braindump --json
+```
+
 ## index
 
 Rebuild metadata (annotations.ttl) from page content, report broken links, and bring the semantic index up to date. Used for recovery after manual edits or bulk imports. Backlinks are not files; see `cerbo page backlinks` and SEMANTIC INDEX.
@@ -401,6 +467,17 @@ cerbo import https://example.com/article
 Import an ontology and register its annotation prefix:
 ```
 cerbo import-ontology https://example.org/vocab.ttl --prefix ex --namespace https://example.org/vocab#
+```
+
+Preview, then import an Obsidian vault into a registered vault:
+```
+cerbo import-vault ~/Notes --dry-run
+cerbo import-vault ~/Notes --vault 3f2a
+```
+
+Import a Tolaria vault into a new vault:
+```
+cerbo import-vault ~/Sync/Tolaria/Braindump --new ~/cerbo/braindump --name Braindump
 ```
 
 Preview, then run, the vocabulary migration of one vault:

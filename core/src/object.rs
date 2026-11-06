@@ -939,7 +939,7 @@ pub fn attachment_list(ctx: &CerboContext, page_uuid: &str) -> Result<Vec<String
 }
 
 /// Detect MIME type from file extension.
-fn detect_mime_type(file_path: &std::path::Path) -> String {
+pub(crate) fn detect_mime_type(file_path: &std::path::Path) -> String {
     let ext = file_path
         .extension()
         .and_then(|e| e.to_str())

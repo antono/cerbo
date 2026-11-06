@@ -27,6 +27,8 @@ fastembed = { version = "7.5", default-features = false, features = ["ort-load-d
 ureq = { version = "3", default-features = false, features = ["rustls"], optional = true }
 # Index directory key (always) and model checksums (embeddings).
 sha2 = "0.10"
+serde-saphyr = "2.1.1"
+pulldown-cmark = { version = "0.13.6", default-features = false }
 
 [features]
 # Mock embedder for the CLI integration tests.

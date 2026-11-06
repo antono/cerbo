@@ -95,6 +95,7 @@ pub mod slug;
 pub mod state;
 pub mod ui_settings;
 pub mod vault;
+pub mod vault_import;
 pub mod vault_symlink;
 pub mod vocabulary_check;
 pub mod vocabulary_migration;

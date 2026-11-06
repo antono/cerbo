@@ -1,6 +1,6 @@
 ---
 name: cerbo-cli
-description: "Use when the user wants to work with a Cerbo vault from the terminal: create or register a vault, create/read/write/delete pages, link and annotate pages, find backlinks, query the knowledge graph with SPARQL, search pages by meaning, rebuild the index, import a URL or an ontology, build the symlink tree, or run a vocabulary migration. Examples: \"Create a page about X\", \"Which pages link here?\", \"Find notes about Berlin\", \"Reindex the vault\""
+description: "Use when the user wants to work with a Cerbo vault from the terminal: create or register a vault, create/read/write/delete pages, link and annotate pages, find backlinks, query the knowledge graph with SPARQL, search pages by meaning, rebuild the index, import a URL, an ontology or an Obsidian/Tolaria vault, build the symlink tree, or run a vocabulary migration. Examples: \"Create a page about X\", \"Import my Obsidian vault\", \"Which pages link here?\", \"Find notes about Berlin\", \"Reindex the vault\""
 ---
 
 # Cerbo CLI
@@ -52,6 +52,7 @@ cwd is auto-registered silently and shows as `(auto)` in `cerbo vault list`.
 | `cerbo info` | Config dir, cache dir, registered vaults |
 | `cerbo import <URL>` | A read-only Source object (`schema:WebPage`) for the URL |
 | `cerbo import-ontology <URL> [--prefix p --namespace IRI]` | An Ontology object; with both flags, registers prefix `p` for annotations |
+| `cerbo import-vault <DIR> [--from obsidian\|tolaria] [--vault ID \| --new PATH [--name N]] [--force] [--dry-run]` | Import an Obsidian or Tolaria vault as pages; the source folder is only read |
 | `cerbo index [--vault ID\|PATH] [--page UUID] [--embeddings]` | Rebuild `annotations.ttl` and the semantic index, report broken links; `--embeddings` also computes vectors for search |
 | `cerbo sparql '<QUERY>'` / `--file q.rq` / `-` | Read-only SPARQL 1.1 against the vault's graph |
 | `cerbo search "<TEXT>"` | Pages closest in meaning to the text, any language |
@@ -156,6 +157,36 @@ Built-in prefixes (`schema`, `foaf`, `dcterms`, `skos`, `rdf`, `rdfs`, `owl`,
 `xsd`) need no registration. An unknown prefix is kept as
 `cerbo:unresolvedType` with a warning, not an error.
 
+### Import an Obsidian or Tolaria vault
+
+```bash
+cerbo import-vault ~/Notes --dry-run                     # report only: counts, unresolved links, skipped files
+cerbo import-vault ~/Notes --vault <ID> --json           # into a registered vault
+cerbo import-vault ~/Sync/Tolaria/Braindump --new ~/cerbo/braindump --name Braindump
+```
+
+- **Always pass `--vault <ID>` or `--new <PATH>`.** Without them the command
+  asks on a terminal and fails otherwise ("no target vault: pass --vault <ID>
+  or --new <PATH>"); `--vault` and `--new` are exclusive. `--new` needs a
+  missing or empty folder (`.git` alone is fine) and is created only once the
+  source has been read.
+- Format: `.obsidian/` means Obsidian; `views/*.yml` or `type:` frontmatter
+  means Tolaria; otherwise pass `--from obsidian|tolaria`.
+- Notes become pages (folder → virtual path, file stem → slug, title from the
+  first H1 for Tolaria or the file name for Obsidian). `[[Note|text]]`,
+  `![[file]]` and relative Markdown links become `cerbo://<uuid>` links;
+  referenced files become attachments; links inside code are untouched;
+  unresolved links stay as written and are reported.
+- Frontmatter becomes RDF in the import's namespace `cerbo://vocab/<uuid>/`
+  (`type: X` → extra `rdf:type`, `[[wikilink]]` values → relations, others →
+  typed literals, `_`-keys dropped). Its prefix is the source folder name,
+  slugified (`braindump`, `braindump-2`), registered in the vault's prefix map.
+- One import per source folder and vault: a repeat is refused, `--force` makes
+  a second copy. The `--json` report has `vault`, `format`, `pages`,
+  `attachments`, `relations`, `skipped`, `unreferenced`, `unresolved`,
+  `ambiguous`, `renamedSlugs`, `frontmatterErrors`, `warnings`.
+- Backlinks and SPARQL see the imported pages right away; no `cerbo index`.
+
 ### Maintenance
 
 ```bash
@@ -180,6 +211,9 @@ A `cerbo index` run that exits 0 has fully rebuilt the vault's metadata.
 | Broken link warning on `page write` | The target UUID does not exist; the page was still saved |
 | `cerbo symlink` skips pages | They have no `cerbo:slug`; run `cerbo index` first |
 | `Cannot specify both --vault and --page` | Pick one for `cerbo index` |
+| `no target vault: pass --vault <ID> or --new <PATH>` | `import-vault` without a terminal; pass a target |
+| `cannot detect vault format` | Pass `--from obsidian` or `--from tolaria` to `import-vault` |
+| `… was already imported into this vault on <date>` | Expected; `--force` imports a second copy |
 
 Changing the CLI? Update `cli/man/cerbo.md` in the same change (`cerbo.1` is
 generated at build time and not committed).
