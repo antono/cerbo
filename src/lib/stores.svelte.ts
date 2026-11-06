@@ -26,12 +26,17 @@ import {
   type SimilarState,
 } from './similar-notes';
 import { serialQueue } from './write-queue';import {
+  ancestorFolders,
   buildPageTree,
   carryCollapsed,
+  EMPTY_LAYOUT,
   flattenVisible,
   pruneCollapsed,
   revealPath,
   visiblePageUuids,
+  type Placement,
+  type TreeLayout,
+  type TreeNode,
   type TreeRow,
 } from './page-tree';
 
@@ -134,6 +139,12 @@ export const app = $state({
   collapsedFolders: [] as string[],
   // Collapsed folders of every vault, as loaded from ui.toml.
   uiCollapsedFolders: {} as Record<string, string[]>,
+  // The vault's sidebar layout from `.cerbo/tree.toml` (add-sidebar-ordering):
+  // pinned folders and the order of each folder's children.
+  layout: EMPTY_LAYOUT as TreeLayout,
+  // New Folder dialog: open flag and the prefilled path.
+  showNewFolder: false,
+  newFolderPath: '',
   showSparqlConsole: false,
   // Last query run in the SPARQL console, kept in ui.toml across restarts.
   lastSparqlQuery: null as string | null,
@@ -197,6 +208,8 @@ export function closeAllDialogs() {
   app.moveUuid = null;
   app.renameFolderPath = null;
   app.newPagePath = '';
+  app.showNewFolder = false;
+  app.newFolderPath = '';
 }
 
 // ── Computed helpers ──────────────────────────────────────────────────────────
@@ -260,7 +273,7 @@ export async function openVault(vaultId: string): Promise<void> {
     app.activeVaultId = vaultId;
     await invoke('vault_set_active', { id: vaultId });
     await loadPages();
-    app.collapsedFolders = pruneCollapsed(app.uiCollapsedFolders[vaultId] ?? [], app.pages);
+    app.collapsedFolders = pruneCollapsed(app.uiCollapsedFolders[vaultId] ?? [], app.pages, app.layout);
     await loadVaultObjects();
     // Before the first page renders, so mentions resolve on first paint.
     await loadPrefixMap();
@@ -336,6 +349,13 @@ export async function loadPages(): Promise<void> {
     const pages = await invoke<PageMeta[]>('page_list');
     app.pages = pages;
   } catch (e) {
+    setError(String(e));
+  }
+  // A layout that cannot be read leaves the tree in default order and says so.
+  try {
+    app.layout = await invoke<TreeLayout>('tree_layout');
+  } catch (e) {
+    app.layout = EMPTY_LAYOUT;
     setError(String(e));
   }
 }
@@ -425,16 +445,21 @@ export async function openPrevPage(): Promise<void> {
 
 // ── Sidebar tree (spec `desktop-page-tree`, design D5, D6) ───────────────────
 
-/** The sidebar rows: the tree of `app.pages` minus collapsed subtrees. */
+/** The sidebar tree of `app.pages` in the vault layout's order. */
+export function pageTree(): TreeNode[] {
+  return buildPageTree(app.pages, app.layout);
+}
+
+/** The sidebar rows: the tree minus collapsed subtrees. */
 export function visibleRows(): TreeRow[] {
-  return flattenVisible(buildPageTree(app.pages), new Set(app.collapsedFolders));
+  return flattenVisible(pageTree(), new Set(app.collapsedFolders));
 }
 
 /** Set the collapsed folders of the open vault and remember them in ui.toml. */
 export function setCollapsedFolders(paths: string[]): void {
   const vaultId = app.activeVaultId;
   if (!vaultId) return;
-  const next = pruneCollapsed(paths, app.pages);
+  const next = pruneCollapsed(paths, app.pages, app.layout);
   const unchanged = next.length === app.collapsedFolders.length && next.every((p) => app.collapsedFolders.includes(p));
   app.collapsedFolders = next;
   if (unchanged) return;
@@ -500,6 +525,63 @@ export async function renameFolder(from: string, to: string): Promise<FolderRena
     setError(`${report.failed.length} pages could not be moved: ${details}`);
   }
   return report;
+}
+
+/**
+ * Apply a placement (add-sidebar-ordering D6): move the page or folder when it
+ * changes folder, then store the parent's new order. One reload at the end.
+ */
+export async function placeRow(p: Placement): Promise<void> {
+  if (!app.activeVaultId) throw new Error('No active vault');
+  let failed: [string, string][] = [];
+  try {
+    await vaultWrite(async () => {
+      try {
+        if (p.move?.kind === 'page') {
+          await invoke('page_move', { uuid: p.move.uuid, virtualPath: p.move.to });
+        } else if (p.move?.kind === 'folder') {
+          const r = await invoke<FolderRenameReport>('folder_rename', { oldPrefix: p.move.from, newPrefix: p.move.to });
+          failed = r.failed;
+        }
+        await invoke('folder_set_order', { parent: p.parent, entries: p.order });
+      } finally {
+        await loadPages();
+      }
+    });
+  } finally {
+    if (p.move?.kind === 'folder') setCollapsedFolders(carryCollapsed(app.collapsedFolders, p.move.from, p.move.to));
+  }
+  // The row lands in `parent`, which must be open to show it.
+  setCollapsedFolders(revealPath(app.collapsedFolders, p.parent || null));
+  if (failed.length > 0) {
+    const details = failed.map(([uuid, err]) => `${uuid}: ${err}`).join('; ');
+    setError(`${failed.length} pages could not be moved: ${details}`);
+  }
+}
+
+/** Create an empty (pinned) folder and show it. */
+export async function createFolder(path: string): Promise<void> {
+  if (!app.activeVaultId) throw new Error('No active vault');
+  await vaultWrite(async () => {
+    await invoke('folder_create', { path });
+    await loadPages();
+  });
+  setCollapsedFolders(revealPath(app.collapsedFolders, ancestorFolders(path).slice(0, -1).at(-1) ?? null));
+}
+
+/** Delete a folder that has no pages under it. */
+export async function deleteFolder(path: string): Promise<void> {
+  if (!app.activeVaultId) throw new Error('No active vault');
+  await vaultWrite(async () => {
+    await invoke('folder_delete', { path });
+    await loadPages();
+  });
+}
+
+export function triggerNewFolder(parent = '') {
+  closeAllDialogs();
+  app.newFolderPath = parent ? `${parent}/` : '';
+  app.showNewFolder = true;
 }
 
 export function triggerMove(uuid?: string) {

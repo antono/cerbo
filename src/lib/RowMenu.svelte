@@ -7,6 +7,8 @@
     /** Any lucide icon; they all share one component type. */
     icon?: typeof Pencil;
     danger?: boolean;
+    /** Shown but not selectable, e.g. "Move up" on the first row. */
+    disabled?: boolean;
     onSelect: () => void;
   }
 
@@ -26,7 +28,7 @@
     left = Math.max(4, Math.min(x, window.innerWidth - rect.width - 4));
     top = Math.max(4, Math.min(y, window.innerHeight - rect.height - 4));
     positioned = true;
-    (el.querySelector('button') as HTMLButtonElement | null)?.focus();
+    (el.querySelector('button:not(:disabled)') as HTMLButtonElement | null)?.focus();
   });
 
   $effect(() => {
@@ -40,16 +42,22 @@
         onClose();
       } else if (e.key === 'ArrowDown' || e.key === 'j') {
         e.preventDefault();
-        highlighted = (highlighted + 1) % items.length;
-        focusItem();
+        step(1);
       } else if (e.key === 'ArrowUp' || e.key === 'k') {
         e.preventDefault();
-        highlighted = (highlighted - 1 + items.length) % items.length;
-        focusItem();
+        step(-1);
       }
     }
-    function focusItem() {
-      (menuEl?.querySelectorAll('button')[highlighted] as HTMLButtonElement | undefined)?.focus();
+    // Arrow keys skip disabled entries.
+    function step(delta: 1 | -1) {
+      for (let n = 1; n <= items.length; n++) {
+        const i = (highlighted + delta * n + items.length * n) % items.length;
+        if (!items[i].disabled) {
+          highlighted = i;
+          (menuEl?.querySelectorAll('button')[i] as HTMLButtonElement | undefined)?.focus();
+          return;
+        }
+      }
     }
     window.addEventListener('pointerdown', onPointerDown, true);
     window.addEventListener('keydown', onKeydown, true);
@@ -76,6 +84,7 @@
       class="menu-item"
       class:danger={item.danger}
       role="menuitem"
+      disabled={item.disabled}
       onclick={() => select(item)}
       onfocus={() => (highlighted = i)}
     >
@@ -122,5 +131,10 @@
   .menu-item.danger:hover,
   .menu-item.danger:focus {
     color: #dc2626;
+  }
+  .menu-item:disabled {
+    opacity: 0.45;
+    cursor: default;
+    background: transparent;
   }
 </style>

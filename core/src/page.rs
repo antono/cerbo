@@ -133,6 +133,8 @@ pub fn folder_rename(
         crate::vault::validate_virtual_path(prefix)
             .map_err(|e| format!("invalid {what} folder path {prefix:?}: {e}"))?;
     }
+    // A layout that cannot be read would leave pages and layout out of step.
+    crate::tree::check_readable(ctx)?;
 
     let nested = format!("{old_prefix}/");
     let mut report = FolderRenameReport::default();
@@ -162,6 +164,12 @@ pub fn folder_rename(
     {
         crate::semantic::sync_objects(&vault_ctx, &report.changed);
     }
+    // Pins and order lists follow the folder (spec `vault-tree-layout`,
+    // "Folder rename keeps the layout"); this also renames a pinned folder
+    // that has no pages.
+    crate::tree::rename_layout_prefix(ctx, old_prefix, new_prefix).map_err(|e| {
+        format!("{} pages moved to {new_prefix}, but the sidebar layout was not updated: {e}", report.changed.len())
+    })?;
     Ok(report)
 }
 

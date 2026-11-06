@@ -48,6 +48,9 @@ cwd is auto-registered silently and shows as `(auto)` in `cerbo vault list`.
 | `cerbo page backlinks <UUID>` | Pages linking to the object, `<uuid>: <title>` per line |
 | `cerbo page move <UUID> <PATH>` / `--root` | Set the page's folder in the virtual tree (`notes/rust`), or clear it; exactly one of the two |
 | `cerbo folder rename <OLD> <NEW>` | Move every page whose path is `OLD` or under `OLD/` to `NEW`; `0 pages` is not an error |
+| `cerbo folder list` | The tree in sidebar order: `name/` folders, `Title  <uuid>` pages, two spaces per level |
+| `cerbo folder create <PATH>` / `delete <PATH>` | Pin an empty folder that stays until deleted / delete a folder with no pages |
+| `cerbo folder order <FOLDER>` / `--root` `<ENTRY>...` | Set the sidebar order of a folder's children; an entry is a page UUID or a child folder name |
 | `cerbo resolve <UUID>` | UUID to filesystem path of the object directory |
 | `cerbo info` | Config dir, cache dir, registered vaults |
 | `cerbo import <URL>` | A read-only Source object (`schema:WebPage`) for the URL |
@@ -89,7 +92,8 @@ Every command above takes `--json`. `search`, `similar` take `--limit N`,
   through `page write`.
 - **Folders are paths, not objects.** `page move` and `folder rename` only
   rewrite `cerbo:virtualPath` in `meta.ttl`; a folder exists while a page is in
-  it. Paths are `a/b/c` with no leading or trailing slash and no `.`/`..`.
+  it, or while it is pinned with `folder create`. Pins and the sidebar order
+  live in `.cerbo/tree.toml`. Paths are `a/b/c` with no leading or trailing slash and no `.`/`..`.
   Moving two pages with the same slug into one folder is allowed but makes
   `cerbo symlink` refuse until one slug or path changes.
 - **Don't edit `meta.ttl` / `annotations.ttl` by hand.** They are regenerated

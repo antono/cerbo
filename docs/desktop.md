@@ -8,12 +8,18 @@ its own vault selector) and edits the same `.cerbo/` store the CLI uses.
 
 - **Left sidebar**: the pages of the open vault as a folder tree. A page's
   folder is its `cerbo:virtualPath` (the same path `cerbo symlink` nests it
-  under); folders are not stored, one exists while a page is in it. Click a
-  folder to collapse or expand it (remembered per vault), drag a page onto a
-  folder or onto the root zone below the list to move it, or right-click a row
-  for **Move to…**, **Rename**, **Delete** on a page and **New page here**,
-  **Rename folder** on a folder. `J`/`K` move, `Tab` cycles, `Ctrl+P`
-  searches by title.
+  under); a folder exists while a page is in it, or until you delete it if
+  you created it empty. Click a folder to collapse or expand it (remembered
+  per vault). Drag any row, page or folder, to put it anywhere: a line above
+  or below a row places it there, a highlighted folder takes it inside, and
+  the zone below the list sends it to the root. `Alt+↑`/`Alt+↓` move the
+  focused row among its siblings. Right-click a row for **Move to…**,
+  **Rename**, **Move up**/**Move down** and **Delete** on a page, and **New
+  page here**, **New folder here**, **Rename folder** and, when it has no
+  pages, **Delete folder** on a folder; right-click empty space for **New
+  page** and **New folder**. The order and the empty folders are stored in
+  the vault (`.cerbo/tree.toml`), so `cerbo folder list` shows the same tree.
+  `J`/`K` move, `Tab` cycles, `Ctrl+P` searches by title.
 - **Editor**: a write tab and a preview tab. Saves are queued and written
   atomically; a page changed on disk by another program shows a diff and asks
   before overwriting.
@@ -61,6 +67,7 @@ on macOS):
 | `r`, `m`, `Del` (preview) | Rename / move / delete the current page |
 | `j` `k` `h` `l` (sidebar) | Next / previous row, collapse or go to parent, expand or step in |
 | `Enter`, `m`, `r` (sidebar) | Open page or toggle folder, move page or rename folder, rename |
+| `Alt+↑` / `Alt+↓` (sidebar) | Move the focused row up / down among its siblings (also `Alt+k` / `Alt+j`) |
 | `Esc` | Close the active dialog |
 
 ## Startup

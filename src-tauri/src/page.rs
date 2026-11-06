@@ -72,6 +72,35 @@ pub async fn folder_rename(
     off_main(move || cerbo_core::page::folder_rename(&ctx, &oldPrefix, &newPrefix)).await
 }
 
+/// The vault's sidebar layout from `.cerbo/tree.toml` (spec `vault-tree-layout`).
+#[tauri::command]
+pub async fn tree_layout(app: AppHandle) -> Result<cerbo_core::tree::TreeLayout, String> {
+    let ctx = get_vault_ctx(&app)?;
+    off_main(move || cerbo_core::tree::tree_layout(&ctx)).await
+}
+
+/// Create an empty (pinned) folder.
+#[tauri::command]
+pub async fn folder_create(app: AppHandle, path: String) -> Result<(), String> {
+    let ctx = get_vault_ctx(&app)?;
+    off_main(move || cerbo_core::tree::folder_create(&ctx, &path)).await
+}
+
+/// Delete a folder with no pages under it.
+#[tauri::command]
+pub async fn folder_delete(app: AppHandle, path: String) -> Result<(), String> {
+    let ctx = get_vault_ctx(&app)?;
+    off_main(move || cerbo_core::tree::folder_delete(&ctx, &path)).await
+}
+
+/// Store the order of a folder's children (`""` is the root); returns the
+/// list as stored, after pruning.
+#[tauri::command]
+pub async fn folder_set_order(app: AppHandle, parent: String, entries: Vec<String>) -> Result<Vec<String>, String> {
+    let ctx = get_vault_ctx(&app)?;
+    off_main(move || cerbo_core::tree::folder_set_order(&ctx, &parent, entries)).await
+}
+
 #[tauri::command]
 #[allow(non_snake_case)]
 pub fn cursor_position_save(

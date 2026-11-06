@@ -40,6 +40,8 @@
 
 - [x] 6.1 Add a desktop e2e case under `e2e/specs/` that creates a page in `notes/rust`, sees it nested in the sidebar, moves it to root through the dialog and sees the folder vanish; verify `e2e/run.sh` passes locally
 - [x] 6.2 Run `cargo test --workspace`, `bun run check`, `bunx vitest run` inside `nix develop`, `nix build .#cerbo .#cerbo-desktop`, and `openspec validate add-virtual-path-tree --strict`; verify all pass
+- [x] 6.4 Fix found in the manual pass: in preview mode a focused tree row ignored `j`/`k`/arrows (design D9); the tree now owns its keys whenever focus is inside it; verify an e2e case presses `j` in preview mode and focus moves while the preview does not scroll
+- [x] 6.5 Fix found in the manual pass: on GNOME Wayland a page row never started a drag; replace native HTML5 DnD with mouse-event drag (design D8); verify e2e cases drag a page onto a folder and onto the root zone with WebDriver pointer actions
 - [ ] 6.3 Manual pass on the built app with `test-vault`: tree rendering, collapse persistence across restart and across two vaults, keyboard navigation, move dialog, context menu, folder rename, drag-and-drop, light and dark themes; verify no console errors
   - Covered by `e2e/specs/vault/page-tree.e2e.ts` on the nix-built app (2026-11-04): tree rendering, collapse/expand by click and `h`/`l`, context menu, folder rename, move dialog. Still to check by hand: drag-and-drop (not scriptable in WebKitWebDriver), collapse persistence across a restart and across two vaults, both themes.
 

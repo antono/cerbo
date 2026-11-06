@@ -12,6 +12,7 @@
   import RenamePageDialog from '#lib/RenamePageDialog.svelte';
   import MovePageDialog from '#lib/MovePageDialog.svelte';
   import RenameFolderDialog from '#lib/RenameFolderDialog.svelte';
+  import NewFolderDialog from '#lib/NewFolderDialog.svelte';
   import KeyboardHelp from '#lib/KeyboardHelp.svelte';
   import SparqlConsole from '#lib/SparqlConsole.svelte';
   import ExitConfirmation from '#lib/ExitConfirmation.svelte';
@@ -43,7 +44,7 @@
     function handleKeydown(e: KeyboardEvent) {
       // 1. Escape: Close active dialogs/forms
       if (e.key === 'Escape') {
-        if (app.showSearch || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.renameUuid || app.confirmDeleteUuid || app.showSparqlConsole || app.moveUuid || app.renameFolderPath) {
+        if (app.showSearch || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.renameUuid || app.confirmDeleteUuid || app.showSparqlConsole || app.moveUuid || app.renameFolderPath || app.showNewFolder) {
           closeAllDialogs();
           return;
         }
@@ -90,7 +91,7 @@
       }
 
       // Ignore other global shortcuts if any modal is open
-      if (app.showSearch || app.showExitPrompt || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.renameUuid || app.confirmDeleteUuid || app.showSparqlConsole || app.moveUuid || app.renameFolderPath !== null) return;
+      if (app.showSearch || app.showExitPrompt || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.renameUuid || app.confirmDeleteUuid || app.showSparqlConsole || app.moveUuid || app.renameFolderPath !== null || app.showNewFolder) return;
 
       // 5. Go Back (Alt+Left) - only when not in input
       if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'Left') && !isInputFocused()) {
@@ -410,6 +411,10 @@
 
 {#if app.renameFolderPath !== null}
   <RenameFolderDialog onClose={() => app.renameFolderPath = null} />
+{/if}
+
+{#if app.showNewFolder}
+  <NewFolderDialog onClose={() => { app.showNewFolder = false; app.newFolderPath = ''; }} />
 {/if}
 
 {#if app.showHelp}

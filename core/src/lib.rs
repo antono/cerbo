@@ -93,6 +93,7 @@ pub mod rdf;
 pub mod semantic;
 pub mod slug;
 pub mod state;
+pub mod tree;
 pub mod ui_settings;
 pub mod vault;
 pub mod vault_symlink;

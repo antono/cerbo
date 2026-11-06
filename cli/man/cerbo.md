@@ -81,13 +81,19 @@ Source-type (imported) objects are read-only and cannot be deleted; the refusal 
 
 ## folder
 
-Operate on the folders of the virtual tree. A folder is not stored anywhere: it exists while at least one page's `cerbo:virtualPath` is that path or lies under it, and it disappears when the last such page moves out.
+Operate on the folders of the virtual tree. A folder exists while at least one page's `cerbo:virtualPath` is that path or lies under it, or while it is pinned (created with `folder create`); an unpinned folder disappears when the last page moves out.
+
+The vault's sidebar layout lives in `.cerbo/tree.toml`: `pinned`, the folders that exist with no page in them, and `order`, a table mapping a folder path (`""` is the root) to its children in display order, where a page is its UUID and a child folder is its name followed by `/`. Children named there come first, in that order; the others follow with folders before pages, each by name or title, case-insensitively. Entries that name nothing are skipped. The file is optional; one that does not parse is reported and never overwritten. The desktop app reads the same file.
 
 Usage: `cerbo folder <SUBCOMMAND>`
 
 ### Subcommands:
 
-- `cerbo folder rename <OLD> <NEW> [--json]` - Replace the folder prefix `OLD` with `NEW` on every page whose virtual path is `OLD` or starts with `OLD/`; nested folders move along (`notes/rust` becomes `archive/rust` when `notes` is renamed to `archive`), and `notebook` is not under `notes`. Both paths must be non-empty and valid; that is checked before any page is written. Renaming onto an existing folder merges the two. Each page's `meta.ttl` is written on its own; a page that cannot be written is reported on stderr as `Error: could not move <uuid>: <reason>`, the others are still moved, and the command exits non-zero. Prints `Renamed <old> to <new> (<n> pages)`; with `--json`, `{"from": ..., "to": ..., "pages": <n>, "failed": [<uuid>, ...]}`. With no page under `OLD` it exits zero with `0 pages`.
+- `cerbo folder list [--json]` - Print the tree in its stored order, two spaces of indent per level: a folder as `name/`, a page as `Title  <uuid>` (two spaces before the UUID). With `--json`, nested nodes `{"kind": "folder", "name", "path", "pinned", "children"}` and `{"kind": "page", "uuid", "title"}`.
+- `cerbo folder create <PATH> [--json]` - Create an empty folder by pinning `PATH` in `.cerbo/tree.toml`; it stays in the tree until deleted, with or without pages. A folder that already exists (pinned, or from page paths) is refused with `folder already exists: <path>`. Prints `Created folder <path>`; with `--json`, `{"path": ...}`.
+- `cerbo folder delete <PATH> [--json]` - Delete an empty folder: unpin it and everything under it and drop its order lists and its place in the parent's order. A folder with pages under it is refused with `folder is not empty: <path> (<n> pages)`; move or delete the pages first. Prints `Deleted folder <path>`; with `--json`, `{"path": ...}`.
+- `cerbo folder order <FOLDER> <ENTRY>... [--json]` / `cerbo folder order --root <ENTRY>... [--json]` - Set the display order of a folder's children (or the root's). An `ENTRY` is a page UUID or a child folder name, with or without a trailing `/`. Children left out follow in the default order; entries naming no child of that folder are dropped, and a malformed entry fails before anything is written. Prints `Ordered <folder|root> (<n> entries)`; with `--json`, `{"folder": <path, "" for the root>, "entries": [...]}` as stored.
+- `cerbo folder rename <OLD> <NEW> [--json]` - Replace the folder prefix `OLD` with `NEW` on every page whose virtual path is `OLD` or starts with `OLD/`; nested folders move along (`notes/rust` becomes `archive/rust` when `notes` is renamed to `archive`), and `notebook` is not under `notes`. Both paths must be non-empty and valid; that is checked before any page is written. Renaming onto an existing folder merges the two. Each page's `meta.ttl` is written on its own; a page that cannot be written is reported on stderr as `Error: could not move <uuid>: <reason>`, the others are still moved, and the command exits non-zero. Prints `Renamed <old> to <new> (<n> pages)`; with `--json`, `{"from": ..., "to": ..., "pages": <n>, "failed": [<uuid>, ...]}`. With no page under `OLD` it exits zero with `0 pages`. The layout follows: pinned folders and order lists at or under `OLD` move to `NEW`, the folder keeps its place in its parent's order when the parent stays the same, and a pinned folder with no pages is renamed too.
 
 A slug collision inside the target folder (two pages that would share `<folder>/<slug>.md`) is not refused by `page move` or `folder rename`; `cerbo index` reports it and `cerbo symlink` refuses to build until it is resolved.
 
@@ -475,6 +481,9 @@ cerbo page list                            # <uuid>: Ownership [notes/rust]
 cerbo folder rename notes archive          # every page under notes/ moves under archive/
 cerbo page move <uuid> --root              # back to the root
 cerbo symlink                              # the tree follows: cerbo/archive/rust/ownership.md
+cerbo folder create inbox                  # an empty folder that stays until deleted
+cerbo folder order --root inbox archive    # inbox first, then archive, then the rest
+cerbo folder list                          # the tree as the sidebar shows it
 ```
 
 # SEE ALSO

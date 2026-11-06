@@ -10,6 +10,13 @@ The system MUST allow users to navigate the sidebar tree using arrow keys when a
 - **AND** the user presses `ArrowDown`
 - **THEN** focus SHALL move to the next visible row, whether it is a folder or a page
 
+#### Scenario: Arrows navigate the tree in preview mode
+- **WHEN** the editor is in preview mode
+- **AND** focus is on a row in the sidebar
+- **AND** the user presses `ArrowDown` or `j`
+- **THEN** focus SHALL move to the next visible row
+- **AND** the preview SHALL NOT scroll
+
 #### Scenario: Navigate up with ArrowUp
 - **WHEN** focus is on a row in the sidebar
 - **AND** the user presses `ArrowUp`

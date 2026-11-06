@@ -40,6 +40,8 @@
         { keys: ['h', '←'], sep: 'or', desc: 'Collapse folder, or go to its parent' },
         { keys: ['l', '→'], sep: 'or', desc: 'Expand folder, or step into it' },
         { keys: ['Enter'], desc: 'Open page / toggle folder' },
+        { keys: ['Alt', '↑'], desc: 'Move row up (also Alt k)' },
+        { keys: ['Alt', '↓'], desc: 'Move row down (also Alt j)' },
         { keys: ['m'], desc: 'Move page / rename folder' },
         { keys: ['r'], desc: 'Rename page or folder' },
         { keys: ['Del'], desc: 'Delete page' },

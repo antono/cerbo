@@ -1,8 +1,11 @@
 /**
- * The sidebar tree (spec `desktop-page-tree`, design D5, D6, D9).
+ * The sidebar tree (spec `desktop-page-tree`, design D5, D6, D9;
+ * `add-sidebar-ordering` D2, D6).
  *
- * Folders are derived from the pages' `virtualPath` values and never stored.
- * Everything here is pure so it can be tested without a DOM or Tauri.
+ * Folders come from the pages' `virtualPath` values plus the folders pinned in
+ * the vault layout (`.cerbo/tree.toml`), whose `order` lists also set the
+ * order of each folder's children. Everything here is pure so it can be
+ * tested without a DOM or Tauri.
  */
 
 export interface TreePage {
@@ -11,14 +14,40 @@ export interface TreePage {
   virtualPath: string | null;
 }
 
-export type TreeNode =
-  | { kind: 'folder'; path: string; name: string; depth: number; children: TreeNode[] }
-  | { kind: 'page'; path: string | null; uuid: string; title: string; depth: number };
+/** The vault layout file, as the `tree_layout` command returns it. */
+export interface TreeLayout {
+  pinned: string[];
+  order: Record<string, string[]>;
+}
+
+export const EMPTY_LAYOUT: TreeLayout = { pinned: [], order: {} };
+
+export type FolderNode = {
+  kind: 'folder';
+  path: string;
+  name: string;
+  depth: number;
+  pinned: boolean;
+  /** Pages at or under this folder. */
+  pageCount: number;
+  children: TreeNode[];
+};
+export type PageNode = { kind: 'page'; path: string | null; uuid: string; title: string; depth: number };
+export type TreeNode = FolderNode | PageNode;
 
 /** A row the sidebar renders: a node without its children. */
 export type TreeRow =
-  | { kind: 'folder'; path: string; name: string; depth: number; expanded: boolean }
-  | { kind: 'page'; path: string | null; uuid: string; title: string; depth: number };
+  | {
+      kind: 'folder';
+      path: string;
+      name: string;
+      depth: number;
+      expanded: boolean;
+      pinned: boolean;
+      pageCount: number;
+      hasChildren: boolean;
+    }
+  | PageNode;
 
 const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
 
@@ -34,30 +63,55 @@ export function ancestorFolders(path: string | null): string[] {
   return out;
 }
 
-/** Every distinct folder path in the vault, including intermediate ones, sorted. */
-export function folderPaths(pages: TreePage[]): string[] {
+/** Every distinct folder path in the vault, including intermediate ones and pinned ones, sorted. */
+export function folderPaths(pages: TreePage[], layout: TreeLayout = EMPTY_LAYOUT): string[] {
   const set = new Set<string>();
   for (const page of pages) {
     for (const folder of ancestorFolders(page.virtualPath)) set.add(folder);
   }
+  for (const pinned of layout.pinned) {
+    for (const folder of ancestorFolders(pinned)) set.add(folder);
+  }
   return [...set].sort((a, b) => collator.compare(a, b));
 }
 
-/** Folders first, then pages, each group by name. */
-export function buildPageTree(pages: TreePage[]): TreeNode[] {
-  const root: TreeNode[] = [];
-  const folders = new Map<string, Extract<TreeNode, { kind: 'folder' }>>();
+/** The parent folder of a folder path; `''` for a top-level folder. */
+export function parentPath(path: string): string {
+  const i = path.lastIndexOf('/');
+  return i < 0 ? '' : path.slice(0, i);
+}
 
-  function folderNode(path: string): Extract<TreeNode, { kind: 'folder' }> {
+/** The key a node or row has in its parent's order list (D1). */
+export function entryKey(node: { kind: 'folder'; name: string } | { kind: 'page'; uuid: string }): string {
+  return node.kind === 'folder' ? `${node.name}/` : node.uuid;
+}
+
+/** The folder a node or row lives in; `''` is the root. */
+export function parentOf(node: TreeNode | TreeRow): string {
+  return node.kind === 'folder' ? parentPath(node.path) : (node.path ?? '');
+}
+
+/**
+ * The tree: each folder's children named in the layout's order list come
+ * first, in list order; the rest follow, folders before pages, each by name.
+ */
+export function buildPageTree(pages: TreePage[], layout: TreeLayout = EMPTY_LAYOUT): TreeNode[] {
+  const root: TreeNode[] = [];
+  const folders = new Map<string, FolderNode>();
+  const pinned = new Set(layout.pinned);
+
+  function folderNode(path: string): FolderNode {
     const existing = folders.get(path);
     if (existing) return existing;
     const segments = path.split('/');
     const name = segments[segments.length - 1];
-    const node: Extract<TreeNode, { kind: 'folder' }> = {
+    const node: FolderNode = {
       kind: 'folder',
       path,
       name,
       depth: segments.length - 1,
+      pinned: pinned.has(path),
+      pageCount: 0,
       children: [],
     };
     folders.set(path, node);
@@ -66,8 +120,11 @@ export function buildPageTree(pages: TreePage[]): TreeNode[] {
     return node;
   }
 
+  for (const path of layout.pinned) folderNode(path);
+
   for (const page of pages) {
     const path = page.virtualPath || null;
+    for (const folder of ancestorFolders(path)) folderNode(folder).pageCount++;
     const siblings = path ? folderNode(path).children : root;
     siblings.push({
       kind: 'page',
@@ -78,17 +135,41 @@ export function buildPageTree(pages: TreePage[]): TreeNode[] {
     });
   }
 
-  const sortChildren = (nodes: TreeNode[]) => {
+  const sortChildren = (nodes: TreeNode[], parent: string) => {
     nodes.sort((a, b) => {
       if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
       const an = a.kind === 'folder' ? a.name : a.title;
       const bn = b.kind === 'folder' ? b.name : b.title;
       return collator.compare(an, bn) || (a.kind === 'page' && b.kind === 'page' ? a.uuid.localeCompare(b.uuid) : 0);
     });
-    for (const node of nodes) if (node.kind === 'folder') sortChildren(node.children);
+    const list = layout.order[parent];
+    if (list && list.length > 0) {
+      const rest = [...nodes];
+      const ordered: TreeNode[] = [];
+      for (const key of list) {
+        const i = rest.findIndex((n) => entryKey(n) === key);
+        if (i >= 0) ordered.push(...rest.splice(i, 1));
+      }
+      nodes.splice(0, nodes.length, ...ordered, ...rest);
+    }
+    for (const node of nodes) if (node.kind === 'folder') sortChildren(node.children, node.path);
   };
-  sortChildren(root);
+  sortChildren(root, '');
   return root;
+}
+
+/** The children of the folder at `path` (`''` is the root), or null if there is no such folder. */
+export function childrenOf(tree: TreeNode[], path: string): TreeNode[] | null {
+  if (path === '') return tree;
+  let level = tree;
+  let prefix = '';
+  for (const segment of path.split('/')) {
+    prefix = prefix ? `${prefix}/${segment}` : segment;
+    const next = level.find((n): n is FolderNode => n.kind === 'folder' && n.path === prefix);
+    if (!next) return null;
+    level = next.children;
+  }
+  return level;
 }
 
 /** The rows on screen, in order, skipping everything inside collapsed folders. */
@@ -101,7 +182,16 @@ export function flattenVisible(tree: TreeNode[], collapsed: ReadonlySet<string>)
         continue;
       }
       const expanded = !collapsed.has(node.path);
-      rows.push({ kind: 'folder', path: node.path, name: node.name, depth: node.depth, expanded });
+      rows.push({
+        kind: 'folder',
+        path: node.path,
+        name: node.name,
+        depth: node.depth,
+        expanded,
+        pinned: node.pinned,
+        pageCount: node.pageCount,
+        hasChildren: node.children.length > 0,
+      });
       if (expanded) walk(node.children);
     }
   };
@@ -109,9 +199,9 @@ export function flattenVisible(tree: TreeNode[], collapsed: ReadonlySet<string>)
   return rows;
 }
 
-/** Collapsed paths that still name a folder of `pages`; the rest are stale. */
-export function pruneCollapsed(collapsed: Iterable<string>, pages: TreePage[]): string[] {
-  const existing = new Set(folderPaths(pages));
+/** Collapsed paths that still name a folder of `pages` or the layout; the rest are stale. */
+export function pruneCollapsed(collapsed: Iterable<string>, pages: TreePage[], layout: TreeLayout = EMPTY_LAYOUT): string[] {
+  const existing = new Set(folderPaths(pages, layout));
   return [...new Set(collapsed)].filter((p) => existing.has(p));
 }
 
@@ -196,4 +286,84 @@ export function treeKeyAction(rows: TreeRow[], index: number, key: TreeKey): Tre
 /** Page UUIDs in sidebar order, visible rows only (for next/previous page). */
 export function visiblePageUuids(rows: TreeRow[]): string[] {
   return rows.flatMap((r) => (r.kind === 'page' ? [r.uuid] : []));
+}
+
+
+// ── Placing rows (add-sidebar-ordering, design D6) ──────────────────────────
+
+/** What is being placed: a page or a folder. */
+export type TreeItem = { kind: 'page'; uuid: string; path: string | null } | { kind: 'folder'; path: string };
+
+export function itemOf(row: TreeRow): TreeItem {
+  return row.kind === 'page' ? { kind: 'page', uuid: row.uuid, path: row.path } : { kind: 'folder', path: row.path };
+}
+
+/** The store calls a placement needs: an optional move, then the parent's new order. */
+export interface Placement {
+  move: { kind: 'page'; uuid: string; to: string | null } | { kind: 'folder'; from: string; to: string } | null;
+  /** The folder whose order list is written (`''` is the root). */
+  parent: string;
+  /** The parent's children after the placement, as entry keys. */
+  order: string[];
+}
+
+function itemKey(item: TreeItem): string {
+  if (item.kind === 'page') return item.uuid;
+  const i = item.path.lastIndexOf('/');
+  return `${item.path.slice(i + 1)}/`;
+}
+
+function itemParent(item: TreeItem): string {
+  return item.kind === 'page' ? (item.path ?? '') : parentPath(item.path);
+}
+
+/**
+ * Put `item` into the folder `parent` before the child now shown at `index`
+ * (`index` = number of children puts it last). Returns null when nothing would
+ * change, when `parent` does not exist, or when a folder would go inside
+ * itself.
+ */
+export function placement(tree: TreeNode[], item: TreeItem, parent: string, index: number): Placement | null {
+  if (item.kind === 'folder' && (parent === item.path || isUnder(parent, item.path))) return null;
+  const children = childrenOf(tree, parent);
+  if (!children) return null;
+  const keys = children.map(entryKey);
+  const key = itemKey(item);
+  const sameParent = itemParent(item) === parent;
+  let at = Math.max(0, Math.min(index, keys.length));
+  const from = keys.indexOf(key);
+  if (from >= 0) {
+    // Same folder, or a folder of the same name that a moved folder merges into.
+    keys.splice(from, 1);
+    if (from < at) at--;
+  }
+  const order = [...keys.slice(0, at), key, ...keys.slice(at)];
+  if (sameParent && from === at) return null;
+
+  let move: Placement['move'] = null;
+  if (!sameParent) {
+    if (item.kind === 'page') {
+      move = { kind: 'page', uuid: item.uuid, to: parent || null };
+    } else {
+      const name = key.slice(0, -1);
+      move = { kind: 'folder', from: item.path, to: parent ? `${parent}/${name}` : name };
+    }
+  }
+  return { move, parent, order };
+}
+
+/** Move a row one place up (`-1`) or down (`+1`) among its siblings; null at either end. */
+export function moveBy(tree: TreeNode[], row: TreeRow, delta: -1 | 1): Placement | null {
+  const parent = parentOf(row);
+  const siblings = childrenOf(tree, parent);
+  if (!siblings) return null;
+  const i = siblings.findIndex((n) => entryKey(n) === entryKey(row));
+  const j = i + delta;
+  if (i < 0 || j < 0 || j >= siblings.length) return null;
+  return placement(tree, itemOf(row), parent, delta > 0 ? i + 2 : j);
+}
+
+/** Whether a row can move up (`-1`) or down (`+1`) among its siblings. */
+export function canMoveBy(tree: TreeNode[], row: TreeRow, delta: -1 | 1): boolean {
+  return moveBy(tree, row, delta) !== null;
 }

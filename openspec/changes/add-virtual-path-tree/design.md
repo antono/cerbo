@@ -134,19 +134,30 @@ authority and its message wins when they do.
 
 - Context menu: a small `RowMenu.svelte` positioned at the pointer, closed on
   outside click or Escape. No library.
-- Drag-and-drop: native HTML5 DnD (`draggable`, `dragover`, `drop`) with the
-  page UUID in `dataTransfer`. Folder rows and a root drop zone at the bottom
-  of the list are the only targets. Dropping onto a folder calls `page_move`
-  with that folder's path; dropping onto the page's own folder is a no-op.
-  Native DnD was chosen over pointer-event emulation because the tree is
-  small and the only drop targets are rows.
+- Drag-and-drop: plain mouse events (`mousedown` on the row, then window
+  `mousemove` and `mouseup`), not native HTML5 DnD. Mouse rather than pointer
+  events because WebKit reports a left press as a chorded `pointermove`, with
+  no `pointerdown`, while it still counts another button as held (after a
+  context menu swallowed a right-button release). A drag starts after the pointer moves
+  4 px with the button held; the target is the row under the pointer
+  (`elementFromPoint`). Folder rows and a root drop zone at the bottom of the
+  list are the only targets. Dropping onto a folder calls `page_move` with
+  that folder's path; dropping onto the page's own folder is a no-op. Escape
+  cancels a drag, and the click that ends a drag does not open the row.
+- Why not native DnD: on GNOME Wayland (WebKitGTK 2.54, GTK 3.24) a
+  `draggable` row never starts a drag, while the same build works under X11.
+  Mouse events behave the same on both, and WebDriver pointer actions can
+  drive them, so drag-and-drop gets e2e coverage (native DnD cannot be driven
+  through WebKitWebDriver).
 
 ### D9. Keyboard
 
 `h`/`l` and `ArrowLeft`/`ArrowRight` are added to the existing sidebar
 handler. `m` joins `r` and `Delete` as a row action. `KeyboardHelp.svelte`
-lists them. In preview mode the layout-level handler still owns navigation,
-as today.
+lists them. The sidebar handler runs only while focus is inside the tree, and
+then it owns every tree key in both editor modes, stopping it so the layout's
+preview handler does not also scroll (`j`/`k`/arrows) or act on the open page.
+With focus outside the tree the layout keeps its preview keys, as before.
 
 ## Risks / Trade-offs
 
@@ -155,8 +166,9 @@ as today.
   `cerbo index` reports any resulting collision.
 - [Slug collision after a move] → Not blocked (same policy as creation); the
   tree shows both pages, `cerbo index`/`cerbo symlink` surface it.
-- [Native DnD feels inconsistent across WebKit/Windows] → DnD is a convenience
-  on top of the Move dialog, which is the primary and keyboard-reachable path.
+- [Pointer-event drag must re-implement what native DnD gives for free] → The
+  tree is small and has only row targets; the Move dialog stays the primary,
+  keyboard-reachable path.
 - [`page_list` on every tree refresh re-reads 137 `meta.ttl` files] → Same as
   today; the list is reloaded only after mutations and on vault open.
 - [Prefix match on `notes` vs `notebook`] → Match is `== prefix` or

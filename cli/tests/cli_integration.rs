@@ -2861,3 +2861,111 @@ fn test_cli_waits_for_a_released_index() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "true\n");
 }
+
+// ── Folder layout (spec `cli-tooling`, add-sidebar-ordering) ────────────────
+
+fn ok_stdout(output: &std::process::Output) -> String {
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+fn layout_of(root: &Path) -> String {
+    std::fs::read_to_string(root.join(".cerbo").join("tree.toml")).unwrap_or_default()
+}
+
+#[test]
+fn test_folder_list_prints_the_stored_order() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    vp_init(&ctx, root);
+    let home = vp_create(&ctx, root, "Home");
+    let own = vp_create(&ctx, root, "Ownership");
+    ok_stdout(&vp_run(&ctx, root, &["page", "move", &own, "notes"]));
+
+    // Default order: folders first.
+    let out = ok_stdout(&vp_run(&ctx, root, &["folder", "list"]));
+    assert!(out.starts_with(&format!("notes/\n  Ownership  {own}\n")), "{out}");
+
+    let out = ok_stdout(&vp_run(&ctx, root, &["folder", "order", "--root", &home, "notes"]));
+    assert_eq!(out.trim(), "Ordered root (2 entries)");
+    let out = ok_stdout(&vp_run(&ctx, root, &["folder", "list"]));
+    // `cerbo init` also adds ontology pages; they follow, unlisted, at the root.
+    let lines: Vec<&str> = out.lines().take(3).collect();
+    assert_eq!(lines, vec![format!("Home  {home}"), "notes/".to_string(), format!("  Ownership  {own}")]);
+
+    let json = stdout_json(&vp_run(&ctx, root, &["folder", "list", "--json"]));
+    assert_eq!(json[0]["kind"], "page");
+    assert_eq!(json[0]["uuid"], home.as_str());
+    assert_eq!(json[1]["kind"], "folder");
+    assert_eq!(json[1]["path"], "notes");
+    assert_eq!(json[1]["pinned"], false);
+    assert_eq!(json[1]["children"][0]["title"], "Ownership");
+}
+
+#[test]
+fn test_folder_create_and_delete() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    vp_init(&ctx, root);
+
+    assert_eq!(ok_stdout(&vp_run(&ctx, root, &["folder", "create", "inbox"])).trim(), "Created folder inbox");
+    assert!(layout_of(root).contains("\"inbox\""), "{}", layout_of(root));
+    assert!(ok_stdout(&vp_run(&ctx, root, &["folder", "list"])).lines().any(|l| l == "inbox/"));
+
+    let again = vp_run(&ctx, root, &["folder", "create", "inbox"]);
+    assert!(!again.status.success());
+    assert!(String::from_utf8_lossy(&again.stderr).contains("folder already exists: inbox"));
+
+    let json = stdout_json(&vp_run(&ctx, root, &["folder", "delete", "inbox", "--json"]));
+    assert_eq!(json, serde_json::json!({ "path": "inbox" }));
+    assert!(!ok_stdout(&vp_run(&ctx, root, &["folder", "list"])).lines().any(|l| l == "inbox/"));
+}
+
+#[test]
+fn test_folder_delete_refuses_a_folder_with_pages() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    vp_init(&ctx, root);
+    let own = vp_create(&ctx, root, "Ownership");
+    ok_stdout(&vp_run(&ctx, root, &["page", "move", &own, "notes"]));
+
+    let output = vp_run(&ctx, root, &["folder", "delete", "notes"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("folder is not empty: notes (1 pages)"), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(vp_path_of(&ctx, root, &own), "notes");
+}
+
+#[test]
+fn test_folder_order_accepts_folder_names_and_rejects_bad_entries() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    vp_init(&ctx, root);
+    let home = vp_create(&ctx, root, "Home");
+    let own = vp_create(&ctx, root, "Ownership");
+    ok_stdout(&vp_run(&ctx, root, &["page", "move", &own, "notes"]));
+
+    let json = stdout_json(&vp_run(&ctx, root, &["folder", "order", "--root", "notes", &home, "--json"]));
+    assert_eq!(json["folder"], "");
+    assert_eq!(json["entries"], serde_json::json!(["notes/", home]));
+    assert!(layout_of(root).contains(&format!("\"\" = [\"notes/\", \"{home}\"]")), "{}", layout_of(root));
+
+    let output = vp_run(&ctx, root, &["folder", "order", "notes", "a/b"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("invalid order entry"));
+}
+
+#[test]
+fn test_folder_rename_keeps_the_layout() {
+    let ctx = setup();
+    let root = ctx.tmp_dir.path();
+    vp_init(&ctx, root);
+    let own = vp_create(&ctx, root, "Ownership");
+    ok_stdout(&vp_run(&ctx, root, &["page", "move", &own, "notes"]));
+    ok_stdout(&vp_run(&ctx, root, &["folder", "create", "inbox"]));
+    ok_stdout(&vp_run(&ctx, root, &["folder", "order", "--root", "notes", "inbox"]));
+
+    ok_stdout(&vp_run(&ctx, root, &["folder", "rename", "notes", "journal"]));
+    let out = ok_stdout(&vp_run(&ctx, root, &["folder", "list"]));
+    let folders: Vec<&str> = out.lines().filter(|l| l.ends_with('/')).collect();
+    assert_eq!(folders, vec!["journal/", "inbox/"]);
+}

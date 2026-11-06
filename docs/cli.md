@@ -30,11 +30,16 @@ cerbo page backlinks <uuid>             # pages linking here (add --json for an 
 cerbo page move <uuid> notes/rust       # put the page in a folder of the virtual tree
 cerbo page move <uuid> --root           # back to the root
 cerbo folder rename notes archive       # move every page under notes/ to archive/
+cerbo folder create inbox               # an empty folder that stays until deleted
+cerbo folder order --root inbox <uuid>  # inbox first, then that page, then the rest
+cerbo folder list                       # the tree in sidebar order
+cerbo folder delete inbox               # only while no page is in it
 ```
 
 A page's folder is its `cerbo:virtualPath`: it nests the page in the symlink
-tree and in the desktop sidebar. Folders are not stored; one exists while a
-page is in it. `page list` shows the path after the title, and in `--json` as
+tree and in the desktop sidebar. A folder exists while a page is in it or
+while it is pinned with `folder create`. The order of rows and the pinned
+folders live in `.cerbo/tree.toml`, shared with the desktop sidebar. `page list` shows the path after the title, and in `--json` as
 `virtualPath` (`null` at the root).
 
 Backlinks are answered from the semantic index in `$XDG_CACHE_HOME/cerbo/index/`.

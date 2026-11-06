@@ -3,6 +3,21 @@ use cerbo_core::context::CoreContext;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
+/// `cerbo folder list`: folders as `name/`, pages as `Title  <uuid>`.
+fn print_tree(nodes: &[cerbo_core::tree::TreeNode], depth: usize) {
+    use cerbo_core::tree::TreeNode;
+    let indent = "  ".repeat(depth);
+    for node in nodes {
+        match node {
+            TreeNode::Folder { name, children, .. } => {
+                println!("{indent}{name}/");
+                print_tree(children, depth + 1);
+            }
+            TreeNode::Page { uuid, title } => println!("{indent}{title}  {uuid}"),
+        }
+    }
+}
+
 fn print_json<T: Serialize>(value: &T) {
     println!("{}", serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()));
 }
@@ -195,7 +210,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Rename a folder of the virtual tree (moves every page under it)
+    /// Work with the folders of the virtual tree: list, create, delete, order, rename
     Folder {
         #[command(subcommand)]
         action: FolderCommands,
@@ -301,6 +316,40 @@ enum MigrateCommands {
 
 #[derive(Subcommand)]
 enum FolderCommands {
+    /// Print the sidebar tree in its stored order: folders as `name/`, pages as `Title  <uuid>`, two spaces per level
+    List {
+        /// Print nested {"kind": "folder", "name", "path", "pinned", "children"} and {"kind": "page", "uuid", "title"}
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create an empty folder; it stays in the tree until deleted (pinned in .cerbo/tree.toml)
+    Create {
+        /// Folder path, e.g. projects/2026 (no leading or trailing slash, no . or .. segments)
+        path: String,
+        /// Output the result as JSON ({"path"})
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete an empty folder; refused while any page lives in it
+    Delete {
+        /// Folder path, e.g. inbox
+        path: String,
+        /// Output the result as JSON ({"path"})
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set the order of a folder's children: FOLDER then ENTRY..., or --root then ENTRY...; an entry is a page UUID or a child folder name
+    Order {
+        /// Order the children of the root instead of a folder
+        #[arg(long)]
+        root: bool,
+        /// The folder (unless --root), then its children in the wanted order
+        #[arg(required = true, num_args = 1.., value_name = "FOLDER|ENTRY")]
+        args: Vec<String>,
+        /// Output the result as JSON ({"folder", "entries"}; folder is "" for the root)
+        #[arg(long)]
+        json: bool,
+    },
     /// Replace the folder prefix OLD with NEW on every page whose virtual path is OLD or starts with OLD/
     Rename {
         /// Current folder path, e.g. notes
@@ -1294,6 +1343,55 @@ async fn main() -> Result<(), String> {
             }
         },
         Commands::Folder { action } => match action {
+            FolderCommands::List { json } => {
+                let eff_ctx = resolve_vault_ctx(&ctx, None, cwd_vault_id.as_deref(), cwd_vault_root.as_deref())?;
+                let tree = cerbo_core::tree::folder_tree(&eff_ctx)?;
+                if json {
+                    print_json(&tree);
+                } else {
+                    print_tree(&tree, 0);
+                }
+            }
+            FolderCommands::Create { path, json } => {
+                let eff_ctx = resolve_vault_ctx(&ctx, None, cwd_vault_id.as_deref(), cwd_vault_root.as_deref())?;
+                cerbo_core::tree::folder_create(&eff_ctx, &path)?;
+                if json {
+                    print_json(&serde_json::json!({ "path": path }));
+                } else {
+                    println!("Created folder {path}");
+                }
+            }
+            FolderCommands::Delete { path, json } => {
+                let eff_ctx = resolve_vault_ctx(&ctx, None, cwd_vault_id.as_deref(), cwd_vault_root.as_deref())?;
+                cerbo_core::tree::folder_delete(&eff_ctx, &path)?;
+                if json {
+                    print_json(&serde_json::json!({ "path": path }));
+                } else {
+                    println!("Deleted folder {path}");
+                }
+            }
+            FolderCommands::Order { root, args, json } => {
+                let (folder, entries) = if root {
+                    (String::new(), args)
+                } else {
+                    let mut args = args.into_iter();
+                    let folder = args.next().unwrap_or_default();
+                    (folder, args.collect::<Vec<_>>())
+                };
+                if entries.is_empty() {
+                    return Err("give at least one ENTRY: a page UUID or a child folder name".into());
+                }
+                // A plain name means a child folder; the stored form ends in "/".
+                let entries = entries.iter().map(|e| cerbo_core::tree::normalize_entry(e)).collect();
+                let eff_ctx = resolve_vault_ctx(&ctx, None, cwd_vault_id.as_deref(), cwd_vault_root.as_deref())?;
+                let stored = cerbo_core::tree::folder_set_order(&eff_ctx, &folder, entries)?;
+                if json {
+                    print_json(&serde_json::json!({ "folder": folder, "entries": stored }));
+                } else {
+                    let name = if folder.is_empty() { "root" } else { folder.as_str() };
+                    println!("Ordered {name} ({} entries)", stored.len());
+                }
+            }
             FolderCommands::Rename { old, new, json } => {
                 let eff_ctx = resolve_vault_ctx(
                     &ctx,

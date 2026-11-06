@@ -24,7 +24,7 @@
     placeholder?: string;
   } = $props();
 
-  const existing = $derived(folderPaths(app.pages));
+  const existing = $derived(folderPaths(app.pages, app.layout));
   const typed = $derived(value.trim());
   const suggestions = $derived(
     typed

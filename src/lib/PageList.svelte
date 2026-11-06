@@ -1,8 +1,9 @@
 <script lang="ts">
   /**
-   * The sidebar page tree (spec `desktop-page-tree`, `sidebar-navigation`).
-   * Rows are the visible flattening of the tree built from `app.pages`, so
-   * keyboard focus is a plain index step (design D5).
+   * The sidebar page tree (spec `desktop-page-tree`, `sidebar-navigation`,
+   * `desktop-tree-editing`). Rows are the visible flattening of the tree built
+   * from `app.pages` and the vault layout, so keyboard focus is a plain index
+   * step (design D5). Drag uses mouse events, not native DnD (D8, D7).
    */
   import {
     FileText,
@@ -16,6 +17,10 @@
     Search,
     FolderInput,
     FilePlus,
+    FolderPlus,
+    FolderMinus,
+    ArrowUp,
+    ArrowDown,
   } from 'lucide-svelte';
   import { tick } from 'svelte';
   import {
@@ -28,42 +33,112 @@
     triggerMove,
     triggerRenameFolder,
     triggerNewPageIn,
+    triggerNewFolder,
     toggleFolder,
     collapseFolder,
     expandFolder,
-    movePage,
-    visibleRows,
+    pageTree,
+    placeRow,
+    deleteFolder,
   } from './stores.svelte';
   import { isInputFocused } from './hotkeys';
-  import { treeKeyAction, type TreeKey, type TreeRow } from './page-tree';
+  import {
+    canMoveBy,
+    flattenVisible,
+    itemOf,
+    moveBy,
+    treeKeyAction,
+    type Placement,
+    type TreeItem,
+    type TreeKey,
+    type TreeRow,
+  } from './page-tree';
+  import { dropPlacement, dropZone, passedThreshold, rootPlacement, type DropZone } from './tree-drag';
   import ConfirmationDialog from './ConfirmationDialog.svelte';
   import RowMenu, { type RowMenuItem } from './RowMenu.svelte';
 
-  const rows = $derived(visibleRows());
+  const tree = $derived(pageTree());
+  const rows = $derived(flattenVisible(tree, new Set(app.collapsedFolders)));
 
   let deleting = $state(false);
   let itemsList = $state<HTMLUListElement | null>(null);
+
+  function rowKey(row: TreeRow): string {
+    return row.kind === 'folder' ? `f:${row.path}` : `p:${row.uuid}`;
+  }
+
+  // ── Placing rows ─────────────────────────────────────────────────────────────
+
+  async function place(p: Placement | null): Promise<boolean> {
+    if (!p) return false;
+    try {
+      await placeRow(p);
+      return true;
+    } catch (err) {
+      app.error = String(err);
+      return false;
+    }
+  }
+
+  function focusRow(key: string) {
+    const li = itemsList?.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`);
+    li?.querySelector<HTMLButtonElement>('.row-btn')?.focus();
+  }
+
+  async function moveRow(row: TreeRow, delta: -1 | 1) {
+    if (await place(moveBy(tree, row, delta))) {
+      await tick();
+      focusRow(rowKey(row));
+    }
+  }
+
+  async function removeFolder(path: string) {
+    try {
+      await deleteFolder(path);
+    } catch (err) {
+      app.error = String(err);
+    }
+  }
 
   // ── Context menu ─────────────────────────────────────────────────────────────
 
   let menu = $state<{ x: number; y: number; items: RowMenuItem[] } | null>(null);
 
+  function orderItems(row: TreeRow): RowMenuItem[] {
+    return [
+      { label: 'Move up', icon: ArrowUp, disabled: !canMoveBy(tree, row, -1), onSelect: () => void moveRow(row, -1) },
+      { label: 'Move down', icon: ArrowDown, disabled: !canMoveBy(tree, row, 1), onSelect: () => void moveRow(row, 1) },
+    ];
+  }
+
   function menuItemsFor(row: TreeRow): RowMenuItem[] {
     if (row.kind === 'folder') {
       const path = row.path;
-      return [
+      const items: RowMenuItem[] = [
         { label: 'New page here', icon: FilePlus, onSelect: () => triggerNewPageIn(path) },
+        { label: 'New folder here', icon: FolderPlus, onSelect: () => triggerNewFolder(path) },
         { label: 'Rename folder', icon: Pencil, onSelect: () => triggerRenameFolder(path) },
+        ...orderItems(row),
       ];
+      if (row.pageCount === 0) {
+        items.push({ label: 'Delete folder', icon: FolderMinus, danger: true, onSelect: () => void removeFolder(path) });
+      }
+      return items;
     }
     const uuid = row.uuid;
     return [
       { label: 'Open', icon: FileText, onSelect: () => void openPage(uuid) },
       { label: 'Move to…', icon: FolderInput, onSelect: () => triggerMove(uuid) },
       { label: 'Rename', icon: Pencil, onSelect: () => triggerRename(uuid) },
+      ...orderItems(row),
       { label: 'Delete', icon: Trash2, danger: true, onSelect: () => triggerDelete(uuid) },
     ];
   }
+
+  const addItems: RowMenuItem[] = [
+    { label: 'New page', icon: FilePlus, onSelect: () => triggerNewPageIn('') },
+    { label: 'New folder', icon: FolderPlus, onSelect: () => triggerNewFolder('') },
+  ];
 
   // A click that lands right after the context menu opened (some WebKit
   // builds report one for the right button) must not act on the row.
@@ -71,12 +146,21 @@
 
   function openMenu(e: MouseEvent, row: TreeRow) {
     e.preventDefault();
+    e.stopPropagation();
     menuOpenedAt = e.timeStamp;
     menu = { x: e.clientX, y: e.clientY, items: menuItemsFor(row) };
   }
 
+  /** Right-click on sidebar space that is not a row: the Add menu. */
+  function openAddMenu(e: MouseEvent) {
+    if ((e.target as Element | null)?.closest('.item')) return;
+    e.preventDefault();
+    menuOpenedAt = e.timeStamp;
+    menu = { x: e.clientX, y: e.clientY, items: addItems };
+  }
+
   function isRowClick(e: MouseEvent): boolean {
-    return e.button === 0 && e.timeStamp - menuOpenedAt > 400;
+    return e.button === 0 && e.timeStamp - menuOpenedAt > 400 && !suppressClick;
   }
 
   // ── Keyboard ─────────────────────────────────────────────────────────────────
@@ -104,20 +188,29 @@
     ' ': 'space',
   };
 
+  const moveKeys: Record<string, -1 | 1> = { ArrowUp: -1, k: -1, K: -1, ArrowDown: 1, j: 1, J: 1 };
+
   function handleListKeydown(e: KeyboardEvent) {
-    if (e.altKey || e.ctrlKey || e.metaKey) return;
     if (isInputFocused()) return;
+
+    // Alt+ArrowUp/Down and Alt+k/j move the focused row among its siblings.
+    if (e.altKey && !e.ctrlKey && !e.metaKey && e.key in moveKeys) {
+      const row = rows[focusedIndex()];
+      if (!row) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void moveRow(row, moveKeys[e.key]);
+      return;
+    }
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
 
     const index = focusedIndex();
     const row = rows[index];
 
-    // In preview mode the layout owns j/k (scroll), J/K, r and Delete; the
-    // tree keys it does not claim still work on a focused row.
-    const previewOwned = ['j', 'k', 'J', 'K', 'ArrowDown', 'ArrowUp', 'r', 'Delete', 'Backspace', 'Tab'];
-    if (app.editorTab === 'preview' && (previewOwned.includes(e.key) || !row)) return;
-
-    // Row actions are handled here; the layout's window listener must not
-    // act on the current page as well.
+    // This handler only runs while focus is inside the tree, so the tree owns
+    // its keys in both editor modes. Every key it handles stops here: the
+    // layout's window listener would otherwise also scroll the preview (j/k,
+    // arrows) or act on the open page (r, m, Delete).
     if (e.key === 'r') {
       e.preventDefault();
       e.stopPropagation();
@@ -149,12 +242,12 @@
 
     const key: TreeKey | undefined = e.key === 'Tab' ? (e.shiftKey ? 'prev' : 'next') : treeKeys[e.key];
     if (!key) return;
-    const action = treeKeyAction(rows, index, key);
-    if (!action) {
-      if (e.key === 'Tab') e.preventDefault();
-      return;
-    }
+    // A tree key is consumed even when it has nothing to do (h on a root
+    // page, k on the first row), so it never falls through to the preview.
     e.preventDefault();
+    e.stopPropagation();
+    const action = treeKeyAction(rows, index, key);
+    if (!action) return;
     switch (action.kind) {
       case 'focus':
         rowButtons()[action.index]?.focus();
@@ -186,57 +279,106 @@
     });
   });
 
-  // ── Drag and drop (design D8) ────────────────────────────────────────────────
+  // ── Pointer drag (add-virtual-path-tree D8, add-sidebar-ordering D7) ─────────
+  // Mouse events, not pointer events: WebKit turns a left press into a chorded
+  // `pointermove` (no `pointerdown`) while it still counts another button as
+  // held, which happens when a context menu swallowed a right-button release.
+  // `mousedown` fires for every press.
 
-  let dragUuid = $state<string | null>(null);
-  let dropTarget = $state<string | null>(null); // folder path, or '' for the root zone
-
-  function dragPath(): string | null {
-    return app.pages.find((p) => p.uuid === dragUuid)?.virtualPath ?? null;
+  interface Drag {
+    item: TreeItem;
+    key: string;
+    label: string;
+    x: number;
+    y: number;
+    /** The row under the pointer and its zone, or 'root' for the root zone. */
+    target: { key: string; zone: DropZone } | 'root' | null;
+    placement: Placement | null;
   }
 
-  function onDragStart(e: DragEvent, uuid: string) {
-    dragUuid = uuid;
-    e.dataTransfer?.setData('text/cerbo-uuid', uuid);
-    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+  let pending: { row: TreeRow; x: number; y: number } | null = null;
+  let drag = $state<Drag | null>(null);
+  // The click that ends a drag must not open or toggle the row.
+  let suppressClick = false;
+
+  function onRowMouseDown(e: MouseEvent, row: TreeRow) {
+    if (e.button !== 0 || (e.target as Element | null)?.closest('.page-actions')) return;
+    pending = { row, x: e.clientX, y: e.clientY };
+    window.addEventListener('mousemove', onPointerMove, true);
+    window.addEventListener('mouseup', onPointerUp, true);
+    window.addEventListener('keydown', onDragKeydown, true);
+    window.addEventListener('blur', endDrag);
   }
 
-  function onDragEnd() {
-    dragUuid = null;
-    dropTarget = null;
-  }
-
-  function canDrop(target: string): boolean {
-    if (!dragUuid) return false;
-    return (dragPath() ?? '') !== target;
-  }
-
-  function onDragOver(e: DragEvent, target: string) {
-    if (!canDrop(target)) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-    dropTarget = target;
-  }
-
-  function onDragLeave(target: string) {
-    if (dropTarget === target) dropTarget = null;
-  }
-
-  async function onDrop(e: DragEvent, target: string) {
-    e.preventDefault();
-    const uuid = dragUuid ?? e.dataTransfer?.getData('text/cerbo-uuid') ?? null;
-    onDragEnd();
-    if (!uuid || !canDropUuid(uuid, target)) return;
-    try {
-      await movePage(uuid, target === '' ? null : target);
-    } catch (err) {
-      app.error = String(err);
+  function hoverTarget(x: number, y: number, d: Drag): Pick<Drag, 'target' | 'placement'> {
+    const el = document.elementFromPoint(x, y);
+    const li = el?.closest<HTMLElement>('.page-list .item[data-key]');
+    if (li) {
+      const target = rows.find((r) => rowKey(r) === li.dataset.key);
+      if (!target) return { target: null, placement: null };
+      const rect = li.getBoundingClientRect();
+      const zone = dropZone(target, rect.top, rect.height, y);
+      const placement = dropPlacement(tree, d.item, target, zone);
+      return placement ? { target: { key: rowKey(target), zone }, placement } : { target: null, placement: null };
     }
+    if (el?.closest('.page-list .root-drop')) {
+      const placement = rootPlacement(tree, d.item);
+      return placement ? { target: 'root', placement } : { target: null, placement: null };
+    }
+    return { target: null, placement: null };
   }
 
-  function canDropUuid(uuid: string, target: string): boolean {
-    const page = app.pages.find((p) => p.uuid === uuid);
-    return !!page && (page.virtualPath ?? '') !== target;
+  function onPointerMove(e: MouseEvent) {
+    if (!drag) {
+      if (!pending || !passedThreshold(e.clientX - pending.x, e.clientY - pending.y)) return;
+      const row = pending.row;
+      drag = {
+        item: itemOf(row),
+        key: rowKey(row),
+        label: row.kind === 'folder' ? row.name : row.title,
+        x: e.clientX,
+        y: e.clientY,
+        target: null,
+        placement: null,
+      };
+      document.body.classList.add('tree-dragging');
+    }
+    e.preventDefault();
+    drag.x = e.clientX;
+    drag.y = e.clientY;
+    Object.assign(drag, hoverTarget(e.clientX, e.clientY, drag));
+  }
+
+  function onPointerUp() {
+    const finished = drag;
+    endDrag();
+    if (!finished) return;
+    suppressClick = true;
+    setTimeout(() => (suppressClick = false), 0);
+    void place(finished.placement);
+  }
+
+  function onDragKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Escape' || !drag) return;
+    e.preventDefault();
+    e.stopPropagation();
+    endDrag();
+  }
+
+  function endDrag() {
+    pending = null;
+    drag = null;
+    document.body.classList.remove('tree-dragging');
+    window.removeEventListener('mousemove', onPointerMove, true);
+    window.removeEventListener('mouseup', onPointerUp, true);
+    window.removeEventListener('keydown', onDragKeydown, true);
+    window.removeEventListener('blur', endDrag);
+  }
+
+  function dropClass(row: TreeRow): string {
+    const t = drag?.target;
+    if (!t || t === 'root' || t.key !== rowKey(row)) return '';
+    return t.zone === 'before' ? 'drop-before' : t.zone === 'after' ? 'drop-after' : 'drop-inside';
   }
 
   // ── UI Actions ────────────────────────────────────────────────────────────────
@@ -275,6 +417,9 @@
       <button class="icon-btn" title="Search pages (Ctrl+P)" onclick={toggleSearch} disabled={app.showExitPrompt}>
         <Search size={14} />
       </button>
+      <button class="icon-btn" title="New folder" onclick={() => triggerNewFolder('')} disabled={app.showExitPrompt}>
+        <FolderPlus size={14} />
+      </button>
       <button
         class="icon-btn"
         title="New page (Ctrl+N)"
@@ -287,27 +432,34 @@
   </div>
 
   <!-- Tree rows -->
-  <div class="items-wrap" onkeydown={handleListKeydown} role="tree" tabindex="0" aria-label="Page tree">
+  <div
+    class="items-wrap"
+    onkeydown={handleListKeydown}
+    oncontextmenu={openAddMenu}
+    role="tree"
+    tabindex="0"
+    aria-label="Page tree"
+  >
     <ul class="items" bind:this={itemsList}>
-      {#each rows as row (row.kind === 'folder' ? `f:${row.path}` : `p:${row.uuid}`)}
+      {#each rows as row (rowKey(row))}
         {#if row.kind === 'folder'}
           <li
-            class="item folder"
-            class:drop-target={dropTarget === row.path}
+            class="item folder {dropClass(row)}"
+            class:dragging={drag?.key === rowKey(row)}
+            style="--indent: {0.5 + row.depth * 0.875}rem"
             role="treeitem"
             aria-selected={false}
             aria-expanded={row.expanded}
             aria-level={row.depth + 1}
             data-kind="folder"
+            data-key={rowKey(row)}
             data-path={row.path}
-            ondragover={(e) => onDragOver(e, row.path)}
-            ondragleave={() => onDragLeave(row.path)}
-            ondrop={(e) => onDrop(e, row.path)}
+            onmousedown={(e) => onRowMouseDown(e, row)}
             oncontextmenu={(e) => openMenu(e, row)}
           >
             <button
               class="row-btn"
-              style="padding-left: {0.5 + row.depth * 0.875}rem"
+              style="padding-left: var(--indent)"
               onclick={(e) => { if (isRowClick(e)) toggleFolder(row.path); }}
               title={row.path}
             >
@@ -336,23 +488,23 @@
           </li>
         {:else}
           <li
-            class="item page"
+            class="item page {dropClass(row)}"
             class:active={row.uuid === app.currentUuid}
-            class:dragging={row.uuid === dragUuid}
+            class:dragging={drag?.key === rowKey(row)}
+            style="--indent: {0.75 + row.depth * 0.875}rem"
             role="treeitem"
             aria-selected={row.uuid === app.currentUuid}
             aria-level={row.depth + 1}
             data-kind="page"
+            data-key={rowKey(row)}
             data-uuid={row.uuid}
             data-path={row.path ?? ''}
-            draggable="true"
-            ondragstart={(e) => onDragStart(e, row.uuid)}
-            ondragend={onDragEnd}
+            onmousedown={(e) => onRowMouseDown(e, row)}
             oncontextmenu={(e) => openMenu(e, row)}
           >
             <button
               class="row-btn page-btn"
-              style="padding-left: {0.75 + row.depth * 0.875}rem"
+              style="padding-left: var(--indent)"
               onclick={(e) => { if (isRowClick(e)) openPage(row.uuid); }}
             >
               <FileText size={14} class="opacity-70" />
@@ -388,20 +540,17 @@
         <li class="empty-hint">No pages yet.</li>
       {/if}
     </ul>
-    <!-- Dropping here moves a page to the root. -->
-    <div
-      class="root-drop"
-      class:visible={dragUuid !== null && dragPath() !== null}
-      class:drop-target={dropTarget === ''}
-      role="presentation"
-      ondragover={(e) => onDragOver(e, '')}
-      ondragleave={() => onDragLeave('')}
-      ondrop={(e) => onDrop(e, '')}
-    >
-      {#if dragUuid !== null && dragPath() !== null}<span>Drop here to move to the root</span>{/if}
+    <!-- The space below the rows: dropping here puts the row last at the
+         root; right-clicking it opens the Add menu. -->
+    <div class="root-drop" class:visible={drag !== null} class:drop-target={drag?.target === 'root'} role="presentation">
+      {#if drag}<span>Drop here to move to the root</span>{/if}
     </div>
   </div>
 </aside>
+
+{#if drag}
+  <div class="drag-ghost" style="left: {drag.x + 12}px; top: {drag.y + 8}px">{drag.label}</div>
+{/if}
 
 {#if menu}
   <RowMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
@@ -454,6 +603,8 @@
     flex-direction: column;
     overflow-y: auto;
     outline: none;
+    user-select: none;
+    -webkit-user-select: none;
   }
   .items {
     list-style: none;
@@ -461,6 +612,7 @@
     margin: 0;
   }
   .item {
+    position: relative;
     display: flex; align-items: center; gap: 0.25rem;
     border-radius: 0.375rem;
     padding: 0;
@@ -469,7 +621,20 @@
   .item:hover .icon-btn.small { opacity: 1; }
   .item.active { background: var(--accent); }
   .item.dragging { opacity: 0.5; }
-  .item.drop-target { background: var(--accent-hover); box-shadow: inset 0 0 0 1px var(--primary); }
+  .item.drop-inside { background: var(--accent-hover); box-shadow: inset 0 0 0 1px var(--primary); }
+  .item.drop-before::before,
+  .item.drop-after::after {
+    content: '';
+    position: absolute;
+    left: var(--indent);
+    right: 0.25rem;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--primary);
+    pointer-events: none;
+  }
+  .item.drop-before::before { top: -1.5px; }
+  .item.drop-after::after { bottom: -1.5px; }
   .row-btn {
     flex: 1; text-align: left; padding: 0.4375rem 0.75rem;
     display: flex; align-items: center; gap: 0.5rem;
@@ -501,4 +666,21 @@
   }
   .root-drop.visible { border-color: var(--border); }
   .root-drop.drop-target { border-color: var(--primary); background: var(--accent-hover); }
+
+  .drag-ghost {
+    position: fixed;
+    z-index: 950;
+    pointer-events: none;
+    padding: 0.2rem 0.5rem;
+    border-radius: 0.375rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    font-size: 0.8125rem;
+    white-space: nowrap;
+  }
+  :global(body.tree-dragging),
+  :global(body.tree-dragging *) {
+    cursor: grabbing !important;
+  }
 </style>
