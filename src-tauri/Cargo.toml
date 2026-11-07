@@ -27,6 +27,11 @@ serde_json = "1"
 notify = "8"
 clap = { version = "4", features = ["derive"] }
 cerbo-core = { path = "../core", features = ["embeddings"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
+# Reads files copied in a file manager when the webview's paste event lacks them.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
 
 [dev-dependencies]
 tempfile = "3"

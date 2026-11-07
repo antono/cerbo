@@ -70,7 +70,8 @@ export interface BacklinkEntry {
 export interface VaultObject {
   uuid: string;
   title: string;
-  object_type: string;
+  /** Serialized from the Rust `object_type` field (camelCase). */
+  objectType: string;
 }
 
 export interface VaultsFile {
@@ -228,8 +229,23 @@ export function pageTitles(): string[] {
 
 // ── Commands ──────────────────────────────────────────────────────────────────
 
+// Run before the open page is left without the editor seeing a page change
+// first (vault switch, quit), so it can store where editing ended. The page
+// editor registers one; a failing hook never blocks leaving.
+const editorLeaveHooks = new Set<() => Promise<void> | void>();
+
+export function onEditorLeave(hook: () => Promise<void> | void): () => void {
+  editorLeaveHooks.add(hook);
+  return () => editorLeaveHooks.delete(hook);
+}
+
+export async function runEditorLeaveHooks(): Promise<void> {
+  await Promise.allSettled([...editorLeaveHooks].map(async (hook) => hook()));
+}
+
 export async function quitApp(): Promise<void> {
   try {
+    await runEditorLeaveHooks();
     await saveUiSettings();
     await invoke('app_exit');
   } catch (e) {
@@ -265,6 +281,7 @@ export async function loadVaults(): Promise<void> {
 }
 
 export async function openVault(vaultId: string): Promise<void> {
+  await runEditorLeaveHooks();
   app.loading = true;
   app.loadingMessage = 'Opening vault…';
   app.error = null;

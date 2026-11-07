@@ -17,6 +17,7 @@
   import SparqlConsole from '#lib/SparqlConsole.svelte';
   import ExitConfirmation from '#lib/ExitConfirmation.svelte';
   import TitleBar from '#lib/TitleBar.svelte';
+  import { splitVaultPath } from '#lib/vault-path.js';
   import { isModKey, isInputFocused, isSparqlConsoleKey, confirmationOpen } from '#lib/hotkeys.js';
   import '../app.css';
 
@@ -435,9 +436,13 @@
 
       <div class="vault-selector-body">
         {#each app.vaults as item (item.id)}
-          <button class="vault-item" class:selected={item.id === app.vaults[selectedVaultIndex]?.id} onclick={() => selectVault(item.id)}>
+          {@const path = splitVaultPath(item.path)}
+          <button class="vault-item" class:selected={item.id === app.vaults[selectedVaultIndex]?.id} onclick={() => selectVault(item.id)} title={item.path}>
             <img src={cerboIcon} alt="" width="18" height="18" class="vault-icon" />
             <span class="vault-item-name">{item.name}</span>
+            <!-- Middle truncation: the head shrinks with an ellipsis, the tail
+                 (vault folder name) stays visible. -->
+            <span class="vault-item-path" data-path={item.path}><span class="vault-item-path-head">{path.head}</span><span class="vault-item-path-tail">{path.tail}</span></span>
             {#if item.id === app.activeVaultId}
               <span class="vault-item-check">✓</span>
             {/if}
@@ -678,11 +683,39 @@
   }
 
   .vault-item-name {
-    flex: 1;
+    flex: 0 1 auto;
+    max-width: 50%;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .vault-item-path {
+    flex: 1 1 0;
+    display: flex;
+    min-width: 0;
+    font-size: 0.8rem;
+    color: var(--muted-foreground);
+    white-space: nowrap;
+  }
+
+  .vault-item.selected .vault-item-path {
+    color: inherit;
+    opacity: 0.75;
+  }
+
+  .vault-item-path-head {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .vault-item-path-tail {
+    flex-shrink: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .vault-selector-footer {

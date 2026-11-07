@@ -10,6 +10,7 @@ import type { Root as HastRoot, Element } from 'hast';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import WikilinkAutocomplete from './WikilinkAutocomplete.svelte';
+import { attachmentFilePath, cerboObjectUuid } from './attachment-drop';
 
 // ── Custom mdast node ─────────────────────────────────────────────────────────
 
@@ -49,7 +50,7 @@ function titleToSlug(title: string): string {
 export interface VaultObject {
   uuid: string;
   title: string;
-  object_type: string;
+  objectType: string;
 }
 
 export interface WikilinkPluginOptions {
@@ -57,6 +58,8 @@ export interface WikilinkPluginOptions {
   getPages: () => string[];
   /** Reactive getter — called each render cycle to get vault objects with UUIDs. */
   getVaultObjects: () => VaultObject[];
+  /** Reactive getter — pages with their virtual path, searched by the link picker. */
+  getPagePaths?: () => { uuid: string; virtualPath: string | null }[];
   /** Called when the user clicks a resolved wikilink. */
   onNavigate: (slug: string) => void;
   /** Called when the user clicks a broken wikilink (offer to create). */
@@ -148,6 +151,8 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
             // Fetch once per render
             const vaultPath = options.getVaultPath();
             const currentSlug = options.getSlug();
+            // Read lazily: only pages with cerbo:// images need the object list.
+            let vaultObjects: VaultObject[] | undefined;
 
             visit(tree, 'element', (node: Element) => {
               // Wikilinks (legacy format)
@@ -199,6 +204,18 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
               // Images
               if (node.tagName === 'img') {
                 const src = node.properties?.src as string;
+                const objectUuid = src ? cerboObjectUuid(src) : null;
+                if (objectUuid && vaultPath) {
+                  // `![name](cerbo://objects/<uuid>)`: an Attachment object's file.
+                  // Its title names the file; the alt text stands in while the
+                  // object list has not caught up with a fresh drop.
+                  const object = (vaultObjects ??= options.getVaultObjects()).find((o) => o.uuid === objectUuid);
+                  const title = object?.title ?? String(node.properties.alt ?? '');
+                  if (title) {
+                    node.properties.src = convertFileSrc(attachmentFilePath(vaultPath, objectUuid, title));
+                    node.properties['data-cerbo-uuid'] = objectUuid;
+                  }
+                }
                 if (src && (src.startsWith('assets/') || src.startsWith('./assets/'))) {
                   if (vaultPath && currentSlug) {
                     const cleanPath = src.startsWith('./') ? src.slice(2) : src;
@@ -224,7 +241,7 @@ export function wikilinkPlugin(options: WikilinkPluginOptions): Plugin {
     components: [
       {
         component: WikilinkAutocomplete as any,
-        props: { getVaultObjects: options.getVaultObjects } as any,
+        props: { getVaultObjects: options.getVaultObjects, getPagePaths: options.getPagePaths } as any,
         parent: 'input',
       },
     ],

@@ -5,13 +5,22 @@
   import '@cartamd/plugin-code/default.css';
   import { emoji } from '@cartamd/plugin-emoji';
   import { anchor } from '@cartamd/plugin-anchor';
-  import { attachment } from '@cartamd/plugin-attachment';
   import { invoke } from '@tauri-apps/api/core';
   import { mode } from 'mode-watcher';
   import { Eye, Edit3 } from 'lucide-svelte';
   import { onMount, tick, untrack } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import ExternalChangeDialog from './ExternalChangeDialog.svelte';
+  import PlainMarkdownInput from './PlainMarkdownInput.svelte';
+  import {
+    INPUT_MODE_RECHECK_MS,
+    OVERLAY_HIGHLIGHT_DELAY_MS,
+    captureInputView,
+    gatePreviewRendering,
+    nextPlainInput,
+    restoreInputView,
+    usePlainInput,
+  } from './editor-performance';
   import {
     wikilinkPlugin,
     attachPreviewClickHandler,
@@ -19,8 +28,17 @@
     previewTaskListPlugin,
   } from './wikilink-plugin';
   import { mentionPlugin } from './mention-plugin';
-  import { getCursorPositionFromOffset, restoreCursorPosition as resolveCursorPosition } from './cursor-position';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import {
+    cursorKey,
+    getCursorPositionFromOffset,
+    restoreCursorPosition as resolveCursorPosition,
+    scrollTopShowingCaret,
+    type SavedCursorPosition,
+  } from './cursor-position';
   import { focusTextareaAtOffset } from './textarea-focus';
+  import { attachEditorAttachments, type DropIndicator } from './editor-attachments';
+  import { attachmentFileName } from './attachment-drop';
   import { buildPageDiffFile, decideExternalPageChange, loadPageDiffFile, logPageContentDiff, pageChangeKey, pageMdPathToSlug, shouldIgnoreUnchangedPageChange, shouldSkipExternalPageChange } from './page-sync';
   import {
     app,
@@ -31,7 +49,9 @@
     savePage,
     updatePageTitle,
     loadAttachments,
+    loadVaultObjects,
     extractTitle,
+    onEditorLeave,
   } from './stores.svelte';
   import { toggleTaskListItemAtIndex } from './task-list';
 
@@ -58,6 +78,10 @@
   let previewDiffFile = $state<ReturnType<typeof buildPageDiffFile> | null>(null);
   let lastConflictKey = '';
   let suppressedConflictKey: string | null = null;
+  // Set while something is dragged over the editor: where the reference would go.
+  let dropIndicator = $state<DropIndicator | null>(null);
+  // A reference to a new Attachment was inserted; reload the panel after the next save.
+  let attachmentsChanged = false;
 
   // Notify parent of saving state
   $effect(() => {
@@ -67,6 +91,9 @@
   let isDirty = $derived(content !== baselineContent);
 
   let loadedUuid = $state<string | null>(null);
+  // Vault of `loadedUuid`, recorded when the page loads: on a vault switch the
+  // position of the page being left belongs to the previous vault.
+  let loadedVaultId: string | null = null;
 
   $effect(() => {
     const currentUuid = app.currentUuid;
@@ -76,6 +103,9 @@
 
     untrack(() => {
       if (currentUuid !== loadedUuid) {
+        // The textarea still holds the page being left: store where editing it ended.
+        void persistCursor(captureCursor());
+        loadedVaultId = app.activeVaultId;
         loadedUuid = currentUuid;
         baselineContent = externalContent;
         content = externalContent;
@@ -161,6 +191,7 @@
       wikilinkPlugin({
         getPages: () => pageTitles(),
         getVaultObjects: () => app.vaultObjects,
+        getPagePaths: () => app.pages,
         onNavigate: (title) => {
           const page = app.pages.find(p => p.title === title);
           if (page) openPage(page.uuid);
@@ -191,30 +222,40 @@
       }),
       emoji(),
       anchor(),
-      attachment({
-        upload: async (file) => {
-          try {
-            const buffer = await file.arrayBuffer();
-            const bytes = new Uint8Array(buffer);
-            
-            const filename = await invoke<string>('attachment_upload', {
-              vaultId: app.activeVaultId,
-              uuid,
-              filename: file.name,
-              data: Array.from(bytes)
-            });
-
-            await loadAttachments(uuid);
-            const encoded = encodeURIComponent(filename).replace(/%20/g, '%20');
-            return `assets/${encoded}`;
-          } catch (e) {
-            console.error('Upload failed:', e);
-            return null;
-          }
-        }
-      })
+      // Drop and paste are handled by `editor-attachments.ts`, not Carta's
+      // attachment plugin, so both share one pipeline.
     ],
   });
+
+  // The write tab still mounts Carta's hidden Renderer; keep it from parsing
+  // the page on every keystroke. Switching to preview remounts the editor
+  // ({#key} below) and renders the current text once.
+  gatePreviewRendering(carta, () => app.editorTab === 'preview');
+
+  // Large pages are written in a plain textarea (no shiki overlay). Decided
+  // when a page is loaded or the tab switches, and re-checked once typing
+  // pauses (see the effect below), never on the keystroke path.
+  let plainInput = $derived.by(() => {
+    app.editorTab;
+    loadedUuid;
+    return untrack(() => usePlainInput(content.length));
+  });
+  // Preview always uses MarkdownEditor: the input mode must not remount it,
+  // or the preview click handlers stay attached to the old renderer.
+  let editorKey = $derived(app.editorTab === 'write' ? `write:${plainInput}` : 'preview');
+
+  /** Swaps the write-mode input, keeping caret, selection, focus and scroll. */
+  async function switchInputMode(next: boolean) {
+    const textarea = carta.input?.textarea;
+    const view = textarea ? captureInputView(textarea) : null;
+    plainInput = next;
+    await tick();
+    const nextTextarea = carta.input?.textarea;
+    if (!view || !nextTextarea || nextTextarea === textarea) return;
+    restoreInputView(nextTextarea, view);
+    // Carta sizes its textarea after mount; scroll again once it has.
+    requestAnimationFrame(() => restoreInputView(nextTextarea, view));
+  }
 
   // ── Effects ──────────────────────────────────────────────────────────────────
 
@@ -227,15 +268,25 @@
       if (page) {
         content = app.currentContent ?? '';
       }
-      
-      // Reset scroll position
-      if (editorContainer) {
-        const input = editorContainer.querySelector('.carta-input');
-        const renderer = editorContainer.querySelector('.carta-renderer');
-        if (input) input.scrollTop = 0;
-        if (renderer) renderer.scrollTop = 0;
-      }
+
+      // The preview starts at the top; the write view's scroll (Carta's input
+      // or the plain textarea of large pages) is restored with the caret (see
+      // `restoreCursor`).
+      const renderer = editorContainer?.querySelector('.carta-renderer');
+      if (renderer) renderer.scrollTop = 0;
     });
+  });
+
+  // A page that crosses the size threshold while open (paste, typing, an
+  // external reload) switches input mode once changes pause for a second.
+  $effect(() => {
+    const length = content.length;
+    if (app.editorTab !== 'write') return;
+    const timer = setTimeout(() => {
+      const next = nextPlainInput(plainInput, length);
+      if (next !== plainInput) void switchInputMode(next);
+    }, INPUT_MODE_RECHECK_MS);
+    return () => clearTimeout(timer);
   });
 
   // Auto-save
@@ -266,6 +317,11 @@
               content = finalContent;
             }
           }
+        }
+        // The panel lists the Attachments page.md links to, so it follows the save.
+        if (attachmentsChanged && uuid === targetUuidForSave) {
+          attachmentsChanged = false;
+          await loadAttachments(uuid);
         }
       } catch (e) {
         app.error = String(e);
@@ -300,14 +356,45 @@
         }),
         onResolveCerboLink: async (linkUuid) => {
           const page = app.pages.find(p => p.uuid === linkUuid);
+          const attachment = app.vaultObjects.find(o => o.uuid === linkUuid && o.objectType === 'Attachment');
           if (page) {
             await openPage(page.uuid);
+          } else if (attachment) {
+            await invoke('attachment_open', { uuid: linkUuid, filename: attachmentFileName(attachment.title) });
           } else {
             app.error = `Page not found: ${linkUuid}`;
           }
         }
       });
     }
+  });
+
+  // Drop and paste files or fragments into the editor (spec `editor-attachment-drop`).
+  $effect(() => {
+    const container = editorContainer;
+    if (!container) return;
+    return attachEditorAttachments({
+      container,
+      getTextarea: () => carta.input?.textarea,
+      getPageKey: () => (app.activeVaultId && app.currentUuid ? `${app.activeVaultId}/${app.currentUuid}` : null),
+      isActive: () => app.editorTab === 'write' && !!app.currentUuid,
+      addPath: (srcPath) => invoke<string>('attachment_add', { uuid, srcPath }),
+      addBytes: (name, bytes) =>
+        invoke<string>('attachment_upload', bytes, { headers: { 'x-cerbo-filename': encodeURIComponent(name) } }),
+      readClipboardPaths: () => invoke<string[]>('clipboard_file_paths'),
+      addUrl: (url, fallbackName) => invoke<{ uuid: string; name: string }>('attachment_fetch', { url, fallbackName }),
+      onInserted: () => {
+        attachmentsChanged = true;
+        // Lets the preview resolve the new image and the link picker offer it.
+        void loadVaultObjects();
+      },
+      onError: (message) => {
+        app.error = message;
+      },
+      onIndicator: (indicator) => {
+        dropIndicator = indicator;
+      },
+    });
   });
 
   $effect(() => {
@@ -362,42 +449,148 @@
     }
   });
 
-  /**
-   * Focuses the editor's textarea with a retry mechanism to ensure the DOM is ready.
-   */
-  async function saveCursorPosition() {
-    const textarea = carta.input?.textarea;
-    if (!textarea || !app.activeVaultId || !app.currentUuid) return;
-    const selectionStart = textarea.selectionStart ?? 0;
-    const cursor = getCursorPositionFromOffset(textarea.value, selectionStart);
+  // ── Caret and scroll (spec `editor-position-restore`) ───────────────────────
 
-    await invoke('cursor_position_save', {
-      vaultId: app.activeVaultId,
-      uuid: app.currentUuid,
-      line: cursor.line,
-      column: cursor.column,
-    });
+  interface CursorSnapshot {
+    vaultId: string;
+    uuid: string;
+    position: Required<SavedCursorPosition>;
   }
 
-  async function restoreCursorPosition() {
-    if (!app.activeVaultId || !app.currentUuid) return;
+  // Positions saved in this window, so entering write mode right after leaving
+  // it does not race the save on its way to `cursor.toml`.
+  const cursorCache = new Map<string, SavedCursorPosition>();
+  // The page whose position has been restored into the textarea. Until then
+  // the selection is not the user's, so nothing is saved. Also exposed as
+  // `data-caret-restored` for the e2e tests.
+  let restoredUuid = $state<string | null>(null);
+  let restoreToken = 0;
+  let cursorSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const saved = await invoke<{ line: number; column: number } | null>('cursor_position_load', {
-      vaultId: app.activeVaultId,
-      uuid: app.currentUuid,
-    });
+  function editorScroller(): HTMLElement | null {
+    // Large pages are written in a plain textarea that scrolls itself.
+    return (
+      editorContainer?.querySelector<HTMLElement>('.carta-plain-input') ??
+      editorContainer?.querySelector<HTMLElement>('.carta-input') ??
+      null
+    );
+  }
+
+  /** Where editing the loaded page stands now; null outside a write session. */
+  function captureCursor(): CursorSnapshot | null {
+    const textarea = carta.input?.textarea;
+    if (app.editorTab !== 'write' || !textarea || !loadedVaultId || !loadedUuid || restoredUuid !== loadedUuid) {
+      return null;
+    }
+    const { line, column } = getCursorPositionFromOffset(textarea.value, textarea.selectionStart ?? 0);
+    const scrollTop = editorScroller()?.scrollTop ?? 0;
+    return { vaultId: loadedVaultId, uuid: loadedUuid, position: { line, column, scrollTop } };
+  }
+
+  async function persistCursor(snapshot: CursorSnapshot | null) {
+    if (cursorSaveTimer) clearTimeout(cursorSaveTimer);
+    cursorSaveTimer = null;
+    if (!snapshot) return;
+    const { vaultId, uuid: pageUuid, position } = snapshot;
+    cursorCache.set(cursorKey(vaultId, pageUuid), position);
+    try {
+      await invoke('cursor_position_save', { vaultId, uuid: pageUuid, ...position });
+    } catch (e) {
+      console.error('Failed to save the cursor position:', e);
+    }
+  }
+
+  function saveCursorPosition() {
+    return persistCursor(captureCursor());
+  }
+
+  async function loadCursor(vaultId: string, pageUuid: string): Promise<SavedCursorPosition | null> {
+    const cached = cursorCache.get(cursorKey(vaultId, pageUuid));
+    if (cached) return cached;
+    try {
+      return await invoke<SavedCursorPosition | null>('cursor_position_load', { vaultId, uuid: pageUuid });
+    } catch (e) {
+      console.error('Failed to load the cursor position:', e);
+      return null;
+    }
+  }
+
+  async function restoreCursor(pageUuid: string, token: number) {
+    const vaultId = loadedVaultId;
+    const saved = vaultId ? await loadCursor(vaultId, pageUuid) : null;
 
     await tick();
+    // Carta sizes the textarea to its content in an animation frame after the
+    // value lands; wait two frames so the scroll height is final.
+    for (let i = 0; i < 2; i += 1) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    if (token !== restoreToken) return;
     const textarea = carta.input?.textarea;
     if (!textarea) return;
 
-    const { offset } = resolveCursorPosition(textarea.value, saved);
-    focusTextareaAtOffset(textarea, offset);
+    const target = resolveCursorPosition(textarea.value, saved);
+    focusTextareaAtOffset(textarea, target.offset);
+    const scroller = editorScroller();
+    if (scroller) {
+      scroller.scrollTop = target.scrollTop === 'end' ? scroller.scrollHeight : target.scrollTop;
+      // The caret was placed without scrolling; the stored offset may no longer
+      // show its line (window or font size changed, lines added above it).
+      const input = carta.input;
+      if (input) {
+        const { top } = input.getCursorXY();
+        // The plain textarea reports the caret relative to its own scroll offset.
+        const caretTop = scroller === input.textarea ? top + scroller.scrollTop : top;
+        scroller.scrollTop = scrollTopShowingCaret(scroller.scrollTop, scroller.clientHeight, caretTop, input.getRowHeight());
+      }
+    }
+    // Loading the page is not an edit: drop a save it armed.
+    if (cursorSaveTimer) clearTimeout(cursorSaveTimer);
+    cursorSaveTimer = null;
+    restoredUuid = pageUuid;
   }
 
+  // Entering write mode, or opening another page while in it, restores the caret.
   $effect(() => {
-    if (app.editorTab !== 'write') return;
-    void restoreCursorPosition();
+    const tab = app.editorTab;
+    const pageUuid = loadedUuid;
+    restoredUuid = null;
+    const token = ++restoreToken;
+    if (tab !== 'write' || !pageUuid) return;
+    untrack(() => void restoreCursor(pageUuid, token));
+  });
+
+  // Also save 1 s after the last edit, so a crash loses little. Content set by
+  // a page load lands before the restore and arms nothing, so pages that were
+  // only viewed get no entry.
+  $effect(() => {
+    void content;
+    untrack(() => {
+      if (app.editorTab !== 'write' || !loadedUuid || restoredUuid !== loadedUuid) return;
+      if (cursorSaveTimer) clearTimeout(cursorSaveTimer);
+      cursorSaveTimer = setTimeout(() => void saveCursorPosition(), 1000);
+    });
+  });
+
+  onMount(() => {
+    const stopLeaveHook = onEditorLeave(saveCursorPosition);
+    // Closing the window by the window manager (the app's own quit runs the
+    // leave hook). Bounded, so a stuck save never keeps the window open.
+    let stopCloseListener: (() => void) | null = null;
+    let disposed = false;
+    void getCurrentWindow()
+      .onCloseRequested(async () => {
+        await Promise.race([saveCursorPosition(), new Promise((resolve) => setTimeout(resolve, 1000))]);
+      })
+      .then((stop) => {
+        if (disposed) stop();
+        else stopCloseListener = stop;
+      })
+      .catch((e) => console.error('Failed to watch window close:', e));
+    return () => {
+      disposed = true;
+      stopLeaveHook();
+      stopCloseListener?.();
+      if (cursorSaveTimer) clearTimeout(cursorSaveTimer);
+    };
   });
 
   // Handle 'i' and 'Esc' keys for mode switching
@@ -411,6 +604,8 @@
       if (isInputFocused()) {
         // If in editor, only handle Escape to switch to preview
         if (e.key === 'Escape' && app.editorTab === 'write') {
+          // An open link picker takes Escape for itself.
+          if (carta.input?.textarea?.dataset.linkPicker === 'open') return;
           e.preventDefault();
           e.stopPropagation();
           void saveCursorPosition();
@@ -433,10 +628,9 @@
   });
 
   function toggleMode() {
+    // Capture before the switch: the write view is rebuilt on the tab change.
+    if (app.editorTab === 'write') void saveCursorPosition();
     app.editorTab = app.editorTab === 'write' ? 'preview' : 'write';
-    if (app.editorTab === 'preview') {
-      void saveCursorPosition();
-    }
   }
 
   async function loadCurrentPageFromDisk() {
@@ -479,7 +673,12 @@
   }
 </script>
 
-<div class="page-editor" class:write-mode={app.editorTab === 'write'} bind:this={editorContainer}>
+<div
+  class="page-editor"
+  class:write-mode={app.editorTab === 'write'}
+  data-caret-restored={restoredUuid ?? ''}
+  bind:this={editorContainer}
+>
   <button 
     class="mode-toggle-btn" 
     onclick={toggleMode}
@@ -493,15 +692,37 @@
     {/if}
   </button>
 
-  {#key app.editorTab}
-    <MarkdownEditor
-      {carta}
-      bind:value={content}
-      selectedTab={app.editorTab}
-      mode="tabs"
-      theme={mode.current === 'dark' ? 'dark' : 'light'}
-    />
+  {#key editorKey}
+    {#if app.editorTab === 'write' && plainInput}
+      <PlainMarkdownInput
+        {carta}
+        bind:value={content}
+        theme={mode.current === 'dark' ? 'dark' : 'light'}
+      />
+    {:else}
+      <MarkdownEditor
+        {carta}
+        bind:value={content}
+        selectedTab={app.editorTab}
+        mode="tabs"
+        theme={mode.current === 'dark' ? 'dark' : 'light'}
+        highlightDelay={OVERLAY_HIGHLIGHT_DELAY_MS}
+      />
+    {/if}
   {/key}
+
+  {#if dropIndicator}
+    <div class="drop-target" aria-hidden="true"></div>
+    {#if dropIndicator.height > 0}
+      <div
+        class="drop-caret"
+        aria-hidden="true"
+        style:left="{dropIndicator.left}px"
+        style:top="{dropIndicator.top}px"
+        style:height="{dropIndicator.height}px"
+      ></div>
+    {/if}
+  {/if}
 
   {#if showConflictPrompt}
     <ExternalChangeDialog
@@ -564,6 +785,25 @@
     color: var(--muted-foreground);
     transition: all 0.15s;
     border-radius: var(--radius);
+  }
+
+  /* Drop feedback: the editor outlined, a caret where the reference goes. */
+  .page-editor > .drop-target {
+    position: absolute;
+    inset: 0;
+    border: 2px dashed var(--primary);
+    border-radius: var(--radius);
+    background: color-mix(in oklab, var(--primary) 6%, transparent);
+    pointer-events: none;
+    z-index: 50;
+  }
+
+  .page-editor > .drop-caret {
+    position: absolute;
+    width: 2px;
+    background: var(--primary);
+    pointer-events: none;
+    z-index: 51;
   }
 
   .mode-toggle-btn:hover {

@@ -79,6 +79,7 @@ impl From<context::CoreContext> for CerboContext {
 
 pub mod config;
 pub mod context;
+pub mod cursor_positions;
 pub mod fsio;
 pub mod annotations;
 pub mod app_lock;

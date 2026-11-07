@@ -186,6 +186,8 @@ pub fn run() {
             page::attachment_list,
             page::attachment_add,
             page::attachment_upload,
+            page::attachment_fetch,
+            page::clipboard_file_paths,
             page::attachment_delete,
             page::attachment_open,
             ui_settings_load,
@@ -230,6 +232,16 @@ fn vault_open(
 
     // Record the active vault path so page commands use the right .cerbo/objects/ dir.
     *active_vault.0.lock().map_err(|_| "vault state lock poisoned")? = Some(vault_path.clone());
+
+    // Attachment files live under the hidden `.cerbo/objects`, which the
+    // asset protocol's `**` scope does not match on Unix (dot components need
+    // a literal dot); allow it so the preview can show dropped images.
+    if let Err(e) = app
+        .asset_protocol_scope()
+        .allow_directory(vault_path.join(".cerbo").join("objects"), true)
+    {
+        eprintln!("Warning: attachment images will not load in the preview: {e}");
+    }
 
     // Start FS watcher
     index::start_watcher(&app, &vaultId, vault_path, &watcher_state)?;

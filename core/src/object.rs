@@ -862,31 +862,72 @@ pub(crate) fn sync_index(ctx: &CerboContext, uuid: &str) {
 /// Add an attachment to a page.
 /// Creates a type: Attachment object, copies the file, returns UUID.
 pub fn attachment_add(ctx: &CerboContext, _page_uuid: &str, file_path: &std::path::Path) -> Result<String, String> {
-    // Create Attachment object
-    let uuid = Uuid::new_v4().to_string();
-    let obj_dir = object_path(ctx, &uuid);
-
-    fs::create_dir_all(&obj_dir).map_err(|e| format!("Failed to create object dir: {}", e))?;
-
-    // Copy file to object directory
     let file_name = file_path
         .file_name()
         .ok_or("Invalid file path".to_string())?
         .to_string_lossy()
         .to_string();
-    let dest_path = obj_dir.join(&file_name);
 
-    fs::copy(file_path, &dest_path)
-        .map_err(|e| format!("Failed to copy file: {}", e))?;
+    attachment_create(ctx, &file_name, |dest| {
+        crate::fsio::copy_atomic(file_path, dest)
+            .map(|_| ())
+            .map_err(|e| format!("Failed to copy {}: {}", file_name, e))
+    })
+}
+
+/// Add an attachment from in-memory bytes (a dropped or pasted fragment).
+/// `name` becomes the file name and title; only its last path component is
+/// used, so a name can never write outside the new object. Returns the UUID.
+pub fn attachment_add_bytes(ctx: &CerboContext, name: &str, bytes: &[u8]) -> Result<String, String> {
+    let file_name = std::path::Path::new(name)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .filter(|n| !n.trim().is_empty())
+        .ok_or_else(|| format!("Invalid attachment name: {:?}", name))?;
+
+    attachment_create(ctx, &file_name, |dest| {
+        crate::fsio::write_atomic(dest, bytes).map_err(|e| format!("Failed to write {}: {}", file_name, e))
+    })
+}
+
+/// Build an Attachment object holding `file_name` (written by `write_file`) in a
+/// temporary directory under `objects/`, then rename it into place. A failure
+/// at any step drops the temporary directory, so no partial object is left;
+/// vault scans skip the temporary name while it exists.
+///
+/// The object's own files keep their names: an attachment called `meta.ttl` or
+/// `page.md` is stored as `attachment-<name>`, as the vault importer does, and
+/// keeps its name as the title.
+fn attachment_create(
+    ctx: &CerboContext,
+    file_name: &str,
+    write_file: impl FnOnce(&std::path::Path) -> Result<(), String>,
+) -> Result<String, String> {
+    let stored_name = if matches!(file_name, "meta.ttl" | "page.md") {
+        format!("attachment-{}", file_name)
+    } else {
+        file_name.to_string()
+    };
+
+    let uuid = Uuid::new_v4().to_string();
+    let objects = objects_dir(ctx);
+    fs::create_dir_all(&objects).map_err(|e| format!("Failed to create objects dir: {}", e))?;
+
+    let staging = tempfile::Builder::new()
+        .prefix(crate::fsio::TEMP_PREFIX)
+        .tempdir_in(&objects)
+        .map_err(|e| format!("Failed to create object dir: {}", e))?;
+
+    let file_path = staging.path().join(&stored_name);
+    write_file(&file_path)?;
 
     // Detect MIME type from file extension
-    let mime_type = detect_mime_type(file_path);
+    let mime_type = detect_mime_type(&file_path);
 
-    // Create meta.ttl
     let now = chrono::Utc::now().to_rfc3339();
     let meta = ObjectMeta {
         object_type: ObjectType::Attachment,
-        title: file_name.clone(),
+        title: file_name.to_string(),
         created: now.clone(),
         modified: now,
         original_url: None,
@@ -894,12 +935,15 @@ pub fn attachment_add(ctx: &CerboContext, _page_uuid: &str, file_path: &std::pat
         slug: None,
         virtual_path: None,
     };
-
-    let meta_path = obj_dir.join("meta.ttl");
-    meta.write_to_file(&meta_path, &uuid)
+    meta.write_to_file(&staging.path().join("meta.ttl"), &uuid)
         .map_err(|e| format!("Failed to write meta.ttl: {}", e))?;
 
     // No page.md for attachments
+
+    fs::rename(staging.path(), object_path(ctx, &uuid))
+        .map_err(|e| format!("Failed to store {}: {}", file_name, e))?;
+    // The directory now lives under its UUID; there is nothing left to remove.
+    let _ = staging.keep();
 
     sync_index(ctx, &uuid);
     Ok(uuid)
@@ -943,15 +987,20 @@ pub(crate) fn detect_mime_type(file_path: &std::path::Path) -> String {
     let ext = file_path
         .extension()
         .and_then(|e| e.to_str())
-        .unwrap_or("");
+        .unwrap_or("")
+        .to_ascii_lowercase();
 
-    match ext {
+    match ext.as_str() {
         "png" => "image/png".to_string(),
         "jpg" | "jpeg" => "image/jpeg".to_string(),
         "gif" => "image/gif".to_string(),
+        "webp" => "image/webp".to_string(),
+        "svg" => "image/svg+xml".to_string(),
+        "bmp" => "image/bmp".to_string(),
         "pdf" => "application/pdf".to_string(),
         "txt" => "text/plain".to_string(),
         "md" => "text/markdown".to_string(),
+        "html" | "htm" => "text/html".to_string(),
         _ => "application/octet-stream".to_string(),
     }
 }
@@ -1286,6 +1335,130 @@ mod tests {
         assert_eq!(attachment_list(&ctx, &page).unwrap(), vec![attachment.clone()]);
         assert!(attachment_list(&ctx, &note).unwrap().is_empty());
         assert!(!object_path(&ctx, missing).exists());
+    }
+
+    /// Names of the entries directly under `objects/`.
+    fn object_dir_names(ctx: &CerboContext) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(objects_dir(ctx))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn attachment_add_bytes_creates_an_attachment_object() {
+        let (_tmp, ctx) = create_test_context();
+
+        let uuid = attachment_add_bytes(&ctx, "photo.png", b"\x89PNG137").unwrap();
+
+        let dir = object_path(&ctx, &uuid);
+        assert_eq!(fs::read(dir.join("photo.png")).unwrap(), b"\x89PNG137");
+        let meta = ObjectMeta::read_from_file(&dir.join("meta.ttl")).unwrap();
+        assert_eq!(meta.object_type, ObjectType::Attachment);
+        assert_eq!(meta.title, "photo.png");
+        assert_eq!(meta.mime_type.as_deref(), Some("image/png"));
+        assert!(!dir.join("page.md").exists(), "attachments have no page.md");
+        assert_eq!(object_dir_names(&ctx), vec![uuid], "no staging directory left behind");
+    }
+
+    #[test]
+    fn attachment_add_bytes_detects_mime_types() {
+        let (_tmp, ctx) = create_test_context();
+        for (name, mime) in [
+            ("Screenshot.PNG", "image/png"),
+            ("clip.html", "text/html"),
+            ("selection.txt", "text/plain"),
+            ("report.pdf", "application/pdf"),
+            ("blob", "application/octet-stream"),
+        ] {
+            let uuid = attachment_add_bytes(&ctx, name, b"137").unwrap();
+            let meta = ObjectMeta::read_from_file(&object_path(&ctx, &uuid).join("meta.ttl")).unwrap();
+            assert_eq!(meta.mime_type.as_deref(), Some(mime), "{name}");
+        }
+    }
+
+    /// Only the last path component is used: a name cannot escape the object.
+    #[test]
+    fn attachment_add_bytes_keeps_only_the_file_name() {
+        let (tmp, ctx) = create_test_context();
+
+        let uuid = attachment_add_bytes(&ctx, "../../escape.txt", b"137").unwrap();
+
+        assert!(object_path(&ctx, &uuid).join("escape.txt").exists());
+        assert!(!tmp.path().join("escape.txt").exists());
+        assert!(!tmp.path().parent().unwrap().join("escape.txt").exists());
+    }
+
+    #[test]
+    fn attachment_add_bytes_refuses_empty_names() {
+        let (_tmp, ctx) = create_test_context();
+        for name in ["", "..", "/", "  "] {
+            assert!(attachment_add_bytes(&ctx, name, b"137").is_err(), "{name:?} accepted");
+        }
+        assert!(object_dir_names(&ctx).is_empty(), "a refused name left an object");
+    }
+
+    /// An attachment named like the object's own files must not replace them.
+    #[test]
+    fn an_attachment_named_meta_ttl_keeps_the_objects_metadata() {
+        let (_tmp, ctx) = create_test_context();
+
+        let uuid = attachment_add_bytes(&ctx, "meta.ttl", b"137").unwrap();
+
+        let dir = object_path(&ctx, &uuid);
+        assert_eq!(fs::read(dir.join("attachment-meta.ttl")).unwrap(), b"137");
+        let meta = ObjectMeta::read_from_file(&dir.join("meta.ttl")).unwrap();
+        assert_eq!(meta.object_type, ObjectType::Attachment);
+        assert_eq!(meta.title, "meta.ttl");
+    }
+
+    /// A copy that fails part-way must leave no object, not even a directory.
+    #[test]
+    fn a_failed_attachment_copy_leaves_no_partial_object() {
+        let (tmp, ctx) = create_test_context();
+
+        let err = attachment_add(&ctx, "", &tmp.path().join("missing.pdf")).unwrap_err();
+
+        assert!(err.contains("missing.pdf"), "error does not name the file: {err}");
+        assert!(object_dir_names(&ctx).is_empty(), "partial object left: {:?}", object_dir_names(&ctx));
+    }
+
+    /// An unwritable vault fails the upload before anything appears in it.
+    #[test]
+    #[cfg(unix)]
+    fn attachment_add_bytes_into_a_read_only_vault_leaves_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_tmp, ctx) = create_test_context();
+        let objects = objects_dir(&ctx);
+        fs::set_permissions(&objects, fs::Permissions::from_mode(0o555)).unwrap();
+        // Root ignores permissions; the check means nothing there.
+        if tempfile::tempdir_in(&objects).is_ok() {
+            fs::set_permissions(&objects, fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+
+        let result = attachment_add_bytes(&ctx, "photo.png", b"137");
+        fs::set_permissions(&objects, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(result.is_err());
+        assert!(object_dir_names(&ctx).is_empty());
+    }
+
+    #[test]
+    fn attachment_add_copies_and_keeps_the_source() {
+        let (tmp, ctx) = create_test_context();
+        let file = tmp.path().join("report.pdf");
+        fs::write(&file, b"%PDF-137").unwrap();
+
+        let uuid = attachment_add(&ctx, "", &file).unwrap();
+
+        assert_eq!(fs::read(object_path(&ctx, &uuid).join("report.pdf")).unwrap(), b"%PDF-137");
+        assert_eq!(fs::read(&file).unwrap(), b"%PDF-137", "the source must stay untouched");
+        let meta = ObjectMeta::read_from_file(&object_path(&ctx, &uuid).join("meta.ttl")).unwrap();
+        assert_eq!(meta.mime_type.as_deref(), Some("application/pdf"));
     }
 
     /// A live page that still links to a trashed object must not bring it back.
