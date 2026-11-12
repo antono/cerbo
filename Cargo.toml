@@ -5,3 +5,11 @@ members = [
     "src-tauri",
 ]
 resolver = "2"
+
+# Debug info for dependencies is most of target/debug (RocksDB alone is ~1 GB
+# per build); our own crates keep line tables for backtraces and stepping.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
