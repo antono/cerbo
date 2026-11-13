@@ -7,6 +7,7 @@ import {
   gatePreviewRendering,
   inputScroller,
   nextPlainInput,
+  caretTopInText,
   offsetCaretByTextareaScroll,
   restoreInputView,
   usePlainInput,
@@ -155,5 +156,36 @@ describe('offsetCaretByTextareaScroll', () => {
     textarea.scrollTop = 0;
     textarea.scrollLeft = 0;
     expect(input.getCursorXY(0)).toMatchObject({ y: 5000, top: 5000 });
+  });
+
+  it('keeps the vertical position inside the visible box', () => {
+    const textarea = Object.assign(fakeTextarea(true, null), { clientHeight: 420 });
+    // Carta's estimate, 137 px below and then above the box at this scroll offset.
+    let estimate = 4800 + 420 + 137;
+    const input: CaretTarget = { textarea, getCursorXY: () => ({ x: 10, y: estimate, left: 10, top: estimate, right: 0, bottom: 0 }) };
+    offsetCaretByTextareaScroll(input);
+    textarea.scrollTop = 4800;
+
+    expect(input.getCursorXY()).toMatchObject({ y: 420, top: 420 });
+    estimate = 4800 - 137;
+    expect(input.getCursorXY()).toMatchObject({ y: 0, top: 0 });
+    estimate = 4800 + 137;
+    expect(input.getCursorXY()).toMatchObject({ y: 137, top: 137 });
+  });
+});
+
+describe('caretTopInText', () => {
+  it('returns the unscrolled, unlimited position of a wrapped input', () => {
+    const textarea = Object.assign(fakeTextarea(true, null), { clientHeight: 420 });
+    const input: CaretTarget = { textarea, getCursorXY: () => ({ x: 0, y: 9000, left: 0, top: 9000, right: 0, bottom: 0 }) };
+    offsetCaretByTextareaScroll(input);
+    textarea.scrollTop = 4800;
+    expect(caretTopInText(input)).toBe(9000);
+  });
+
+  it('returns the measured position of an input that was not wrapped', () => {
+    const textarea = fakeTextarea(false, null);
+    const input: CaretTarget = { textarea, getCursorXY: () => ({ x: 0, y: 137, left: 0, top: 137, right: 0, bottom: 0 }) };
+    expect(caretTopInText(input)).toBe(137);
   });
 });

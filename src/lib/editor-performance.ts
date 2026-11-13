@@ -91,21 +91,44 @@ export interface CaretTarget {
   getCursorXY(selectionPoint?: number): { x: number; y: number; left: number; top: number; right: number; bottom: number };
 }
 
+// The unscrolled `getCursorXY` of every input `offsetCaretByTextareaScroll` wrapped.
+const textCaret = new WeakMap<CaretTarget, CaretTarget['getCursorXY']>();
+
 /**
  * Carta measures the caret from the top of the text and expects the textarea
  * to be as tall as its content (its container scrolls). The plain textarea
  * scrolls itself, so popups bound to the caret (emoji picker, `bindToCaret`)
  * would land below the visible box on a scrolled page. Subtracts the
  * textarea's own scroll offset from every caret position.
+ *
+ * Carta's measurement is an estimate: it lays the text out again in a `div`,
+ * and on a long page with many wrapped lines the result drifts by hundreds of
+ * pixels, enough to put a popup outside the window. A popup opens while
+ * typing, when the browser keeps the caret inside the box, so the vertical
+ * position is kept inside the box too. `caretTopInText` gives the position
+ * without the scroll offset and without that limit.
  */
 export function offsetCaretByTextareaScroll(input: CaretTarget): void {
   const getCursorXY = input.getCursorXY;
+  textCaret.set(input, getCursorXY);
   input.getCursorXY = function (selectionPoint?: number) {
     const xy = getCursorXY.call(this, selectionPoint ?? input.textarea.selectionStart);
     const dx = input.textarea.scrollLeft;
-    const dy = input.textarea.scrollTop;
-    return { ...xy, x: xy.x - dx, left: xy.left - dx, y: xy.y - dy, top: xy.top - dy };
+    const boxHeight = input.textarea.clientHeight;
+    const scrolled = xy.y - input.textarea.scrollTop;
+    const y = boxHeight > 0 ? Math.min(Math.max(scrolled, 0), boxHeight) : scrolled;
+    return { ...xy, x: xy.x - dx, left: xy.left - dx, y, top: y };
   };
+}
+
+/**
+ * The caret's distance from the top of the text, for scrolling it into view:
+ * `getCursorXY().top` as Carta measures it, whether or not the input's
+ * positions were offset by `offsetCaretByTextareaScroll`.
+ */
+export function caretTopInText(input: CaretTarget): number {
+  const measure = textCaret.get(input) ?? input.getCursorXY;
+  return measure.call(input, input.textarea.selectionStart).top;
 }
 
 /** The part of a Carta instance the render gate replaces. */

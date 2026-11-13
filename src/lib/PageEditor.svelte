@@ -13,6 +13,7 @@
   import ExternalChangeDialog from './ExternalChangeDialog.svelte';
   import PlainMarkdownInput from './PlainMarkdownInput.svelte';
   import {
+    caretTopInText,
     INPUT_MODE_RECHECK_MS,
     OVERLAY_HIGHLIGHT_DELAY_MS,
     captureInputView,
@@ -553,9 +554,7 @@
       // show its line (window or font size changed, lines added above it).
       const input = carta.input;
       if (input) {
-        const { top } = input.getCursorXY();
-        // The plain textarea reports the caret relative to its own scroll offset.
-        const caretTop = scroller === input.textarea ? top + scroller.scrollTop : top;
+        const caretTop = caretTopInText(input);
         scroller.scrollTop = scrollTopShowingCaret(scroller.scrollTop, scroller.clientHeight, caretTop, input.getRowHeight());
       }
     }

@@ -31,6 +31,8 @@ describe('launch with the fixture vault', () => {
     await expect(row).toHaveAttribute('title', path as string);
     await expect(row.$('.vault-item-path-tail')).toHaveElementProperty('textContent', '/vault');
     await browser.keys('Escape');
+    // The selector fades out; until it is gone its backdrop covers the sidebar.
+    await $('.vault-selector-modal').waitForExist({ reverse: true, timeout: 10_000 });
   });
 
   it('tells same-named vaults apart and truncates a long path in the middle', async () => {
@@ -48,9 +50,11 @@ describe('launch with the fixture vault', () => {
     const tail = rows[1].$('.vault-item-path-tail');
     await expect(tail).toHaveElementProperty('textContent', `/${LONG_PATH_VAULT_DIR}`);
     expect(await head.getProperty('scrollWidth')).toBeGreaterThan((await head.getProperty('clientWidth')) as number);
-    expect(await tail.getProperty('scrollWidth')).toBeLessThanOrEqual((await tail.getProperty('clientWidth')) as number);
+    // Both are rounded to whole pixels, each its own way: a fractional width can differ by one.
+    expect(await tail.getProperty('scrollWidth')).toBeLessThanOrEqual(((await tail.getProperty('clientWidth')) as number) + 1);
     expect(await tail.getProperty('clientWidth')).toBeGreaterThan(0);
     expect(await rows[1].getAttribute('title')).toMatch(new RegExp(`/${LONG_PATH_VAULT_DIR}$`));
     await browser.keys('Escape');
+    await $('.vault-selector-modal').waitForExist({ reverse: true, timeout: 10_000 });
   });
 });
