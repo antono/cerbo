@@ -22,6 +22,9 @@ let
       pkgs.makeWrapper
       pkgs.rustPlatform.bindgenHook
     ];
+    # nixpkgs' cargo setup hook exports RUSTONIG_SYSTEM_LIBONIG=1, so onig_sys
+    # links the system oniguruma instead of its bundled copy.
+    buildInputs = [ pkgs.oniguruma ];
     # Network-dependent tests are #[ignore]d; the rest run in the sandbox.
     doCheck = true;
     # Imports shell out to curl; the import-ontology tests fetch file:// URLs.
@@ -92,7 +95,7 @@ let
       pkgs.desktop-file-utils
       pkgs.rustPlatform.bindgenHook
     ];
-    buildInputs = tauri-deps ++ [ pkgs.gtk3 pkgs.gsettings-desktop-schemas pkgs.adwaita-icon-theme ];
+    buildInputs = tauri-deps ++ [ pkgs.gtk3 pkgs.gsettings-desktop-schemas pkgs.adwaita-icon-theme pkgs.oniguruma ];
 
     postPatch = ''
       # Nullify devUrl and point frontendDist to the built frontend in the Nix store
