@@ -2,35 +2,23 @@
 
 ## Purpose
 TBD - created by archiving change adapt-cerbo-desktop-to-new-storage-model. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: BacklinkEntry carries uuid and title
 The frontend type `BacklinkEntry` SHALL have the shape `{ uuid: string; title: string }`. The field `slug` SHALL NOT exist. The Tauri `backlinks_get` command SHALL return `Vec<BacklinkEntry>` (resolved), not `Vec<String>` (raw UUIDs).
 
 #### Scenario: backlinks_get returns resolved entries
 - **WHEN** the frontend calls `invoke('backlinks_get', { uuid })`
 - **THEN** each entry in the returned array SHALL have a `uuid` field
-- **THEN** each entry SHALL have a `title` field read from the source page's `meta.ttl`
+- **THEN** each entry SHALL have a `title` field taken from the source page's metadata in the semantic index
 - **THEN** no entry SHALL have a `slug` field
-- **THEN** entries whose source object has no readable `meta.ttl` SHALL be omitted silently
+- **THEN** entries whose source object has no title in the index SHALL be omitted silently
 
 #### Scenario: Empty backlinks
 - **WHEN** no other page links to the current page
 - **THEN** `backlinks_get` SHALL return an empty array
 - **THEN** the panel SHALL display an empty-state message
-
-### Requirement: backlinks_get resolves UUIDs in the Tauri command layer
-The `backlinks_get` Tauri command SHALL read raw UUIDs from `backrefs.ttl` via `cerbo_core::links::backrefs_read`, then resolve each UUID to `{ uuid, title }` by reading `meta.ttl` for each source object. Resolution SHALL happen in the Rust command layer, not in the frontend.
-
-#### Scenario: Resolution reads meta.ttl for each backlink
-- **WHEN** `backrefs_read` returns `[uuid-a, uuid-b]` for the current page
-- **THEN** the command reads `.cerbo/objects/uuid-a/meta.ttl` and extracts `:title`
-- **THEN** the command reads `.cerbo/objects/uuid-b/meta.ttl` and extracts `:title`
-- **THEN** the command returns `[{ uuid: "uuid-a", title: "Page A" }, { uuid: "uuid-b", title: "Page B" }]`
-
-#### Scenario: Missing meta.ttl is skipped
-- **WHEN** a backref UUID points to an object directory that lacks `meta.ttl`
-- **THEN** that entry SHALL be silently omitted from the returned list
-- **THEN** the command SHALL NOT return an error
 
 ### Requirement: Backlinks panel navigates by uuid
 The frontend backlinks panel SHALL navigate to a source page by calling `openPage(entry.uuid)`. It SHALL NOT use `entry.slug`.
@@ -41,3 +29,19 @@ The frontend backlinks panel SHALL navigate to a source page by calling `openPag
 - **THEN** the editor loads the content of the source page identified by that UUID
 - **THEN** the backlinks panel updates to show backlinks for the newly opened page
 
+### Requirement: backlinks_get queries the semantic index
+
+The `backlinks_get` Tauri command SHALL return the backlinks defined by the `backlinks` capability, obtained from the vault's semantic index through `cerbo-core`. It SHALL NOT read `backrefs.ttl` or any per-source `meta.ttl`. When the index is busy or cannot be opened, it SHALL return an error that the panel shows as a non-blocking message instead of the list.
+
+#### Scenario: Backlinks after another device synced a page
+- **WHEN** a page linking to the current page arrived through file sync
+- **THEN** the panel SHALL list it the next time backlinks are loaded
+
+#### Scenario: Index busy
+- **WHEN** the CLI holds the index longer than the retry limit while the user opens a page
+- **THEN** the panel SHALL show that backlinks are temporarily unavailable
+- **THEN** the page itself SHALL open and be editable
+
+#### Scenario: First open after upgrade
+- **WHEN** the user opens a vault that has no index yet
+- **THEN** the index SHALL be built and the panel SHALL show a loading state until it is ready

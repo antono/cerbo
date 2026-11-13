@@ -43,11 +43,11 @@ collide with any previous or future deletion of the same object.
 
 ### Requirement: Trash is excluded from all vault operations
 The trash area SHALL be treated as outside the live object set. Indexing, page listing, link
-resolution, backreference maintenance, and symlink materialisation SHALL ignore it.
+resolution, the semantic index, and symlink materialisation SHALL ignore it.
 
 #### Scenario: Reindex ignores trash
 - **WHEN** a full vault reindex runs and the trash contains deleted objects
-- **THEN** no metadata or backreferences SHALL be derived from trash contents
+- **THEN** no metadata or index entries SHALL be derived from trash contents
 - **THEN** the reindex SHALL NOT report trash entries as problems
 
 #### Scenario: Symlink rebuild ignores trash

@@ -2,6 +2,7 @@
 
 ## Purpose
 Enable creating, reading, updating, and deleting pages within a vault using UUID-based object storage.
+
 ## Requirements
 
 ### Requirement: Create page
@@ -80,27 +81,6 @@ The system SHALL provide a unified editor interface using a tabbed layout (e.g.,
 - **WHEN** the user is in edit mode and presses `Esc`
 - **THEN** the system SHALL switch to the "Preview" mode
 
-### Requirement: Write page
-The system SHALL write updated markdown content to a page's `page.md` file atomically via `cerbo_core::links::page_write_with_links`. The system SHALL update `backrefs.ttl` on all TARGET objects whose link status changes as a result of this write. The system SHALL NOT write to `type: :Source` pages (read-only).
-
-#### Scenario: Save page content updates backrefs
-- **WHEN** the frontend provides a UUID and updated markdown content via `page_write`
-- **THEN** the Tauri command calls `page_write_with_links(ctx, uuid, content)`
-- **THEN** the content is written to `.cerbo/objects/<uuid>/page.md`
-- **THEN** outgoing `cerbo://` links are extracted from the new content
-- **THEN** `backrefs.ttl` is updated on each target object to reflect added or removed links
-- **THEN** `meta.ttl` `schema:dateModified` is updated
-
-#### Scenario: Write to source type (read-only)
-- **WHEN** the user attempts to write to a page with `type: :Source` in `meta.ttl`
-- **THEN** the system SHALL return an error "Cannot write to source type (read-only)"
-- **THEN** no changes are written to disk
-
-#### Scenario: Link removed on save clears backref
-- **WHEN** a page previously linked to `cerbo://<uuid-b>` and the user saves without that link
-- **THEN** `page_write_with_links` detects the removed link
-- **THEN** `.cerbo/objects/<uuid-b>/backrefs.ttl` SHALL NOT contain the source page's UUID
-
 ### Requirement: Delete page
 The system SHALL delete a page by relocating its entire `.cerbo/objects/<uuid>/` directory
 into the vault's trash area, as specified by the `object-trash` capability. The system SHALL
@@ -113,8 +93,8 @@ The page's files SHALL be recoverable from the trash; the operation SHALL NOT de
 - **WHEN** the user confirms the deletion
 - **THEN** the directory `.cerbo/objects/<uuid>/` SHALL no longer exist
 - **THEN** the page's files SHALL exist under `.cerbo/trash/` with their content preserved
-- **THEN** other objects' `backrefs.ttl` are updated to remove backlinks
-- **THEN** no vault-wide index file SHALL be written
+- **THEN** the page's triples, including its outgoing links, SHALL be removed from the semantic index
+- **THEN** no other object's files SHALL be written
 
 #### Scenario: Delete source type (read-only)
 - **WHEN** the user attempts to delete a page with `type: :Source`
@@ -212,3 +192,24 @@ The system SHALL provide `cerbo resolve <uuid>` command that returns the local f
 - **WHEN** user runs `cerbo resolve <uuid-attachment>`
 - **THEN** the system detects the binary filename from the attachment directory
 - **THEN** returns `/path/to/vault/.cerbo/objects/<uuid-attachment>/filename`
+
+### Requirement: Write page content
+
+The system SHALL write updated markdown content to a page's `page.md` atomically, update its own `meta.ttl` and `annotations.ttl`, and update the page's triples in the semantic index. It SHALL NOT write any other object's files. The system SHALL NOT write to `type: :Source` pages (read-only).
+
+#### Scenario: Save page content
+- **WHEN** the frontend provides a UUID and updated markdown content via `page_write`
+- **THEN** the content is written to `.cerbo/objects/<uuid>/page.md`
+- **THEN** `meta.ttl` `schema:dateModified` is updated
+- **THEN** the page's outgoing `cerbo://` links are recorded in the semantic index
+- **THEN** no file outside `.cerbo/objects/<uuid>/` is modified
+
+#### Scenario: Write to source type (read-only)
+- **WHEN** the user attempts to write to a page with `type: :Source` in `meta.ttl`
+- **THEN** the system SHALL return an error "Cannot write to source type (read-only)"
+- **THEN** no changes are written to disk
+
+#### Scenario: Link removed on save
+- **WHEN** a page previously linked to `cerbo://<uuid-b>` and the user saves without that link
+- **THEN** B's backlinks SHALL NOT include the page
+- **THEN** no file of object B SHALL be modified

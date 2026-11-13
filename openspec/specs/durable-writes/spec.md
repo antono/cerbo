@@ -50,16 +50,11 @@ that the new content survives an abrupt power loss.
 - **THEN** after restart the file SHALL contain either the complete previous or the complete new content
 
 ### Requirement: Uniform application across all vault writes
-Every component that writes vault files — page content, object metadata, backreferences,
-annotations, and vault-level configuration and state — SHALL use the atomic replacement
+Every component that writes vault files — page content, object metadata, annotations, and vault-level configuration and state — SHALL use the atomic replacement
 protocol. No vault write path SHALL bypass it.
 
 #### Scenario: Metadata write is atomic
 - **WHEN** an object's metadata file is updated
-- **THEN** the write SHALL use the atomic replacement protocol
-
-#### Scenario: Backreference write is atomic
-- **WHEN** an object's backreference file is rewritten
 - **THEN** the write SHALL use the atomic replacement protocol
 
 #### Scenario: A new non-atomic write path is rejected
@@ -73,7 +68,3 @@ success, and SHALL NOT silently discard the failure, when a vault file could not
 #### Scenario: Metadata update fails during a page save
 - **WHEN** page content is written successfully but the metadata update fails
 - **THEN** the save operation SHALL report an error identifying which part failed
-
-#### Scenario: Backreference update fails during a page save
-- **WHEN** page content is written successfully but a backreference update fails
-- **THEN** the save operation SHALL report an error rather than returning success

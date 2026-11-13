@@ -2,16 +2,17 @@
 
 ## Purpose
 
-Defines requirements for the `cerbo index` CLI command, which rebuilds metadata files (`backrefs.ttl` and `annotations.ttl`) by re-parsing page content. Supports scoped operation across all vaults, a single vault, or a single page.
+Defines requirements for the `cerbo index` CLI command, which rebuilds `annotations.ttl` by re-parsing page content, rebuilds the semantic index and removes leftover `backrefs.ttl` files. Supports scoped operation across all vaults, a single vault, or a single page.
+
 ## Requirements
 
 ### Requirement: Index page metadata with scope control
 
-The system SHALL provide a CLI command `cerbo index` that indexes `backrefs.ttl` and `annotations.ttl` files by re-parsing page content, with support for three scopes: all pages (default), single vault, or single page.
+The system SHALL provide a CLI command `cerbo index` that regenerates `annotations.ttl` files by re-parsing page content and updates the semantic index, with support for three scopes: all pages (default), single vault, or single page. It SHALL NOT write `backrefs.ttl` files.
 
 #### Scenario: Index all pages across all vaults
 - **WHEN** user runs `cerbo index` with no arguments
-- **THEN** system scans all vaults, processes all pages, and regenerates backrefs and annotations for each page
+- **THEN** system scans all vaults, processes all pages, and regenerates annotations and the semantic index for each page
 
 #### Scenario: Index specific vault by UUID
 - **WHEN** user runs `cerbo index --vault <vault-uuid>`
@@ -28,48 +29,6 @@ The system SHALL provide a CLI command `cerbo index` that indexes `backrefs.ttl`
 #### Scenario: Handle parsing errors gracefully
 - **WHEN** a page.md file is corrupted or unparseable
 - **THEN** system logs the error, continues processing remaining pages, and exits with non-zero status code
-
-### Requirement: Extract and regenerate backref metadata
-
-The system SHALL parse each `page.md` file for `cerbo://<uuid>` links and update the
-corresponding `backrefs.ttl` files for each referenced page. A full-vault reindex SHALL
-accumulate the complete backreference set in a single pass over the vault and write each
-affected object's `backrefs.ttl` at most once. It SHALL NOT clear every object's
-backreferences and then rebuild them, so that an interruption cannot leave the vault with
-backreferences erased.
-
-#### Scenario: Page with outgoing links
-- **WHEN** page A contains `cerbo://uuid-b` and `cerbo://uuid-c`
-- **THEN** system adds page A's UUID to `backrefs.ttl` in both page B and page C's object directories
-
-#### Scenario: Page with no links
-- **WHEN** page contains no `cerbo://` links
-- **THEN** no backref files are modified for other pages (but this page's backrefs may still be updated by other pages linking to it)
-
-#### Scenario: Broken link reference
-- **WHEN** page contains `cerbo://nonexistent-uuid`
-- **THEN** system logs a warning but continues processing (orphaned link)
-- **THEN** no object directory or `backrefs.ttl` SHALL be created for that UUID
-
-#### Scenario: Each affected object is written once per reindex
-- **WHEN** a full reindex runs over a vault where 137 pages all link to the same hub page
-- **THEN** the hub's `backrefs.ttl` SHALL be written once, containing all 137 backreferences
-- **THEN** it SHALL NOT be rewritten once per incoming link
-
-#### Scenario: Interrupted reindex does not erase backreferences
-- **WHEN** a full reindex is interrupted partway through
-- **THEN** every object's `backrefs.ttl` SHALL contain either its previous or its newly computed content
-- **THEN** no object SHALL be left with its backreferences cleared
-
-#### Scenario: Reindex converges on a stale backreference
-- **WHEN** page A no longer links to page B but B's `backrefs.ttl` still records A
-- **AND** a full-vault reindex runs
-- **THEN** B's `backrefs.ttl` SHALL NOT record A afterwards
-
-#### Scenario: Reindex reports problems through its exit status
-- **WHEN** a reindex encounters an object it cannot read or write
-- **THEN** the problem SHALL be reported to stderr with the offending UUID
-- **THEN** the command SHALL exit non-zero
 
 ### Requirement: Extract and regenerate annotation metadata
 
@@ -105,15 +64,15 @@ The system SHALL produce identical results when run multiple times on the same v
 
 #### Scenario: Multiple runs on all pages
 - **WHEN** user runs `cerbo index` twice on unchanged vault
-- **THEN** second run produces identical backrefs.ttl and annotations.ttl files as first run
+- **THEN** second run produces identical annotations.ttl files and an index answering every query identically
 
 #### Scenario: Multiple runs on single page
 - **WHEN** user runs `cerbo index --page <uuid>` twice without changing the page
-- **THEN** second run produces identical backrefs.ttl and annotations.ttl as first run
+- **THEN** second run produces identical annotations.ttl and index content as first run
 
 #### Scenario: Incremental changes
 - **WHEN** user adds a link to page A, runs index, then removes the link and runs index again
-- **THEN** final state matches original state (backref removed from target page)
+- **THEN** final state matches original state (the target page no longer lists A as a backlink)
 
 ### Requirement: Backfill missing slugs
 
@@ -182,3 +141,44 @@ The system SHALL compute the rendered path `<virtualPath>/<slug>` for every non-
 #### Scenario: No collision
 - **WHEN** no two objects' combined paths collide
 - **THEN** the collision check exits with status zero (subject to other index errors)
+
+### Requirement: Rebuild the semantic graph index
+
+`cerbo index` SHALL rebuild the semantic graph index after regenerating annotations, using the same scope: all vaults, `--vault`, or `--page`. With `--page`, only that page's triples SHALL be replaced in the index.
+
+#### Scenario: Default run rebuilds the graph
+- **WHEN** the user runs `cerbo index`
+- **THEN** every vault's semantic index SHALL match its files afterwards
+
+#### Scenario: Single page
+- **WHEN** the user runs `cerbo index --page <uuid>`
+- **THEN** only that page's triples SHALL be replaced in the index
+
+### Requirement: Remove legacy backrefs files
+
+A full `cerbo index` of a vault SHALL delete every `backrefs.ttl` file of live objects in that vault and report how many it deleted. Cerbo SHALL ignore `backrefs.ttl` files everywhere else, and SHALL NOT read backlinks from them.
+
+#### Scenario: Upgrading an existing vault
+- **WHEN** a vault still contains 137 `backrefs.ttl` files and the user runs `cerbo index`
+- **THEN** no `backrefs.ttl` SHALL remain under `.cerbo/objects/`
+- **THEN** the summary SHALL report 137 removed legacy files
+
+#### Scenario: Leftover file is ignored
+- **WHEN** an object still has a `backrefs.ttl` that names a page which no longer links to it
+- **THEN** that page SHALL NOT be listed as a backlink
+
+### Requirement: Refresh embeddings on request
+
+`cerbo index --embeddings` SHALL compute embeddings for every page in scope whose content changed since its last embedding, then refresh the `cerbo:similarTo` links. Unchanged pages SHALL NOT be re-embedded.
+
+#### Scenario: Only changed pages are embedded
+- **WHEN** the user runs `cerbo index --embeddings` twice and edits one page in between
+- **THEN** the second run SHALL compute exactly one embedding
+
+### Requirement: Summary includes semantic index statistics
+
+The completion summary of `cerbo index` SHALL include the number of triples in the index, the number of legacy `backrefs.ttl` files removed and, when `--embeddings` is given, the number of pages embedded. With `--json`, these SHALL be the fields `triples`, `legacy_backrefs_removed` and `embedded`.
+
+#### Scenario: JSON summary
+- **WHEN** the user runs `cerbo index --embeddings --json`
+- **THEN** the JSON summary SHALL contain numeric `triples`, `legacy_backrefs_removed` and `embedded` fields

@@ -27,7 +27,7 @@ Prerequisite: `normalize-rdf-vocabulary` is implemented and archived.
 - [x] 3.3 Make index failures log a warning and set `stale: true` without failing the write; verify a test that holds `LOCK` during `object_write` and asserts the files are written, the state is stale, and the next query repairs it
 - [x] 3.4 Rewrite `attachment_list` to parse `page.md` links and keep targets whose type is Attachment; verify existing attachment tests still pass
 - [x] 3.5 Delete the `backrefs.ttl` API from `core/src/links.rs` (`backrefs_read*`, `backrefs_add*`, `backrefs_remove*`, `backrefs_set_vault`) and its tests; verify `rg backrefs core cli src-tauri` finds only the legacy-file cleanup in task 4.1
-- [ ] 3.6 Switch the Tauri `backlinks_get` to `cerbo_core::semantic::backlinks`, return a distinct "index busy" error, and make the panel in `RightSidebarPanel.svelte` show a non-blocking message and a loading state while the index builds; verify the `desktop-backlinks-panel` scenarios manually on a build from `nix build .#cerbo-desktop`
+- [x] 3.6 Switch the Tauri `backlinks_get` to `cerbo_core::semantic::backlinks`, return a distinct "index busy" error, and make the panel in `RightSidebarPanel.svelte` show a non-blocking message and a loading state while the index builds; verify the `desktop-backlinks-panel` scenarios manually on a build from `nix build .#cerbo-desktop`
 - [x] 3.7 Add `cerbo page backlinks <uuid> [--json] [--vault]`; verify CLI tests for "Backlinks as JSON" and "Unknown object"
 
 ## 4. `cerbo index` and `cerbo sparql`
@@ -53,7 +53,7 @@ Prerequisite: `normalize-rdf-vocabulary` is implemented and archived.
 ## 7. Integration checks
 
 - [x] 7.1 On `test-vault` with the real model: run `cerbo index --embeddings`, then `cerbo search "поездка в Берлин"` and `cerbo similar <uuid>`; tune the 0.80 threshold if results are empty or noisy and record the value in design.md D7
-- [ ] 7.2 Run the CLI while the desktop app edits the same vault (`nix build .#cerbo-desktop`); verify no crash, the CLI waits or reports "index busy", `cerbo sparql` and `cerbo page backlinks` reflect the app's edits, and the panel shows the CLI's edits
+- [x] 7.2 Run the CLI while the desktop app edits the same vault (`nix build .#cerbo-desktop`); verify no crash, the CLI waits or reports "index busy", `cerbo sparql` and `cerbo page backlinks` reflect the app's edits, and the panel shows the CLI's edits
 - [x] 7.3 Simulate sync: copy a page directory that links to an existing page into `test-vault/.cerbo/objects/` with `cp -rf`; verify the target's backlinks list the copied page without running `cerbo index`
 - [x] 7.4 Remove all `backrefs.ttl` from `test-vault` with `cerbo index` and commit the result with the implementation; verify `git status` shows only those deletions plus intended changes
 - [x] 7.5 Run `cargo test -p cerbo-core --all-features -- --test-threads=1`, `cargo test -p cerbo`, `nix build .#cerbo .#cerbo-desktop` and `openspec validate add-oxigraph-semantic-index --strict`; verify all pass
