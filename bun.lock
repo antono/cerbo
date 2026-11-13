@@ -9,6 +9,7 @@
         "@cartamd/plugin-attachment": "^4.2.0",
         "@cartamd/plugin-code": "^4.2.0",
         "@cartamd/plugin-emoji": "^4.3.0",
+        "@git-diff-view/core": "^0.1.8",
         "@git-diff-view/file": "^0.1.8",
         "@git-diff-view/svelte": "^0.1.8",
         "@tailwindcss/vite": "^4.3.3",
