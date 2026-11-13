@@ -54,6 +54,12 @@
     onEditorLeave,
   } from './stores.svelte';
   import { toggleTaskListItemAtIndex } from './task-list';
+  import { createAutosave } from './autosave';
+
+  // Edits are written this long after the last one.
+  const AUTOSAVE_DELAY_MS = 800;
+  // How long a window close waits for the last save before the window goes.
+  const CLOSE_SAVE_TIMEOUT_MS = 3000;
 
   // ── Props ─────────────────────────────────────────────────────────────────────
 
@@ -71,8 +77,9 @@
 
   let content = $state('');
   let baselineContent = $state('');
-  let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let saving = $state(false);
+  // Saves still running; `saving` stays set until the last one settles.
+  let activeSaves = 0;
   let editorContainer = $state<HTMLElement | null>(null);
   let showConflictPrompt = $state(false);
   let previewDiffFile = $state<ReturnType<typeof buildPageDiffFile> | null>(null);
@@ -103,8 +110,11 @@
 
     untrack(() => {
       if (currentUuid !== loadedUuid) {
-        // The textarea still holds the page being left: store where editing it ended.
+        // The textarea still holds the page being left: store where editing it
+        // ended, and write edits whose save was still waiting. A vault switch
+        // flushed them through the leave hook, before the vault changed.
         void persistCursor(captureCursor());
+        if (app.activeVaultId === loadedVaultId) void autosave.flush();
         loadedVaultId = app.activeVaultId;
         loadedUuid = currentUuid;
         baselineContent = externalContent;
@@ -290,45 +300,53 @@
   });
 
   // Auto-save
+
+  /** Write `value` to page `target`; when its H1 changed, update the page title too. */
+  async function persistPage(target: string, value: string): Promise<void> {
+    activeSaves += 1;
+    saving = true;
+    try {
+      // Not for a page being left: the editor already shows another one.
+      if (target === app.currentUuid) suppressNextOwnPageChange();
+      const finalContent = await savePage(target, value);
+      // The save failed and the error is shown: the edits stay unsaved.
+      if (finalContent === undefined) return;
+      // Only touch the editor when it still shows the page that was saved.
+      if (target === loadedUuid) {
+        app.currentContent = finalContent;
+        baselineContent = finalContent;
+        // If backend modified the content (e.g. prepended title), update the editor
+        if (finalContent !== value) content = finalContent;
+      }
+      // The H1 changed: update the title after the write, so body edits made
+      // with it are already on disk. A page that was left is not reopened.
+      const extractedTitle = extractTitle(value);
+      const savedPage = app.pages.find((p) => p.uuid === target);
+      if (extractedTitle && savedPage && extractedTitle !== savedPage.title) {
+        await updatePageTitle(target, extractedTitle, { reopen: target === loadedUuid });
+      }
+      // The panel lists the Attachments page.md links to, so it follows the save.
+      if (attachmentsChanged && target === loadedUuid) {
+        attachmentsChanged = false;
+        await loadAttachments(target);
+      }
+    } catch (e) {
+      app.error = String(e);
+    } finally {
+      activeSaves -= 1;
+      saving = activeSaves > 0;
+    }
+  }
+
+  const autosave = createAutosave<string>(AUTOSAVE_DELAY_MS, persistPage);
+
   $effect(() => {
     const value = content;
-    if (!value && !app.currentContent) return;
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(async () => {
-      const targetUuidForSave = uuid;
-      saving = true;
-      try {
-        // ── Detect title change for auto-update ──
-        const extractedTitle = extractTitle(value);
-        const currentPage = app.pages.find(p => p.uuid === uuid);
-
-        if (extractedTitle && currentPage && extractedTitle !== currentPage.title) {
-          // Title changed in markdown, update title metadata then save content
-          await updatePageTitle(uuid, extractedTitle);
-        } else {
-          suppressNextOwnPageChange();
-          const finalContent = await savePage(uuid, value);
-          // Only update currentContent if the uuid hasn't changed in the meantime
-          if (uuid === targetUuidForSave) {
-            app.currentContent = finalContent ?? value;
-            baselineContent = finalContent ?? value;
-            // If backend modified the content (e.g. prepended title), update the editor
-            if (finalContent && finalContent !== value) {
-              content = finalContent;
-            }
-          }
-        }
-        // The panel lists the Attachments page.md links to, so it follows the save.
-        if (attachmentsChanged && uuid === targetUuidForSave) {
-          attachmentsChanged = false;
-          await loadAttachments(uuid);
-        }
-      } catch (e) {
-        app.error = String(e);
-      } finally {
-        saving = false;
-      }
-    }, 800);
+    untrack(() => {
+      if (!loadedUuid) return;
+      if (!value && !app.currentContent) return;
+      autosave.schedule(loadedUuid, value, value !== baselineContent);
+    });
   });
 
   // Attach link click handlers via event delegation on the container
@@ -425,8 +443,7 @@
             before: content,
             after: updated,
           });
-          if (saveTimer) clearTimeout(saveTimer);
-          saveTimer = null;
+          autosave.cancel();
           content = updated;
           app.currentContent = updated;
           void savePage(uuid, updated).then((finalContent) => {
@@ -571,14 +588,19 @@
   });
 
   onMount(() => {
-    const stopLeaveHook = onEditorLeave(saveCursorPosition);
+    // Leaving the page without a page change (vault switch, quit): write the
+    // edits still waiting for their save, and where editing ended.
+    const leave = async () => {
+      await Promise.all([autosave.flush(), saveCursorPosition()]);
+    };
+    const stopLeaveHook = onEditorLeave(leave);
     // Closing the window by the window manager (the app's own quit runs the
     // leave hook). Bounded, so a stuck save never keeps the window open.
     let stopCloseListener: (() => void) | null = null;
     let disposed = false;
     void getCurrentWindow()
       .onCloseRequested(async () => {
-        await Promise.race([saveCursorPosition(), new Promise((resolve) => setTimeout(resolve, 1000))]);
+        await Promise.race([leave(), new Promise((resolve) => setTimeout(resolve, CLOSE_SAVE_TIMEOUT_MS))]);
       })
       .then((stop) => {
         if (disposed) stop();

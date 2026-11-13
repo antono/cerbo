@@ -662,11 +662,13 @@ export async function deletePage(uuid: string): Promise<void> {
   }
 }
 
-export async function updatePageTitle(uuid: string, newTitle: string): Promise<void> {
+// `reopen: false` is for a page the editor already left: its title is updated
+// without navigating back to it.
+export async function updatePageTitle(uuid: string, newTitle: string, options?: { reopen?: boolean }): Promise<void> {
   if (!app.activeVaultId) throw new Error('No active vault');
   await vaultWrite(() => invoke('page_update_title', { uuid, newTitle }));
   await loadPages();
-  await openPage(uuid);
+  if (options?.reopen ?? true) await openPage(uuid);
 }
 
 export function triggerRename(uuid?: string) {
