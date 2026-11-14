@@ -50,6 +50,8 @@ const CERBO_LINK = /\[([^\]]*)\]\(cerbo:\/\/([^)]*)\)$/;
 const SINGLE = /\[([^[\]]*)$/;
 /** Line prefix that makes a following `[` a task-list checkbox. */
 const LIST_MARKER = /^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+$/;
+/** The text after the caret closes a link label and has a complete `(…)` destination. */
+const LABEL_OF_LINK = /^[^[\]\n]*\]\([^)\n]*\)/;
 
 /**
  * The link trigger ending at `caret` in `text`, or null when the picker must
@@ -64,6 +66,8 @@ export function detectTrigger(text: string, caret: number, options: DetectOption
 
   const trigger = matchLine(line, lineStart);
   if (!trigger) return null;
+  // Typing inside the label of a complete link, `[Ber|lin](url)`, is editing that label.
+  if (trigger.kind === 'link' && LABEL_OF_LINK.test(restOfLine(text, caret))) return null;
 
   // For `](cerbo://` the code check looks at the `](`, which ends the link text.
   const at = trigger.start - lineStart - (trigger.kind === 'cerbo-link' ? 2 : 0);
@@ -71,6 +75,12 @@ export function detectTrigger(text: string, caret: number, options: DetectOption
   if (isFenceLine(line)) return null;
   if (inFencedBlockMemo(text, lineStart, memo)) return null;
   return trigger;
+}
+
+/** The rest of the caret's line, from `caret` up to the next newline. */
+function restOfLine(text: string, caret: number): string {
+  const end = text.indexOf('\n', caret);
+  return text.slice(caret, end < 0 ? text.length : end);
 }
 
 function inFencedBlockMemo(text: string, lineStart: number, memo: FenceMemo | undefined): boolean {

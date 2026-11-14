@@ -74,6 +74,18 @@ describe('detectTrigger', () => {
     expect(at('a [New Y')).not.toBeNull();
   });
 
+  it('does not open inside the label of a complete link', () => {
+    const text = 'see [Berlin](cerbo://objects/u1) now';
+    expect(detectTrigger(text, 'see [Ber'.length)).toBeNull();
+    expect(detectTrigger(text, 'see ['.length)).toBeNull();
+    // A `[` typed before plain text still opens.
+    const plain = 'see [Ber and more';
+    expect(detectTrigger(plain, 'see [Ber'.length)).toEqual({ kind: 'link', start: 4, query: 'Ber' });
+    // The check stays on the caret line.
+    const twoLines = 'see [Ber\n](cerbo://objects/u1)';
+    expect(detectTrigger(twoLines, 'see [Ber'.length)).toEqual({ kind: 'link', start: 4, query: 'Ber' });
+  });
+
   it('does not open inside an inline code span', () => {
     expect(at('`code [')).toBeNull();
     expect(at('``a ` [')).toBeNull();
