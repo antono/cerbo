@@ -45,7 +45,13 @@ pub fn layout_path(ctx: &CerboContext) -> PathBuf {
 pub fn tree_layout(ctx: &CerboContext) -> Result<TreeLayout, String> {
     let path = layout_path(ctx);
     match std::fs::read_to_string(&path) {
-        Ok(text) => toml::from_str(&text).map_err(|e| format!("cannot parse {}: {e}", path.display())),
+        Ok(text) => {
+            let mut layout: TreeLayout =
+                toml::from_str(&text).map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+            // Hand edits may leave paths no folder can have; skip them like stale entries.
+            layout.pinned.retain(|p| validate_folder(p).is_ok());
+            Ok(layout)
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(TreeLayout::default()),
         Err(e) => Err(format!("cannot read {}: {e}", path.display())),
     }
@@ -412,6 +418,14 @@ mod tests {
         let err = folder_create(&ctx, "inbox").unwrap_err();
         assert!(err.contains("tree.toml"), "{err}");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "order = [");
+    }
+
+    #[test]
+    fn invalid_pinned_paths_are_skipped_on_read() {
+        let (_tmp, ctx) = ctx();
+        std::fs::write(layout_path(&ctx), "pinned = [\"\", \"/x\", \"a//b\", \"a/\", \"ok\"]\n").unwrap();
+        assert_eq!(tree_layout(&ctx).unwrap().pinned, vec!["ok"]);
+        assert_eq!(labels(&folder_tree(&ctx).unwrap()), vec!["ok/"]);
     }
 
     // ── Display order ──
