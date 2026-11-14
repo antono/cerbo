@@ -21,7 +21,7 @@
 ## 4. CI
 
 - [x] 4.1 Add `.github/workflows/e2e.yml` (push to main, pull_request, dispatch) that builds the app with `bun run tauri build --no-bundle` and runs `bun run test:e2e` headless; verify `actionlint` passes
-- [ ] 4.2 Verify the workflow passes on GitHub for a pull request
+- [x] 4.2 Verify the workflow passes on GitHub for a pull request
 
 ## Workflow follow-up
 
