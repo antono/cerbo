@@ -62,8 +62,10 @@ in this order:
 
 1. Every child named in `order[folder]`, in that order.
 2. Every other child, in today's default order: folders first, then pages,
-   each by name or title, case-insensitive (`localeCompare` with
-   `sensitivity: 'base'` in the frontend, Unicode lowercase in Rust).
+   each by name or title: case ignored, digit runs by value, the rest by
+   code point. One hand-written rule, `compare_names` in Rust and
+   `compareNames` in the frontend, with the same test table on both sides,
+   so the CLI and the sidebar agree on every machine.
 
 An entry that names no existing child (a deleted page, a page that moved
 away, a folder that is gone) is skipped. Duplicates count once, at their

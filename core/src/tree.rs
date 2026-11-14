@@ -5,6 +5,7 @@
 //! Folders are still derived from page paths; the layout only adds pinned
 //! folders and an order on top. A vault without the file looks as before.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -152,7 +153,7 @@ fn child_keys(parent: &str, pages: &[PageMeta], folders: &BTreeSet<String>) -> B
 // ── Display order (D2) ──────────────────────────────────────────────────────
 
 /// The ordered tree: listed children first in list order, then the rest with
-/// folders before pages, each by name or title, case-insensitively.
+/// folders before pages, each by name or title in `compare_names` order.
 pub fn folder_tree(ctx: &CerboContext) -> Result<Vec<TreeNode>, String> {
     let layout = tree_layout(ctx)?;
     let pages = page_list(ctx)?;
@@ -193,12 +194,48 @@ fn build_level(
     apply_order(children, layout.order.get(parent))
 }
 
-fn default_order(a: &TreeNode, b: &TreeNode) -> std::cmp::Ordering {
-    let rank = |n: &TreeNode| match n {
-        TreeNode::Folder { name, .. } => (0, name.to_lowercase(), name.clone()),
-        TreeNode::Page { uuid, title } => (1, title.to_lowercase(), format!("{title}\u{0}{uuid}")),
+fn default_order(a: &TreeNode, b: &TreeNode) -> Ordering {
+    let key = |n: &TreeNode| match n {
+        TreeNode::Folder { name, .. } => (0, name.clone(), String::new()),
+        TreeNode::Page { uuid, title } => (1, title.clone(), uuid.clone()),
     };
-    rank(a).cmp(&rank(b))
+    let (rank_a, name_a, uuid_a) = key(a);
+    let (rank_b, name_b, uuid_b) = key(b);
+    rank_a.cmp(&rank_b).then_with(|| compare_names(&name_a, &name_b)).then_with(|| uuid_a.cmp(&uuid_b))
+}
+
+/// The default order of two names or titles. Letter case is ignored and a run
+/// of ASCII digits counts as a number, so "Page 2" comes before "Page 10";
+/// everything else goes by Unicode code point. Names equal that way fall back
+/// to plain code point order. It depends on no locale, and `compareNames` in
+/// `src/lib/page-tree.ts` is the same rule: change both together.
+pub fn compare_names(a: &str, b: &str) -> Ordering {
+    let (la, lb): (Vec<char>, Vec<char>) = (a.to_lowercase().chars().collect(), b.to_lowercase().chars().collect());
+    let digits = |s: &[char], from: usize| s[from..].iter().take_while(|c| c.is_ascii_digit()).count();
+    let (mut i, mut j) = (0, 0);
+    while i < la.len() && j < lb.len() {
+        if la[i].is_ascii_digit() && lb[j].is_ascii_digit() {
+            let (end_a, end_b) = (i + digits(&la, i), j + digits(&lb, j));
+            // Without leading zeros the longer number is the larger one.
+            while i < end_a - 1 && la[i] == '0' {
+                i += 1;
+            }
+            while j < end_b - 1 && lb[j] == '0' {
+                j += 1;
+            }
+            let by_value = (end_a - i).cmp(&(end_b - j)).then_with(|| la[i..end_a].cmp(&lb[j..end_b]));
+            if by_value != Ordering::Equal {
+                return by_value;
+            }
+            (i, j) = (end_a, end_b);
+        } else if la[i] != lb[j] {
+            return la[i].cmp(&lb[j]);
+        } else {
+            i += 1;
+            j += 1;
+        }
+    }
+    (la.len() - i).cmp(&(lb.len() - j)).then_with(|| a.cmp(b))
 }
 
 fn apply_order(mut children: Vec<(String, TreeNode)>, list: Option<&Vec<String>>) -> Vec<TreeNode> {
@@ -435,6 +472,35 @@ mod tests {
         let pages = [meta(B, "beta", None), meta(A, "Alpha", None), meta(Z, "Own", Some("notes/rust"))];
         let tree = build_tree(&pages, &TreeLayout::default());
         assert_eq!(labels(&tree), vec!["notes/", "  rust/", "    Own", "Alpha", "beta"]);
+    }
+
+    /// The same table as in `src/lib/page-tree.test.ts`: each row is already in order.
+    #[test]
+    fn names_compare_without_case_and_with_numbers_by_value() {
+        let rows: [&[&str]; 8] = [
+            &["Alpha", "beta", "Gamma"],
+            &["Page 2", "Page 10", "Page 137"],
+            &["v002", "v02", "v2", "v3"],
+            &["a", "a1", "a1b", "a2", "ab"],
+            &["1", "9", "10", "a"],
+            &["99999999999999999999998", "99999999999999999999999"],
+            &["Page", "page", "Page 1"],
+            &["z", "é", "я", "ё", "\u{e000}", "😀"],
+        ];
+        for row in rows {
+            for (i, a) in row.iter().enumerate() {
+                for (j, b) in row.iter().enumerate() {
+                    assert_eq!(compare_names(a, b), i.cmp(&j), "{a:?} vs {b:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn default_order_puts_numbered_titles_by_value() {
+        let pages = [meta(B, "Page 10", None), meta(A, "page 2", None), meta(Z, "Page 1", None)];
+        let tree = build_tree(&pages, &TreeLayout::default());
+        assert_eq!(labels(&tree), vec!["Page 1", "page 2", "Page 10"]);
     }
 
     #[test]

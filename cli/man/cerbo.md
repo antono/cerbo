@@ -83,7 +83,7 @@ Source-type (imported) objects are read-only and cannot be deleted; the refusal 
 
 Operate on the folders of the virtual tree. A folder exists while at least one page's `cerbo:virtualPath` is that path or lies under it, or while it is pinned (created with `folder create`); an unpinned folder disappears when the last page moves out.
 
-The vault's sidebar layout lives in `.cerbo/tree.toml`: `pinned`, the folders that exist with no page in them, and `order`, a table mapping a folder path (`""` is the root) to its children in display order, where a page is its UUID and a child folder is its name followed by `/`. Children named there come first, in that order; the others follow with folders before pages, each by name or title, case-insensitively. Entries that name nothing are skipped. The file is optional; one that does not parse is reported and never overwritten. The desktop app reads the same file.
+The vault's sidebar layout lives in `.cerbo/tree.toml`: `pinned`, the folders that exist with no page in them, and `order`, a table mapping a folder path (`""` is the root) to its children in display order, where a page is its UUID and a child folder is its name followed by `/`. Children named there come first, in that order; the others follow with folders before pages, each by name or title: letter case is ignored and digits count as a number, so `Page 2` comes before `Page 10`. Entries that name nothing are skipped. The file is optional; one that does not parse is reported and never overwritten. The desktop app reads the same file.
 
 Usage: `cerbo folder <SUBCOMMAND>`
 

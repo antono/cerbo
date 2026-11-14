@@ -3,6 +3,7 @@ import {
   ancestorFolders,
   buildPageTree,
   carryCollapsed,
+  compareNames,
   flattenVisible,
   folderPaths,
   parentRowIndex,
@@ -189,6 +190,32 @@ describe('buildPageTree with a layout', () => {
   it('without a layout, folders come first, then titles case-insensitively', () => {
     const tree = buildPageTree([page('beta'), page('Alpha'), page('Own', 'notes/rust')]);
     expect(labels(tree)).toEqual(['notes/', '  rust/', '    Own', 'Alpha', 'beta']);
+  });
+
+  // The same table as in `core/src/tree.rs`: each row is already in order.
+  it('compares names without case and with numbers by value', () => {
+    const rows = [
+      ['Alpha', 'beta', 'Gamma'],
+      ['Page 2', 'Page 10', 'Page 137'],
+      ['v002', 'v02', 'v2', 'v3'],
+      ['a', 'a1', 'a1b', 'a2', 'ab'],
+      ['1', '9', '10', 'a'],
+      ['99999999999999999999998', '99999999999999999999999'],
+      ['Page', 'page', 'Page 1'],
+      ['z', 'é', 'я', 'ё', '\ue000', '😀'],
+    ];
+    for (const row of rows) {
+      row.forEach((a, i) =>
+        row.forEach((b, j) => {
+          expect(Math.sign(compareNames(a, b)), `${a} vs ${b}`).toBe(Math.sign(i - j));
+        }),
+      );
+    }
+  });
+
+  it('puts numbered titles in default order by value', () => {
+    const tree = buildPageTree([page('Page 10', null, 'b'), page('page 2', null, 'a'), page('Page 1', null, 'z')]);
+    expect(labels(tree)).toEqual(['Page 1', 'page 2', 'Page 10']);
   });
 
   it('puts listed children first, then the rest in default order', () => {

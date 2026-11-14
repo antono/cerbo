@@ -11,7 +11,7 @@ vault's tree layout (`.cerbo/tree.toml`) also render, with their ancestors,
 even when no page lives under them. Within one level, children named in the
 layout's order list for that folder come first, in that order; the other
 children follow with folders before pages, each group sorted by name
-(case-insensitive, locale aware).
+in the default name order of `vault-tree-layout`.
 
 #### Scenario: Nested pages render as nested rows
 - **WHEN** the vault has pages at `notes/rust` ("Ownership"), `notes` ("Index") and at the root ("Home"), and no tree layout

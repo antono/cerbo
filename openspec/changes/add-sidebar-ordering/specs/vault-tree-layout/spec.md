@@ -31,9 +31,9 @@ SHALL be atomic, with keys and pinned paths sorted and deduplicated.
 
 The children of a folder SHALL be ordered as follows: first every child named
 in the folder's order list, in list order; then every other child, folders
-before pages, each group sorted case-insensitively by name or title. Entries
-that name no existing child SHALL be skipped; a duplicate entry counts once,
-at its first position.
+before pages, each group in the default name order. Entries that name no
+existing child SHALL be skipped; a duplicate entry counts once, at its first
+position.
 
 #### Scenario: Listed children first
 - **WHEN** `notes` has the folder `rust` and the pages "Alpha" and "Beta"
@@ -43,6 +43,19 @@ at its first position.
 #### Scenario: Stale entries are skipped
 - **WHEN** the root's order list names the UUID of a deleted page and then "Home"
 - **THEN** the root shows "Home" first and nothing for the deleted page
+
+### Requirement: Default name order
+
+The default name order SHALL ignore letter case, compare a run of ASCII
+digits as a number, and compare everything else by Unicode code point. Names
+equal that way SHALL be ordered by code point, and pages with the same title
+by UUID. The order SHALL NOT depend on the machine's locale, and the CLI and
+the desktop app SHALL produce the same order.
+
+#### Scenario: Numbers in names compare by value
+- **WHEN** the root has the pages "Page 10", "page 2" and "Page 1" and no order list
+- **THEN** the root shows "Page 1", "page 2", "Page 10"
+- **AND** `cerbo folder list` and the desktop sidebar show the same order
 
 ### Requirement: Pinned folders
 

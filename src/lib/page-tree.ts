@@ -49,7 +49,49 @@ export type TreeRow =
     }
   | PageNode;
 
-const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+const isDigit = (c: number) => c >= 48 && c <= 57;
+const codePoints = (s: string) => Array.from(s, (c) => c.codePointAt(0) as number);
+
+/**
+ * The default order of two names or titles. Letter case is ignored and a run
+ * of ASCII digits counts as a number, so "Page 2" comes before "Page 10";
+ * everything else goes by Unicode code point. Names equal that way fall back
+ * to plain code point order. It depends on no locale, and `compare_names` in
+ * `core/src/tree.rs` is the same rule: change both together.
+ */
+export function compareNames(a: string, b: string): number {
+  const la = codePoints(a.toLowerCase());
+  const lb = codePoints(b.toLowerCase());
+  let i = 0;
+  let j = 0;
+  while (i < la.length && j < lb.length) {
+    if (isDigit(la[i]) && isDigit(lb[j])) {
+      let endA = i;
+      let endB = j;
+      while (endA < la.length && isDigit(la[endA])) endA++;
+      while (endB < lb.length && isDigit(lb[endB])) endB++;
+      // Without leading zeros the longer number is the larger one.
+      while (i < endA - 1 && la[i] === 48) i++;
+      while (j < endB - 1 && lb[j] === 48) j++;
+      if (endA - i !== endB - j) return endA - i - (endB - j);
+      for (; i < endA; i++, j++) if (la[i] !== lb[j]) return la[i] - lb[j];
+    } else if (la[i] !== lb[j]) {
+      return la[i] - lb[j];
+    } else {
+      i++;
+      j++;
+    }
+  }
+  return la.length - i - (lb.length - j) || compareCodePoints(a, b);
+}
+
+/** Plain code point order, as Rust compares strings (not UTF-16 unit order). */
+function compareCodePoints(a: string, b: string): number {
+  const ca = codePoints(a);
+  const cb = codePoints(b);
+  for (let i = 0; i < ca.length && i < cb.length; i++) if (ca[i] !== cb[i]) return ca[i] - cb[i];
+  return ca.length - cb.length;
+}
 
 /** `a/b/c` → `['a', 'a/b', 'a/b/c']`; the root (null or '') has no folders. */
 export function ancestorFolders(path: string | null): string[] {
@@ -72,7 +114,7 @@ export function folderPaths(pages: TreePage[], layout: TreeLayout = EMPTY_LAYOUT
   for (const pinned of layout.pinned) {
     for (const folder of ancestorFolders(pinned)) set.add(folder);
   }
-  return [...set].sort((a, b) => collator.compare(a, b));
+  return [...set].sort(compareNames);
 }
 
 /** The parent folder of a folder path; `''` for a top-level folder. */
@@ -140,7 +182,7 @@ export function buildPageTree(pages: TreePage[], layout: TreeLayout = EMPTY_LAYO
       if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
       const an = a.kind === 'folder' ? a.name : a.title;
       const bn = b.kind === 'folder' ? b.name : b.title;
-      return collator.compare(an, bn) || (a.kind === 'page' && b.kind === 'page' ? a.uuid.localeCompare(b.uuid) : 0);
+      return compareNames(an, bn) || (a.kind === 'page' && b.kind === 'page' ? compareCodePoints(a.uuid, b.uuid) : 0);
     });
     const list = layout.order[parent];
     if (list && list.length > 0) {
