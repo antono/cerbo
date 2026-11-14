@@ -404,6 +404,26 @@ fn dry_run_from_overrides_detection() {
     assert_eq!(report["formatReason"], "--from");
 }
 
+#[test]
+fn dry_run_into_a_vault_refuses_a_repeat_import() {
+    let env = Env::new();
+    let (id, _) = env.offline_vault("Main");
+    assert!(env.import("tolaria", &["--vault", &id]).status.success());
+
+    let again = env.import("tolaria", &["--vault", &id, "--dry-run"]);
+    assert_eq!(again.status.code(), Some(1));
+    assert!(
+        stderr(&again).contains("already imported into this vault on"),
+        "{}",
+        stderr(&again)
+    );
+
+    let forced = env.import("tolaria", &["--vault", &id, "--dry-run", "--force", "--json"]);
+    assert!(forced.status.success(), "{}", stderr(&forced));
+    assert_eq!(json(&forced)["dryRun"], true);
+    assert_eq!(env.page_count(&id), 10);
+}
+
 // ── Import ────────────────────────────────────────────────────────────────────
 
 #[test]

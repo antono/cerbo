@@ -71,6 +71,7 @@ fn has_yml_views(views: &Path) -> bool {
 /// The first note (relative path) whose frontmatter has a `type:` field.
 fn note_with_type_field(source: &Path) -> Option<String> {
     visible_entries(source)
+        .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file() && is_markdown(e.path()))
         .find_map(|e| {
             let text = std::fs::read_to_string(e.path()).ok()?;
@@ -102,11 +103,23 @@ pub struct Scan {
 }
 
 /// Walk `source`. Hidden files and folders (`.obsidian/`, `.git/`, `.trash/`,
-/// dotfiles) are left out silently; files the dialect skips, symbolic links
-/// and names that are not UTF-8 are listed as skipped.
+/// dotfiles) are left out silently; files the dialect skips, symbolic links,
+/// names that are not UTF-8 and folders that cannot be read are listed as
+/// skipped. An error on the source folder itself fails the scan.
 pub fn scan(source: &Path, dialect: &dyn Dialect) -> Result<Scan, String> {
     let mut out = Scan::default();
-    for entry in visible_entries(source) {
+    for item in visible_entries(source) {
+        let entry = match item {
+            Ok(entry) => entry,
+            // An unreadable folder or file is listed as skipped, not dropped silently.
+            Err(err) => match err.path() {
+                Some(p) if p != source => {
+                    out.skipped.push(rel_string(source, p));
+                    continue;
+                }
+                _ => return Err(format!("Failed to read {}: {err}", source.display())),
+            },
+        };
         let path = entry.path();
         if entry.file_type().is_dir() {
             continue;
@@ -147,14 +160,14 @@ pub fn scan(source: &Path, dialect: &dyn Dialect) -> Result<Scan, String> {
 }
 
 /// Every entry under `source` except hidden ones and what lies inside them.
-fn visible_entries(source: &Path) -> impl Iterator<Item = walkdir::DirEntry> {
+/// Walk errors are passed through so callers decide what to do with them.
+fn visible_entries(source: &Path) -> impl Iterator<Item = walkdir::Result<walkdir::DirEntry>> {
     WalkDir::new(source)
         .follow_links(false)
         .sort_by_file_name()
         .into_iter()
         .filter_entry(|e| e.depth() == 0 || !e.file_name().to_string_lossy().starts_with('.'))
-        .filter_map(Result::ok)
-        .filter(|e| e.depth() > 0)
+        .filter(|r| r.as_ref().map_or(true, |e| e.depth() > 0))
 }
 
 fn is_markdown(path: &Path) -> bool {
@@ -295,6 +308,28 @@ mod tests {
             scan.files[0].modified
         );
         assert!(!scan.files[0].created.is_empty());
+    }
+
+    #[test]
+    fn unreadable_folder_is_listed_as_skipped() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("a.md"), "# A\n").unwrap();
+        let private = tmp.path().join("private");
+        fs::create_dir(&private).unwrap();
+        fs::write(private.join("b.md"), "# B\n").unwrap();
+        fs::set_permissions(&private, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read_dir(&private).is_ok() {
+            // Running as root: permissions are not enforced, nothing to test.
+            fs::set_permissions(&private, fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
+        let result = scan(tmp.path(), &Obsidian);
+        fs::set_permissions(&private, fs::Permissions::from_mode(0o755)).unwrap();
+        let scan = result.unwrap();
+        assert_eq!(scan.skipped, ["private"]);
+        let rels: Vec<&str> = scan.files.iter().map(|f| f.rel.as_str()).collect();
+        assert_eq!(rels, ["a.md"]);
     }
 
     #[test]

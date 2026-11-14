@@ -121,11 +121,13 @@ pub fn plan_import(source: &Path, from: Option<Format>) -> Result<ImportPlan, St
 
     let mut renamed = Vec::new();
     let mut frontmatter_errors = Vec::new();
+    let mut warnings = Vec::new();
     let notes = read_notes(
         &scanned.files,
         dialect,
         &mut renamed,
         &mut frontmatter_errors,
+        &mut warnings,
     )?;
     let files: Vec<FileEntry> = scanned
         .files
@@ -237,7 +239,7 @@ pub fn plan_import(source: &Path, from: Option<Format>) -> Result<ImportPlan, St
         renamed_slugs: renamed,
         frontmatter_errors,
         recovered: 0,
-        warnings: Vec::new(),
+        warnings,
     };
 
     Ok(ImportPlan {
@@ -259,6 +261,7 @@ fn read_notes(
     dialect: &dyn Dialect,
     renamed: &mut Vec<RenamedSlug>,
     errors: &mut Vec<FrontmatterError>,
+    warnings: &mut Vec<String>,
 ) -> Result<Vec<ReadNote>, String> {
     let mut used_slugs: HashMap<String, HashSet<String>> = HashMap::new();
     let mut notes = Vec::new();
@@ -266,6 +269,12 @@ fn read_notes(
         let bytes = std::fs::read(&file.abs)
             .map_err(|e| format!("Failed to read {}: {e}", file.abs.display()))?;
         let text = String::from_utf8_lossy(&bytes);
+        if std::str::from_utf8(&bytes).is_err() {
+            warnings.push(format!(
+                "{} is not valid UTF-8; invalid bytes were replaced with U+FFFD",
+                file.rel
+            ));
+        }
         let (raw, body) = frontmatter::split(&text);
         let (front, broken_front) = match raw.map(frontmatter::parse) {
             None => (Vec::new(), None),
@@ -387,8 +396,24 @@ fn prefix_base(folder_name: &str, uuid: Uuid) -> String {
 }
 
 #[cfg(test)]
+// Fixtures write files directly; the atomic-write rule guards vault code, not setup.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_utf8_note_is_named_in_a_warning() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("good.md"), "# Good\n").unwrap();
+        std::fs::write(tmp.path().join("bad.md"), [b'#', b' ', 0xff, 0xfe, b'\n']).unwrap();
+        let plan = plan_import(tmp.path(), Some(Format::Obsidian)).unwrap();
+        let warnings = &plan.report().warnings;
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("bad.md") && warnings[0].contains("UTF-8"),
+            "{warnings:?}"
+        );
+    }
 
     #[test]
     fn slug_collisions_get_suffixes() {

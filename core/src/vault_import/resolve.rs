@@ -143,7 +143,10 @@ impl LinkIndex {
             return Some(found);
         }
         let path = strip_md(target);
-        if let Some(found) = self.note_by_joined_path(path, &["", folder], folder) {
+        // A bare name is a stem lookup below, so the nearest note wins (spec "Ambiguous target").
+        if path.contains('/')
+            && let Some(found) = self.note_by_joined_path(path, &["", folder], folder)
+        {
             return Some(found);
         }
         if path.contains('/')
@@ -452,6 +455,22 @@ mod tests {
         // From the root neither folder is nearer: the shorter path wins.
         let r = ix.wikilink("index", "").unwrap();
         assert_eq!(ix.rel_of(r.target), "notes/index.md");
+    }
+
+    #[test]
+    fn bare_name_prefers_nearest_over_root() {
+        let ix = LinkIndex::new(
+            vec![note("index.md", "index"), note("notes/index.md", "index")],
+            &[],
+            vec![],
+        );
+        let r = ix.wikilink("index", "notes").unwrap();
+        assert_eq!(ix.rel_of(r.target), "notes/index.md");
+        assert_eq!(r.candidates.unwrap(), ["index.md", "notes/index.md"]);
+        // From the root the root note is nearest, still reported as ambiguous.
+        let r = ix.wikilink("index", "").unwrap();
+        assert_eq!(ix.rel_of(r.target), "index.md");
+        assert_eq!(r.candidates.unwrap(), ["index.md", "notes/index.md"]);
     }
 
     #[test]

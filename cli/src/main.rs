@@ -994,6 +994,13 @@ fn run_import_vault(
         None => {}
     }
     if dry_run {
+        // The same refusal as the real run, so a dry run does not promise an import.
+        if let Some(ImportTarget::Existing(v)) = &target
+            && !force
+        {
+            let vault_ctx = cerbo_core::VaultContext { vault_path: v.path.clone(), global: ctx.clone() };
+            check_repeat(&vault_ctx, &plan)?;
+        }
         let report = plan.report();
         if json {
             print_json(&report);

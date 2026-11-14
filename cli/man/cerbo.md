@@ -193,7 +193,7 @@ Options:
 
 `<ns>` is the import's own namespace `cerbo://vocab/<uuid>/`, owned by one Ontology object titled `<Format>: <source folder name>`. That object records the source as a `file://` URL (`schema:url`), the format (`cerbo:importFormat`) and the import time, and its `meta.ttl` declares every class and property the import used. Its prefix, the source folder name slugified (`braindump`, or `braindump-2` when taken), is registered in `.cerbo/ontology-map.json`, so annotations can write `[Text]{braindump:Journal}`.
 
-**One import per source:** importing a folder into a vault that already holds an import of the same folder (same canonical path, in any format) fails before anything is written, naming the earlier import's date and format. `--force` imports a second copy. Updating an earlier import is not supported.
+**One import per source:** importing a folder into a vault that already holds an import of the same folder (same canonical path, in any format) fails before anything is written, naming the earlier import's date and format. `--dry-run` with `--vault` runs the same check. `--force` imports a second copy. Updating an earlier import is not supported.
 
 **Target outside the source:** the target vault (from `--vault`, `--new` or the prompt) may not be the source folder or lie inside it, since the source is never written; such a target is refused before anything is created. Only one import runs into a vault at a time; a second one started meanwhile is refused.
 
