@@ -13,6 +13,7 @@
   let virtualPath = $state(app.newPagePath);
   let slugAutoUpdateEnabled = $state(true);
   let pathSuggestionsOpen = $state(false);
+  let pathSuggestionActive = $state(false);
   let creating = $state(false);
   let error = $state('');
   let titleInputEl = $state<HTMLInputElement | null>(null);
@@ -70,7 +71,7 @@
         } else {
           onClose();
         }
-      } else if (e.key === 'Enter' && !pathSuggestionsOpen) {
+      } else if (e.key === 'Enter' && !pathSuggestionActive) {
         e.preventDefault();
         handleCreate();
       }
@@ -136,7 +137,7 @@
 
       <div class="field">
         <label for="new-page-path">Folder <span class="optional">(optional)</span></label>
-        <VirtualPathInput id="new-page-path" bind:value={virtualPath} bind:suggestionsOpen={pathSuggestionsOpen} disabled={creating} />
+        <VirtualPathInput id="new-page-path" bind:value={virtualPath} bind:suggestionsOpen={pathSuggestionsOpen} bind:suggestionActive={pathSuggestionActive} disabled={creating} />
       </div>
 
       {#if error}

@@ -6,11 +6,13 @@
    */
   import { app } from './stores.svelte';
   import { folderPaths } from './page-tree';
-  import { virtualPathError } from './virtual-path';
+  import { suggestionKey, virtualPathError } from './virtual-path';
 
   let {
     value = $bindable(''),
     suggestionsOpen = $bindable(false),
+    /** True while the list is open and the user has moved to a suggestion with the arrow keys. */
+    suggestionActive = $bindable(false),
     inputEl = $bindable<HTMLInputElement | null>(null),
     disabled = false,
     id = 'virtual-path',
@@ -18,6 +20,7 @@
   }: {
     value?: string;
     suggestionsOpen?: boolean;
+    suggestionActive?: boolean;
     inputEl?: HTMLInputElement | null;
     disabled?: boolean;
     id?: string;
@@ -32,39 +35,36 @@
       : [],
   );
   const error = $derived(virtualPathError(typed));
-  let highlighted = $state(0);
+  let highlighted = $state(-1);
 
   $effect(() => {
     if (suggestions.length === 0) suggestionsOpen = false;
-    if (highlighted >= suggestions.length) highlighted = 0;
+    if (highlighted >= suggestions.length) highlighted = -1;
+  });
+
+  $effect(() => {
+    suggestionActive = suggestionsOpen && highlighted >= 0;
   });
 
   function onInput() {
     suggestionsOpen = suggestions.length > 0;
-    highlighted = 0;
+    highlighted = -1;
   }
 
   function pick(path: string) {
     value = path;
     suggestionsOpen = false;
+    highlighted = -1;
     inputEl?.focus();
   }
 
   function onKeydown(e: KeyboardEvent) {
     if (!suggestionsOpen || suggestions.length === 0) return;
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      highlighted = (highlighted + 1) % suggestions.length;
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      highlighted = (highlighted - 1 + suggestions.length) % suggestions.length;
-    } else if (e.key === 'Tab' || e.key === 'Enter') {
-      e.preventDefault();
-      pick(suggestions[highlighted]);
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      suggestionsOpen = false;
-    }
+    const step = suggestionKey(e.key, highlighted, suggestions.length);
+    if (step.handled) e.preventDefault();
+    highlighted = step.highlighted;
+    if (step.pick !== null) pick(suggestions[step.pick]);
+    else if (step.close) suggestionsOpen = false;
   }
 </script>
 

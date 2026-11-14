@@ -26,3 +26,32 @@ export function normalizeVirtualPath(path: string): string | null {
   const trimmed = path.trim();
   return trimmed === '' ? null : trimmed;
 }
+
+/** What a key does in the path field's open suggestion list. `highlighted` is -1 until the user moves to a suggestion with the arrow keys; `count` is the number of suggestions (> 0). */
+export interface SuggestionStep {
+  highlighted: number;
+  /** Index of the suggestion to put in the field, or null. */
+  pick: number | null;
+  close: boolean;
+  /** True when the key was consumed (the caller calls preventDefault). */
+  handled: boolean;
+}
+
+export function suggestionKey(key: string, highlighted: number, count: number): SuggestionStep {
+  switch (key) {
+    case 'ArrowDown':
+      return { highlighted: (highlighted + 1) % count, pick: null, close: false, handled: true };
+    case 'ArrowUp':
+      return { highlighted: highlighted <= 0 ? count - 1 : highlighted - 1, pick: null, close: false, handled: true };
+    case 'Tab':
+      return { highlighted: -1, pick: highlighted >= 0 ? highlighted : 0, close: false, handled: true };
+    case 'Enter':
+      return highlighted >= 0
+        ? { highlighted: -1, pick: highlighted, close: false, handled: true }
+        : { highlighted: -1, pick: null, close: true, handled: false };
+    case 'Escape':
+      return { highlighted: -1, pick: null, close: true, handled: true };
+    default:
+      return { highlighted, pick: null, close: false, handled: false };
+  }
+}

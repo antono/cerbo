@@ -12,6 +12,7 @@
   const page = $derived(app.pages.find((p) => p.uuid === uuid));
   let value = $state(app.pages.find((p) => p.uuid === uuid)?.virtualPath ?? '');
   let suggestionsOpen = $state(false);
+  let suggestionActive = $state(false);
   let inputEl = $state<HTMLInputElement | null>(null);
   let moving = $state(false);
   let error = $state('');
@@ -51,7 +52,7 @@
         } else {
           onClose();
         }
-      } else if (e.key === 'Enter' && !suggestionsOpen) {
+      } else if (e.key === 'Enter' && !suggestionActive) {
         e.preventDefault();
         handleMove();
       }
@@ -85,7 +86,7 @@
 
       <div class="field">
         <label for="move-path" class="field-label">Move to <span class="optional">(empty = root)</span></label>
-        <VirtualPathInput id="move-path" bind:value bind:suggestionsOpen bind:inputEl disabled={moving} />
+        <VirtualPathInput id="move-path" bind:value bind:suggestionsOpen bind:suggestionActive bind:inputEl disabled={moving} />
       </div>
 
       {#if error}

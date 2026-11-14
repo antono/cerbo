@@ -10,6 +10,7 @@
 
   let value = $state(app.newFolderPath);
   let suggestionsOpen = $state(false);
+  let suggestionActive = $state(false);
   let inputEl = $state<HTMLInputElement | null>(null);
   let creating = $state(false);
   let error = $state('');
@@ -46,7 +47,7 @@
         } else {
           onClose();
         }
-      } else if (e.key === 'Enter' && !suggestionsOpen) {
+      } else if (e.key === 'Enter' && !suggestionActive) {
         e.preventDefault();
         handleCreate();
       }
@@ -69,7 +70,7 @@
     <div class="input-wrap">
       <div class="field">
         <label for="new-folder-path" class="field-label">Folder path</label>
-        <VirtualPathInput id="new-folder-path" bind:value bind:suggestionsOpen bind:inputEl disabled={creating} />
+        <VirtualPathInput id="new-folder-path" bind:value bind:suggestionsOpen bind:suggestionActive bind:inputEl disabled={creating} />
         <div class="hint">The folder stays in the sidebar while empty, until you delete it.</div>
       </div>
 
