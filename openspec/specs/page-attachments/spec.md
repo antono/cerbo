@@ -6,15 +6,14 @@ Enable users to manage file attachments as separate UUID-based objects.
 ## Requirements
 
 ### Requirement: Attachment as object
-The system SHALL store attachments as separate objects in `.cerbo/objects/<uuid>/` with `meta.ttl` containing `type: :Attachment` and `:mime-type`. The attachment binary file SHALL be stored directly in the object directory.
+The system SHALL store an attachment as its own object in `.cerbo/objects/<uuid>/`: the file itself plus a `meta.ttl` that types the object `schema:MediaObject` and records the MIME type in `schema:encodingFormat`. The object SHALL have no `page.md`. A file named `meta.ttl` or `page.md` SHALL be stored as `attachment-<name>` and keep its own name as the title. Adding an attachment SHALL NOT change any page: a page uses an attachment only by linking to it.
 
-#### Scenario: Add attachment to page
-- **WHEN** user runs `cerbo page attachment add <vault-id> <page-uuid> /path/to/file.png`
+#### Scenario: Add an attachment
+- **WHEN** the file `/path/to/file.png` is added as an attachment
 - **THEN** a new UUID is generated for the attachment
-- **THEN** `.cerbo/objects/<uuid-attachment>/` directory is created
-- **THEN** the file is copied to `.cerbo/objects/<uuid-attachment>/file.png`
-- **THEN** `meta.ttl` is created with `type: :Attachment` and `:mime-type "image/png"`
-- **THEN** the page's `relations.ttl` is updated with `:usesAttachment <uuid-attachment>`
+- **THEN** the file is copied to `.cerbo/objects/<uuid-attachment>/file.png` and the source is kept
+- **THEN** `meta.ttl` types the object `schema:MediaObject` with `schema:encodingFormat "image/png"`
+- **THEN** no page file is written
 
 #### Scenario: Attachment storage layout
 - **WHEN** listing contents of `.cerbo/objects/<uuid-attachment>/`
@@ -22,22 +21,33 @@ The system SHALL store attachments as separate objects in `.cerbo/objects/<uuid>
 - **THEN** it SHALL contain `meta.ttl` with attachment metadata
 - **THEN** it SHALL NOT contain `page.md`
 
+#### Scenario: A failed copy leaves nothing behind
+- **WHEN** copying the file into the vault fails
+- **THEN** no object directory for the attachment remains
+
 ### Requirement: List page attachments
-The system SHALL return a list of attachment UUIDs used by a page by reading the page's `relations.ttl` for `:usesAttachment` predicates.
+The system SHALL list the attachments a page uses by reading the `cerbo://<uuid>` links in the page's `page.md` and keeping those whose target is an existing Attachment object, each once, in order of first appearance. No other file records which attachments a page uses.
 
 #### Scenario: Request attachment list for page
-- **WHEN** the user opens the attachments panel for a page
-- **THEN** the system reads the page's `relations.ttl`
-- **THEN** it returns all UUIDs with `:usesAttachment` predicate
-- **THEN** each attachment's title and mime-type are read from its `meta.ttl`
+- **WHEN** a page links to the attachment A twice and then to the attachment B
+- **THEN** the list is A, B
+
+#### Scenario: Links to pages are not attachments
+- **WHEN** a page links to another page and to an attachment
+- **THEN** the list holds only the attachment
+
+#### Scenario: A link to a deleted attachment is skipped
+- **WHEN** a page links to an attachment that no longer exists
+- **THEN** the list does not include it
 
 ### Requirement: Delete page attachment
-The system SHALL allow users to delete an attachment object. This removes the `.cerbo/objects/<uuid>/` directory.
+The system SHALL allow users to delete an attachment object. Deleting moves `.cerbo/objects/<uuid>/` to the vault trash, like any other object. Pages that link to the attachment SHALL NOT be edited.
 
 #### Scenario: Deleting an attachment
-- **WHEN** the user clicks "Delete" on an attachment
-- **THEN** the system SHALL remove `.cerbo/objects/<uuid-attachment>/` directory
-- **THEN** the page's `relations.ttl` is updated to remove the `:usesAttachment` reference
+- **WHEN** the attachment `<uuid-attachment>` is deleted
+- **THEN** `.cerbo/objects/<uuid-attachment>/` no longer exists
+- **THEN** its files are in `.cerbo/trash/`
+- **THEN** the pages that linked to it keep their text, and the attachment no longer shows in their attachment lists
 
 ### Requirement: Render attachment in page
 The system SHALL support `![Alt Text](cerbo://<uuid>)` markdown syntax for embedding attachments in pages.

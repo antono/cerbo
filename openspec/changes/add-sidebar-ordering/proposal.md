@@ -50,7 +50,9 @@ older builds ignore the file.
 ### Modified Capabilities
 
 - `desktop-page-tree` (added by `add-virtual-path-tree`): rows render in the
-  stored order and pinned folders render even when empty.
+  stored order and pinned folders render even when empty, so "folders are
+  never stored" no longer holds. Its page-only drag requirement is removed in
+  favour of `desktop-tree-editing`.
 - `cli-tooling`: new `cerbo folder` subcommands.
 
 ## Non-goals
@@ -75,3 +77,9 @@ older builds ignore the file.
   new `NewFolderDialog.svelte`, `stores.svelte.ts`, `KeyboardHelp.svelte`,
   `docs/desktop.md`.
 - **Vault data:** one new optional file per vault, `.cerbo/tree.toml`.
+
+## Archive order
+
+Archive `add-virtual-path-tree` first. This change modifies and removes
+requirements of `desktop-page-tree`, a spec that exists only once that change
+is archived.

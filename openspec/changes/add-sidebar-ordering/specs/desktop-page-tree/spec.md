@@ -45,3 +45,42 @@ in the default name order of `vault-tree-layout`.
 - **WHEN** the user hovers a page row
 - **THEN** the Rename, Move and Delete actions are visible
 - **THEN** clicking the row opens the page, as in the flat list
+
+### Requirement: Tree refreshes after every change
+
+After a move, a reorder, a folder rename, creation or deletion, a page
+creation, rename or delete, and whenever the page list is reloaded (vault
+open or switch), the sidebar SHALL re-derive the tree from the current page
+list and the current tree layout. The active page stays active unless it was
+deleted.
+
+#### Scenario: External move is reflected on reload
+- **WHEN** another process changes a page's `cerbo:virtualPath` on disk
+- **AND** the user switches away from the vault and back
+- **THEN** the page row appears under its new folder
+
+#### Scenario: External layout change is reflected on reload
+- **WHEN** another process changes `.cerbo/tree.toml`
+- **AND** the user switches away from the vault and back
+- **THEN** the rows show in the new order
+
+#### Scenario: Unpinned folder vanishes after delete
+- **WHEN** the only page in "drafts" is deleted
+- **AND** `drafts` is not pinned
+- **THEN** the "drafts" row is removed
+
+#### Scenario: Pinned folder stays after delete
+- **WHEN** the only page in the pinned folder "inbox" is deleted
+- **THEN** the "inbox" row stays, empty
+
+## REMOVED Requirements
+
+### Requirement: Drag and drop moves a page
+
+**Reason**: Replaced by "Drag places a row before, after or inside" in
+`desktop-tree-editing`. Dropping a page on a page row no longer does nothing:
+it places the page before or after that row. Folder rows are draggable too.
+
+**Migration**: None for vault data. Dropping a page on the middle of a folder
+row or on the zone below the tree still moves it into that folder or to the
+root; it now also takes the last position there.

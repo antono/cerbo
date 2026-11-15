@@ -13,8 +13,10 @@ pages, renaming folders and creating pages inside folders.
 The sidebar SHALL render pages as a tree. Each segment of a page's
 `virtualPath` is a folder row; the page is a leaf row under the last segment.
 Pages with no `virtualPath` are leaves at the root. Within one level, folders
-are listed before pages, each group sorted by name (case-insensitive, locale
-aware). Folders are derived from the pages present and never stored.
+are listed before pages, each group sorted by name: letter case is ignored, a
+run of digits counts as a number, and the rest goes by code point, whatever
+the machine's locale. Folders are derived from the pages present and never
+stored.
 
 #### Scenario: Nested pages render as nested rows
 - **WHEN** the vault has pages at `notes/rust` ("Ownership"), `notes` ("Index") and at the root ("Home")

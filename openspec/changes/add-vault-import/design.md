@@ -7,8 +7,9 @@
   model) and `page.md`. Pages are `rdf:type schema:NoteDigitalDocument`.
 - `object_create_with_metadata` sets title, slug and virtual path;
   `slug::slugify` transliterates non-ASCII (`филаменты` → ASCII).
-- Attachments are objects holding the file plus `meta.ttl`; pages record them
-  in `relations.ttl` as `:usesAttachment`.
+- Attachments are objects holding the file plus `meta.ttl`. A page uses an
+  attachment by linking to it (`cerbo://<uuid>`) in `page.md`; nothing else
+  records the use.
 - `.cerbo/ontology-map.json` (v2) maps a prefix to `{namespace, ontology}`.
 - `rdf::uuid_from_object_iri` treats anything starting with `cerbo://objects/`
   as an object id, so an imported vocabulary must not live under that prefix.

@@ -59,7 +59,6 @@ Ontology objects SHALL follow the same storage layout as pages. The `meta.ttl` M
 - **WHEN** reading an ontology object at `.cerbo/objects/<uuid-ontology>/`
 - **THEN** `meta.ttl` SHALL contain `type: :Ontology`
 - **THEN** `page.md` SHALL exist with documentation content
-- **THEN** `relations.ttl` MAY exist (if ontology links to other resources)
 - **THEN** `annotations.ttl` MAY exist (if documentation has HackMD annotations)
 
 ### Requirement: Well-known prefixes are built in

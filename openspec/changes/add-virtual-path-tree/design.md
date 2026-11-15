@@ -42,6 +42,10 @@ See proposal.md for motivation. What exists today:
 
 ### D1. Folders are derived, never stored
 
+> Superseded in part by `add-sidebar-ordering`: `.cerbo/tree.toml` stores
+> pinned (empty) folders and the row order. Folders that come from page paths
+> are still derived.
+
 The tree is built client-side from `virtualPath` strings. A folder is the set
 of pages whose path equals or starts with it. Consequences: no empty folders,
 no folder metadata file, folder rename is a batch page move.

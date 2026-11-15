@@ -17,7 +17,7 @@
 
 ## 3. Core: write
 
-- [x] 3.1 Implement staging in `.cerbo/import-staging/<id>/` with `manifest.json`, writing pages (`meta.ttl` via `to_turtle_with`, `page.md`, `relations.ttl`), attachments and the ontology object through the existing atomic write helpers; verify a staged import of the Tolaria fixture produces valid Turtle that `ObjectMeta::read_from_file` loads
+- [x] 3.1 Implement staging in `.cerbo/import-staging/<id>/` with `manifest.json`, writing pages (`meta.ttl` via `to_turtle_with`, `page.md`), attachments and the ontology object through the existing atomic write helpers; verify a staged import of the Tolaria fixture produces valid Turtle that `ObjectMeta::read_from_file` loads
 - [x] 3.2 Implement commit (rename attachments, pages, ontology; then prefix map with unique prefix) and leftover-staging cleanup per design D1; verify a test that injects a failure after N renames and checks the next run trashes the committed objects and leaves `page list` as before
 - [x] 3.3 Implement the repeat-import check (ontology objects with the same canonical `schema:url`, in any `cerbo:importFormat`) and `--force`; verify tests for refuse and forced second copy
 - [x] 3.4 Run one incremental semantic index refresh after commit; verify a test that `backlinks` of an imported page lists its importer page without `cerbo index`

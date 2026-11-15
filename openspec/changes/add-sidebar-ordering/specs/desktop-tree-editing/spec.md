@@ -14,7 +14,9 @@ Page rows and folder rows SHALL be draggable with the pointer. Dropping a row
 SHALL move it to the target's folder when it is in another one, then give it
 the target position among the siblings. The drop zones and indicators follow
 design D7: before or after a row (a line at its edge), or inside a folder (the
-folder highlighted).
+folder highlighted). Dropping on the zone below the tree SHALL move the row to
+the root as its last child. A row dropped where it already is SHALL stay
+unchanged.
 
 #### Scenario: Reorder within a folder
 - **WHEN** the root shows "Alpha", "Beta", "Gamma"
@@ -31,6 +33,11 @@ folder highlighted).
 - **WHEN** the user drags a page onto the middle of the folder row `notes`
 - **THEN** the page moves into `notes` as its last child
 - **THEN** `notes` expands
+
+#### Scenario: Drop below the tree
+- **WHEN** the user drags "Ownership" (at `notes/rust`) onto the zone below the last row
+- **THEN** the page's `virtualPath` is removed
+- **THEN** it shows as the last row of the root
 
 #### Scenario: Drag a folder
 - **WHEN** the user drags the folder `rust` (at `notes/rust`) onto the middle of the folder row `archive`
