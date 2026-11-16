@@ -903,11 +903,7 @@ fn attachment_create(
     file_name: &str,
     write_file: impl FnOnce(&std::path::Path) -> Result<(), String>,
 ) -> Result<String, String> {
-    let stored_name = if matches!(file_name, "meta.ttl" | "page.md") {
-        format!("attachment-{}", file_name)
-    } else {
-        file_name.to_string()
-    };
+    let stored_name = attachment_file_name(file_name);
 
     let uuid = Uuid::new_v4().to_string();
     let objects = objects_dir(ctx);
@@ -949,15 +945,64 @@ fn attachment_create(
     Ok(uuid)
 }
 
-/// Delete an attachment object.
+/// The name an attachment titled `title` has on disk. The object's own files
+/// keep their names, so an attachment called `meta.ttl` or `page.md` is stored
+/// as `attachment-<name>`.
+pub fn attachment_file_name(title: &str) -> String {
+    if matches!(title, "meta.ttl" | "page.md") {
+        format!("attachment-{title}")
+    } else {
+        title.to_string()
+    }
+}
+
+/// The metadata of `uuid` when it is an Attachment object; an error naming
+/// what it is otherwise. Guards every call that acts on "an attachment", so a
+/// page UUID passed by mistake is refused instead of acted on.
+fn attachment_meta(ctx: &CerboContext, uuid: &str) -> Result<ObjectMeta, String> {
+    let meta_path = object_path(ctx, uuid).join("meta.ttl");
+    let meta = match ObjectMeta::read_from_file(&meta_path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err(format!("Object not found: {uuid}")),
+        Err(e) => return Err(format!("Failed to read meta.ttl: {e}")),
+    };
+    if meta.object_type != ObjectType::Attachment {
+        return Err(format!("Not an attachment: {uuid}"));
+    }
+    Ok(meta)
+}
+
+/// Delete an attachment object (it goes to the vault trash). Pages that link
+/// to it are not edited. Anything that is not an Attachment is refused.
 pub fn attachment_delete(ctx: &CerboContext, attachment_uuid: &str) -> Result<(), String> {
+    attachment_meta(ctx, attachment_uuid)?;
     object_delete(ctx, attachment_uuid)
+}
+
+/// The file of an attachment object, for opening it outside the app.
+pub fn attachment_file_path(ctx: &CerboContext, attachment_uuid: &str) -> Result<PathBuf, String> {
+    let meta = attachment_meta(ctx, attachment_uuid)?;
+    Ok(object_path(ctx, attachment_uuid).join(attachment_file_name(&meta.title)))
+}
+
+/// What the desktop shows for one attachment of a page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AttachmentInfo {
+    pub uuid: String,
+    /// The file's original name.
+    pub title: String,
+    pub mime_type: Option<String>,
 }
 
 /// List the attachments a page uses: the `cerbo://` links in its `page.md`
 /// whose target is an Attachment, each once, in order of first appearance.
 /// Read from the page itself, so it needs no index.
 pub fn attachment_list(ctx: &CerboContext, page_uuid: &str) -> Result<Vec<String>, String> {
+    Ok(attachment_infos(ctx, page_uuid)?.into_iter().map(|a| a.uuid).collect())
+}
+
+/// [`attachment_list`] with each attachment's title and MIME type.
+pub fn attachment_infos(ctx: &CerboContext, page_uuid: &str) -> Result<Vec<AttachmentInfo>, String> {
     let page_path = object_path(ctx, page_uuid).join("page.md");
     let content = match fs::read_to_string(&page_path) {
         Ok(content) => content,
@@ -965,14 +1010,16 @@ pub fn attachment_list(ctx: &CerboContext, page_uuid: &str) -> Result<Vec<String
         Err(e) => return Err(format!("Failed to read page.md: {}", e)),
     };
 
-    let mut attachments: Vec<String> = Vec::new();
+    let mut attachments: Vec<AttachmentInfo> = Vec::new();
     for target in crate::links::extract_cerbo_links(&content) {
-        if attachments.contains(&target) || !crate::links::is_live_target(ctx, &target) {
+        if attachments.iter().any(|a| a.uuid == target) || !crate::links::is_live_target(ctx, &target) {
             continue;
         }
         let meta_path = object_path(ctx, &target).join("meta.ttl");
         match ObjectMeta::read_from_file(&meta_path) {
-            Ok(meta) if meta.object_type == ObjectType::Attachment => attachments.push(target),
+            Ok(meta) if meta.object_type == ObjectType::Attachment => {
+                attachments.push(AttachmentInfo { uuid: target, title: meta.title, mime_type: meta.mime_type })
+            }
             Ok(_) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => eprintln!("Warning: skipping linked object {target}: {e}"),
@@ -1335,6 +1382,67 @@ mod tests {
         assert_eq!(attachment_list(&ctx, &page).unwrap(), vec![attachment.clone()]);
         assert!(attachment_list(&ctx, &note).unwrap().is_empty());
         assert!(!object_path(&ctx, missing).exists());
+    }
+
+    #[test]
+    fn attachment_infos_carry_title_and_mime_type() {
+        let (tmp, ctx) = create_test_context();
+        let file = tmp.path().join("photo.png");
+        fs::write(&file, b"png").unwrap();
+        let attachment = attachment_add(&ctx, "", &file).unwrap();
+        let page = object_create(&ctx, None, ObjectType::Product, "Page".into()).unwrap();
+        object_write(&ctx, &page, &format!("![a](cerbo://objects/{attachment})")).unwrap();
+
+        assert_eq!(
+            attachment_infos(&ctx, &page).unwrap(),
+            vec![AttachmentInfo {
+                uuid: attachment.clone(),
+                title: "photo.png".into(),
+                mime_type: Some("image/png".into()),
+            }]
+        );
+        assert_eq!(
+            attachment_file_path(&ctx, &attachment).unwrap(),
+            object_path(&ctx, &attachment).join("photo.png")
+        );
+    }
+
+    #[test]
+    fn attachment_file_path_follows_the_stored_name() {
+        let (_tmp, ctx) = create_test_context();
+        let attachment = attachment_add_bytes(&ctx, "page.md", b"text").unwrap();
+        let path = attachment_file_path(&ctx, &attachment).unwrap();
+        assert_eq!(path, object_path(&ctx, &attachment).join("attachment-page.md"));
+        assert!(path.is_file());
+    }
+
+    /// The attachments panel once passed the open page's UUID here.
+    #[test]
+    fn attachment_delete_and_open_refuse_a_page() {
+        let (_tmp, ctx) = create_test_context();
+        let page = object_create(&ctx, None, ObjectType::Product, "Page".into()).unwrap();
+
+        assert_eq!(attachment_delete(&ctx, &page), Err(format!("Not an attachment: {page}")));
+        assert_eq!(attachment_file_path(&ctx, &page), Err(format!("Not an attachment: {page}")));
+        assert!(object_path(&ctx, &page).is_dir(), "the page must still be there");
+
+        let missing = "deadbeef-0000-4000-8000-000000000137";
+        assert_eq!(attachment_delete(&ctx, missing), Err(format!("Object not found: {missing}")));
+    }
+
+    #[test]
+    fn attachment_delete_moves_the_attachment_to_the_trash() {
+        let (_tmp, ctx) = create_test_context();
+        let attachment = attachment_add_bytes(&ctx, "note.txt", b"text").unwrap();
+        let page = object_create(&ctx, None, ObjectType::Product, "Page".into()).unwrap();
+        let text = format!("[note.txt](cerbo://objects/{attachment})");
+        object_write(&ctx, &page, &text).unwrap();
+
+        attachment_delete(&ctx, &attachment).unwrap();
+
+        assert!(!object_path(&ctx, &attachment).exists());
+        assert!(attachment_list(&ctx, &page).unwrap().is_empty());
+        assert_eq!(fs::read_to_string(object_path(&ctx, &page).join("page.md")).unwrap(), text);
     }
 
     /// Names of the entries directly under `objects/`.

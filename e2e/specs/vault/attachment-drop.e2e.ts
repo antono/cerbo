@@ -41,14 +41,17 @@ async function expectSavedAndListed(page: string, reference: string, uuid: strin
     timeout: 10_000,
     timeoutMsg: `page.md never contained ${reference}`,
   });
-  expect(await invoke<string[]>('attachment_list', { uuid: page })).toContain(uuid);
+  const listed = await invoke<{ uuid: string; title: string }[]>('attachment_list', { uuid: page });
+  expect(listed.map((a) => a.uuid)).toContain(uuid);
+  // The panel shows the file's name, not its UUID.
+  const name = listed.find((a) => a.uuid === uuid)!.title;
   await browser.waitUntil(
     async () =>
       (await browser.execute(
-        (u) => Array.from(document.querySelectorAll('.attachments-panel .filename'), (el) => el.textContent).includes(u),
+        (u) => document.querySelector(`.attachments-panel .attachment-item[data-uuid="${u}"] .filename`)?.textContent ?? null,
         uuid,
-      )) === true,
-    { timeout: 10_000, timeoutMsg: 'the attachments panel does not list the new object' },
+      )) === name,
+    { timeout: 10_000, timeoutMsg: 'the attachments panel does not list the new object by name' },
   );
 }
 
@@ -186,5 +189,22 @@ describe('drop and paste into the editor', () => {
     const ref = (await editorReferences()).find((r) => r.name.endsWith('.txt'))!;
     expect(ref.image).toBe(false);
     await expectSavedAndListed(page, `[${ref.name}](cerbo://objects/${ref.uuid})`, ref.uuid);
+  });
+
+  it('deletes an attachment from the panel and keeps the page', async () => {
+    const ref = (await editorReferences()).find((r) => r.name === 'report.pdf')!;
+    const item = `.attachments-panel .attachment-item[data-uuid="${ref.uuid}"]`;
+    await browser.execute((sel) => document.querySelector<HTMLButtonElement>(`${sel} .delete-btn`)!.click(), item);
+    const confirm = $('.confirm-modal .btn-danger');
+    await confirm.waitForDisplayed({ timeout: 10_000 });
+    await confirm.click();
+    await $(item).waitForExist({ reverse: true, timeout: 10_000 });
+
+    // The panel once sent the open page's UUID to the delete command.
+    expect(await invoke<string>('page_read', { uuid: page })).toContain(`cerbo://objects/${ref.uuid}`);
+    expect(await currentUuid()).toBe(page);
+    const listed = await invoke<{ uuid: string }[]>('attachment_list', { uuid: page });
+    expect(listed.map((a) => a.uuid)).not.toContain(ref.uuid);
+    expect(listed.length).toBeGreaterThan(0);
   });
 });

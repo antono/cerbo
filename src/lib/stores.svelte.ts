@@ -106,7 +106,7 @@ export const app = $state({
   backlinks: [] as BacklinkEntry[],
   backlinksStatus: 'ready' as BacklinksStatus,
   backlinksMessage: '',
-  attachments: [] as string[],
+  attachments: [] as AttachmentInfo[],
   loading: false,
   loadingMessage: '',
   error: null as string | null,
@@ -785,10 +785,19 @@ export async function goForward(): Promise<void> {
   if (slug) await openPage(slug, { pushToHistory: false });
 }
 
+/** One attachment a page links to, as `attachment_list` returns it. */
+export interface AttachmentInfo {
+  /** The attachment object's own UUID. */
+  uuid: string;
+  /** The file's original name. */
+  title: string;
+  mime_type: string | null;
+}
+
 export async function loadAttachments(uuid: string): Promise<void> {
   if (!app.activeVaultId || !uuid) return;
   try {
-    const attachments = await invoke<string[]>('attachment_list', {
+    const attachments = await invoke<AttachmentInfo[]>('attachment_list', {
       vaultId: app.activeVaultId,
       uuid,
     });

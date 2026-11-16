@@ -162,9 +162,9 @@ pub fn page_list(app: AppHandle) -> Result<Vec<cerbo_core::page::PageMeta>, Stri
 pub fn attachment_list(
     app: AppHandle,
     uuid: String,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<object::AttachmentInfo>, String> {
     let ctx = get_vault_ctx(&app)?;
-    object::attachment_list(&ctx, &uuid)
+    object::attachment_infos(&ctx, &uuid)
 }
 
 #[tauri::command]
@@ -400,12 +400,11 @@ pub async fn attachment_delete(
 pub fn attachment_open(
     app: AppHandle,
     uuid: String,
-    filename: String,
 ) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     let ctx = get_vault_ctx(&app)?;
-    let obj_dir = object::object_path(&ctx, &uuid);
-    let path = obj_dir.join(&filename);
+    // `uuid` is the attachment's own UUID; anything else is refused.
+    let path = object::attachment_file_path(&ctx, &uuid)?;
     app.opener()
         .open_path(path.to_string_lossy(), None::<String>)
         .map_err(|e| e.to_string())
