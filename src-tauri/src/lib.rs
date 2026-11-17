@@ -230,6 +230,15 @@ fn vault_open(
     let vault_path = cerbo_core::vault::get_vault_path(&ctx, &vaultId)
         .ok_or_else(|| format!("vault_open: vault not found: {}", vaultId))?;
 
+    // Undo what an interrupted `cerbo import-vault` left live, before the page
+    // list is read. A running import is left alone; a failure is only logged.
+    let vault_ctx = cerbo_core::VaultContext { vault_path: vault_path.clone(), global: ctx.clone() };
+    match cerbo_core::vault_import::finish_interrupted_import(&vault_ctx) {
+        Ok(0) => {}
+        Ok(n) => eprintln!("Took back {n} objects left by an interrupted import into {}", vault_path.display()),
+        Err(e) => eprintln!("Warning: could not clean up an interrupted import into {}: {e}", vault_path.display()),
+    }
+
     // Record the active vault path so page commands use the right .cerbo/objects/ dir.
     *active_vault.0.lock().map_err(|_| "vault state lock poisoned")? = Some(vault_path.clone());
 

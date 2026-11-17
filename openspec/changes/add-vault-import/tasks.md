@@ -35,6 +35,7 @@
 - [x] 5.1 Dry-run against a copy of a real Tolaria vault (`~/Sync/Tolaria/Braindump`) and review the report for unexpected unresolved links; record findings in this change's design if rules need adjusting
 - [x] 5.2 Run `cargo test` and `cargo clippy` inside `nix develop`, and `nix build .#cerbo .#cerbo-desktop`; verify all pass
 - [x] 5.3 Run `openspec validate add-vault-import --strict`; verify it passes
+- [x] 5.4 Take back a killed import on the vault's next opening (every CLI command, desktop `vault_open`), not only on the next import; verify core tests for recovery, a running import left alone and a clean vault, and a CLI test where `page list` takes back a staged half commit
 
 ## Workflow follow-up
 

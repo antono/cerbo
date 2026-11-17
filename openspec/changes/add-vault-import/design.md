@@ -24,7 +24,8 @@
 **Goals:**
 - One pass over the source builds a complete plan (uuids, links, triples)
   before anything is written, so `--dry-run` and the real run share one code path.
-- Nothing half-imported is ever visible in the target vault.
+- Nothing half-imported stays visible in the target vault: a failed import
+  takes its objects back at once, a killed one on the vault's next opening.
 - Adding a third format later means one new `Dialect`, not changes to the writer.
 
 **Non-Goals:**
@@ -61,10 +62,14 @@ The plan assigns every note and referenced file its UUID first, so link
 rewriting is a lookup. Staging is inside the target vault's `.cerbo/` so the
 final `rename(2)` is on one filesystem and atomic per object. Commit order:
 attachments, pages, ontology object, prefix map. A crash mid-commit leaves
-some objects live; on the next `import-vault` run a leftover staging folder is
-detected, and its already committed objects (listed in a `manifest.json`
-written before commit starts) are moved to the trash before the error is
-reported. Alternative considered: one staging vault swapped in whole. Rejected:
+some objects live until the vault is next opened. Every opening (each `cerbo`
+command on the vault, the desktop app's `vault_open`, and `import-vault`
+itself) looks for a leftover staging folder; when one exists and no import
+holds the vault's import lock, its already committed objects (listed in a
+`manifest.json` written before commit starts) are moved to the trash. The
+check is one `stat` when nothing is left over. Renames are per object, so a
+process that already has the vault open (the desktop app while a CLI import
+commits) can see part of an import for the length of the commit. Alternative considered: one staging vault swapped in whole. Rejected:
 the target vault usually already holds pages.
 
 ### D2. Dialects

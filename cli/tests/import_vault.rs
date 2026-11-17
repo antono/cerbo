@@ -636,3 +636,53 @@ fn prompt_on_a_terminal_imports_into_the_chosen_vault() {
     assert_eq!(env.page_count(&second), 10);
     assert_eq!(env.page_count(&first), 0);
 }
+
+/// A killed import leaves some objects live and its staging folder behind.
+/// The next command that opens the vault, whatever it is, takes them back.
+#[test]
+fn any_command_takes_back_a_killed_import() {
+    let env = Env::new();
+    let (id, root) = env.offline_vault("Main");
+    let before = env.titles(&id);
+
+    // Stage a copy by hand as a commit that died after moving one page: the
+    // object is live, the manifest lists it, its prefix was never registered.
+    let page = "0f0e0d0c-0000-4000-8000-000000000137";
+    let objects = root.join(".cerbo/objects");
+    std::fs::create_dir_all(objects.join(page)).unwrap();
+    std::fs::write(
+        objects.join(page).join("meta.ttl"),
+        format!(
+            "@prefix schema: <https://schema.org/> .\n\
+             <cerbo://objects/{page}> a schema:NoteDigitalDocument ;\n  schema:name \"Half imported\" .\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(objects.join(page).join("page.md"), "# Half imported\n").unwrap();
+    let staging = root.join(".cerbo/import-staging/aaaaaaaa-0000-4000-8000-000000000137");
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::write(
+        staging.join("manifest.json"),
+        serde_json::json!({
+            "version": 1,
+            "source": "/nowhere",
+            "format": "tolaria",
+            "ontology": "aaaaaaaa-0000-4000-8000-000000000137",
+            "prefix": "tolaria",
+            "namespace": "https://cerbo.dev/vocab/import/aaaaaaaa/",
+            "objects": [page],
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let out = env.run(&["page", "list", "--vault", &id, "--json"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stderr(&out).contains("Took back 1 object left by an interrupted import"), "{}", stderr(&out));
+    assert_eq!(env.titles(&id), before);
+    assert!(!objects.join(page).exists());
+    assert!(!root.join(".cerbo/import-staging").exists());
+    // The object is in the trash, not gone.
+    let trashed = std::fs::read_dir(root.join(".cerbo/trash")).unwrap().count();
+    assert_eq!(trashed, 1);
+}

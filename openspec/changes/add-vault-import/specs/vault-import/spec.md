@@ -262,13 +262,28 @@ independent copy with its own ontology and prefix.
 - **THEN** a second set of pages is created and the first is untouched
 
 ### Requirement: All-or-nothing write
-The import SHALL make no object visible in the target vault until all
-objects are written. A failure SHALL leave the target vault's live objects and
-prefix map as they were, except a vault created by `--new`, which is kept empty.
+The import SHALL stage every object before it moves any into the target
+vault. A failure SHALL leave the target vault's live objects and prefix map as
+they were, except a vault created by `--new`, which is kept empty. When the
+import is killed while moving objects, the next opening of the vault by any
+`cerbo` command or by the desktop app SHALL move the objects it had moved to
+the vault trash before anything reads the vault, unless an import into that
+vault is still running.
 
 #### Scenario: Failure mid-import
 - **WHEN** the disk fills while writing attachments
 - **THEN** the command exits non-zero, `cerbo page list` shows the same pages as before, and no staging data is left in `.cerbo/objects/`
+
+#### Scenario: Import killed during the move
+- **WHEN** `cerbo import-vault` is killed after moving some objects into vault `3f2a`
+- **AND** the user then runs `cerbo page list --vault 3f2a`
+- **THEN** stderr says how many objects were taken back
+- **THEN** the list shows the same pages as before the import, and the taken-back objects are in `.cerbo/trash/`
+
+#### Scenario: A running import is left alone
+- **WHEN** an import into vault `3f2a` is still running
+- **AND** another `cerbo` command opens the vault
+- **THEN** that command does not touch the import's staging folder or its objects
 
 ### Requirement: Index after import
 After a successful import the semantic index SHALL be brought up to date, so

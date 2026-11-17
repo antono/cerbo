@@ -31,7 +31,8 @@ pub use report::{
 pub use scan::{Detection, UNDETECTABLE, detect};
 pub use triples::NS_VOCAB;
 pub use write::{
-    ImportOptions, check_repeat, check_target_outside_source, file_url, recover_staging, run_import,
+    ImportOptions, check_repeat, check_target_outside_source, file_url, finish_interrupted_import,
+    recover_staging, run_import,
 };
 
 use serde::{Deserialize, Serialize};
@@ -647,6 +648,48 @@ pub(crate) mod tests {
         assert_eq!(recover_staging(&vault.ctx).unwrap(), 0);
         assert_eq!(vault.object_dirs(), objects);
         assert!(!vault.ctx.cerbo_dir().join("import-staging").exists());
+    }
+
+    #[test]
+    fn opening_the_vault_takes_back_an_interrupted_import() {
+        let vault = TestVault::new();
+        let existing = crate::page::page_create(&vault.cerbo(), "Existing".into()).unwrap();
+        let titles_before = vault.page_titles();
+        let plan = plan_import(&tolaria_fixture(), None).unwrap();
+        write::CRASH_AFTER_RENAMES.with(|c| c.set(Some(5)));
+        let _ = run_import(&vault.ctx, &plan, ImportOptions::default());
+        write::CRASH_AFTER_RENAMES.with(|c| c.set(None));
+        assert_ne!(vault.page_titles(), titles_before, "the crash left pages live");
+
+        assert_eq!(finish_interrupted_import(&vault.ctx).unwrap(), 5);
+        assert_eq!(vault.page_titles(), titles_before);
+        assert_eq!(vault.object_dirs(), [existing]);
+        assert!(!vault.ctx.cerbo_dir().join("import-staging").exists());
+        // Nothing is left to do the next time.
+        assert_eq!(finish_interrupted_import(&vault.ctx).unwrap(), 0);
+    }
+
+    #[test]
+    fn opening_the_vault_leaves_a_running_import_alone() {
+        let vault = TestVault::new();
+        let plan = plan_import(&tolaria_fixture(), None).unwrap();
+        write::CRASH_AFTER_RENAMES.with(|c| c.set(Some(5)));
+        let _ = run_import(&vault.ctx, &plan, ImportOptions::default());
+        write::CRASH_AFTER_RENAMES.with(|c| c.set(None));
+
+        // Another process holds the lock: its staging folder is not a leftover.
+        let held = write::import_lock(&vault.ctx).unwrap();
+        assert_eq!(finish_interrupted_import(&vault.ctx).unwrap(), 0);
+        assert_eq!(vault.object_dirs().len(), 5);
+        drop(held);
+        assert_eq!(finish_interrupted_import(&vault.ctx).unwrap(), 5);
+    }
+
+    #[test]
+    fn opening_a_vault_without_staging_does_nothing() {
+        let vault = TestVault::new();
+        assert_eq!(finish_interrupted_import(&vault.ctx).unwrap(), 0);
+        assert!(!vault.ctx.global.cache_dir.join("import-locks").exists(), "no lock file for a clean vault");
     }
 
     #[test]

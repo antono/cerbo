@@ -737,7 +737,27 @@ fn path_vault_ctx(
             return Err("not inside a cerbo vault (or any parent up to mount point); use --vault <path>".to_string())
         }
     };
-    cerbo_core::VaultContext::from_path(root)
+    let vault = cerbo_core::VaultContext::from_path(root)?;
+    finish_interrupted_import(&vault);
+    Ok(vault)
+}
+
+/// Undo what an interrupted `import-vault` left live in `vault` before a
+/// command reads it, unless an import is running into it now. A failure is
+/// reported and the command goes on: the next opening tries again.
+fn finish_interrupted_import(vault: &cerbo_core::VaultContext) {
+    match cerbo_core::vault_import::finish_interrupted_import(vault) {
+        Ok(0) => {}
+        Ok(n) => eprintln!(
+            "Took back {n} object{} left by an interrupted import into {} (they are in the vault trash)",
+            if n == 1 { "" } else { "s" },
+            vault.vault_path.display()
+        ),
+        Err(e) => eprintln!(
+            "Warning: could not clean up an interrupted import into {}: {e}",
+            vault.vault_path.display()
+        ),
+    }
 }
 
 /// Run `cerbo search` or `cerbo similar` and print the pages found.
@@ -1112,9 +1132,12 @@ fn resolve_vault_ctx(
     use cerbo_core::vault;
     use cerbo_core::state;
 
-    let make_ctx = |path: std::path::PathBuf| CerboContext {
-        config_dir: path.join(".cerbo"),
-        cache_dir: global_ctx.cache_dir.clone(),
+    let make_ctx = |path: std::path::PathBuf| {
+        finish_interrupted_import(&cerbo_core::VaultContext { vault_path: path.clone(), global: global_ctx.clone() });
+        CerboContext {
+            config_dir: path.join(".cerbo"),
+            cache_dir: global_ctx.cache_dir.clone(),
+        }
     };
 
     // 1. Explicit --vault flag

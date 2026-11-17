@@ -131,6 +131,13 @@ pub fn check_target_outside_source(source: &Path, target: &Path) -> Result<(), S
 /// Hold this vault's import lock: exclusive, without waiting. One lock file
 /// per vault under the global cache, so the vault itself gains no file.
 pub(crate) fn import_lock(vault: &VaultContext) -> Result<File, String> {
+    try_import_lock(vault)?.ok_or_else(|| {
+        "Another import is running into this vault; try again when it has finished".to_string()
+    })
+}
+
+/// The vault's import lock, or `None` while another process holds it.
+fn try_import_lock(vault: &VaultContext) -> Result<Option<File>, String> {
     let dir = vault.global.cache_dir.join("import-locks");
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
     let canonical = vault
@@ -147,10 +154,8 @@ pub(crate) fn import_lock(vault: &VaultContext) -> Result<File, String> {
         .open(&path)
         .map_err(|e| format!("cannot open {}: {e}", path.display()))?;
     match file.try_lock() {
-        Ok(()) => Ok(file),
-        Err(TryLockError::WouldBlock) => Err(
-            "Another import is running into this vault; try again when it has finished".to_string(),
-        ),
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) => Ok(None),
         Err(TryLockError::Error(e)) => Err(format!("cannot lock {}: {e}", path.display())),
     }
 }
@@ -377,6 +382,25 @@ pub fn recover_staging(vault: &VaultContext) -> Result<usize, String> {
     }
     let _ = fs::remove_dir(&root);
     Ok(trashed)
+}
+
+/// Take back what an interrupted import left live, as [`recover_staging`]
+/// does, when no import is running into the vault now. Every opening of a
+/// vault calls this (the CLI before each command, the desktop app when it
+/// opens a vault), so a killed import is undone on the next use of the vault,
+/// not only on the next import into it.
+///
+/// It costs one `stat` when there is nothing to recover. A live import is left
+/// alone: its staging folder is not a leftover. Returns how many objects were
+/// moved to the trash.
+pub fn finish_interrupted_import(vault: &VaultContext) -> Result<usize, String> {
+    if !staging_root(vault).exists() {
+        return Ok(0);
+    }
+    match try_import_lock(vault)? {
+        Some(_lock) => recover_staging(vault),
+        None => Ok(0),
+    }
 }
 
 /// `base`, or `base-2`, `base-3`, … — the first prefix the map (with its
