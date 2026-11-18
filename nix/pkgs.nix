@@ -72,6 +72,8 @@ let
     meta.mainProgram = "cerboid";
 
     postInstall = ''
+      # The scripted agent is a test tool, not part of the product.
+      rm -f $out/bin/fake-acp-agent
       wrapProgram $out/bin/cerboid --set-default ORT_DYLIB_PATH ${ortDylibPath}
     '';
   };

@@ -1,0 +1,21 @@
+# Hand-written from schema/v1/schema.json (not a capture of a live agent).
+# dir "in" = agent to client, "out" = client to agent. The client under test
+# is configured with client_version "test" and answers the permission request
+# by choosing the first allow_once option.
+{"dir":"out","msg":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"cerbo","title":"Cerbo","version":"test"}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"promptCapabilities":{"image":true,"embeddedContext":true},"mcpCapabilities":{"http":true,"sse":false}},"agentInfo":{"name":"recorded","version":"1"},"authMethods":[]}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/vault","mcpServers":[{"name":"cerbo","command":"/bin/cerbo","args":["mcp","--vault","/vault"],"env":[]}]}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":2,"result":{"sessionId":"ses_1","configOptions":[{"id":"mode","type":"select"}]}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"ses_1","prompt":[{"type":"text","text":"tidy page A"}]}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"plan","description":"Plan first"}]}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Looking at the page"}}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"plan","entries":[{"content":"Read page A","priority":"high","status":"in_progress"},{"content":"Fix the heading","priority":"medium","status":"pending"}]}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"tool_call","toolCallId":"call_1","title":"cerbo_read_page","kind":"read","status":"pending","locations":[{"path":"/vault/a.md","line":1}],"rawInput":{"page":"a"}}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"# A"}}],"rawOutput":{"ok":true}}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"sessionId":"ses_1","toolCall":{"toolCallId":"call_2","title":"cerbo_write_page","kind":"edit","status":"pending","content":[{"type":"diff","path":"/vault/a.md","oldText":"# A","newText":"# Alpha"}]},"options":[{"optionId":"always","name":"Always allow","kind":"allow_always"},{"optionId":"once","name":"Allow once","kind":"allow_once"},{"optionId":"no","name":"Reject","kind":"reject_once"}]}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":7,"result":{"outcome":{"outcome":"selected","optionId":"once"}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"tool_call_update","toolCallId":"call_2","status":"completed","content":[{"type":"diff","path":"/vault/a.md","oldText":"# A","newText":"# Alpha"}]}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"Done: "}}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"heading fixed."}}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_1","update":{"sessionUpdate":"usage_update","used":1200,"size":200000}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}}

@@ -1,0 +1,9 @@
+# The initialize result is what `opencode acp` 2.2.6 answered in the research
+# of 2026-11-18; the session/new and session/load answers are shaped like it.
+{"dir":"out","msg":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"cerbo","title":"Cerbo","version":"test"}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,"mcpCapabilities":{"http":true,"sse":false},"promptCapabilities":{"embeddedContext":true,"image":true},"sessionCapabilities":{"additionalDirectories":{},"close":{},"delete":{},"fork":{},"list":{},"resume":{}},"_meta":{"opencode/child-session-updates":true}},"authMethods":[{"id":"opencode-login","name":"Login with opencode","description":"Run opencode auth login in the terminal"}],"agentInfo":{"name":"OpenCode","version":"2.2.6"}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/vault","mcpServers":[]}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":2,"result":{"sessionId":"ses_e10d6ae43ffe01bQrZjXYGafml","configOptions":[{"id":"model","category":"model","type":"select"},{"id":"effort","category":"thought_level","type":"select"},{"id":"mode","type":"select"}]}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":3,"method":"session/load","params":{"cwd":"/vault","mcpServers":[],"sessionId":"ses_e10d6ae43ffe01bQrZjXYGafml"}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_e10d6ae43ffe01bQrZjXYGafml","update":{"sessionUpdate":"available_commands_update","availableCommands":[]}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":3,"result":{"configOptions":[]}}}

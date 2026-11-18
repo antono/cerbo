@@ -9,6 +9,7 @@
 //! ([`ops`]), the file watcher that feeds change events ([`watch`]) and the
 //! server that ties them together ([`server`]).
 
+pub mod acp;
 pub mod approvals;
 pub mod embed;
 pub mod instance;

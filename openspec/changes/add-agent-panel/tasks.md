@@ -1,8 +1,8 @@
 ## 1. ACP in the daemon
 
-- [ ] 1.1 ACP client over stdio: initialize, new session, prompt, cancel, streamed updates, permission requests
+- [x] 1.1 ACP client over stdio: initialize, new session, prompt, cancel, streamed updates, permission requests
 - [ ] 1.2 Agent registry for OpenCode and Claude Code: find command, report unavailable with reason
-- [ ] 1.3 Process supervision: start, stop, crash reporting with the tail of stderr
+- [x] 1.3 Process supervision: start, stop, crash reporting with the tail of stderr
 - [ ] 1.4 Pass `cerbo mcp --vault <v>` as the session's MCP server; set working directory to the vault; apply each CLI's file-tool restrictions
 
 ## 1b. Sandbox (D8–D10)
@@ -22,7 +22,7 @@
 - [ ] 2.1 Event model and append-only per-vault session store outside the vault (owner-only permissions)
 - [ ] 2.2 Session API: create, send, cancel, end, list, delete, subscribe; resume or transcript-as-context
 - [ ] 2.3 Map agent tool-permission requests to approval cards under the vault's mode (D3)
-- [ ] 2.4 Replay tests from recorded ACP logs (no real agent needed)
+- [x] 2.4 Replay tests from recorded ACP logs (no real agent needed)
 
 ## 3. CLI
 
