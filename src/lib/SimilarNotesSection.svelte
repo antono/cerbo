@@ -6,6 +6,7 @@
     applySemanticProgress,
     enableEmbeddings,
     loadSimilarNotes,
+    loadSimilarNotesWhenVisible,
     openPage,
   } from './stores.svelte';
   import {
@@ -30,9 +31,8 @@
   // on every request it makes.
   $effect(() => {
     const current = uuid;
-    if (current && visible) {
-      untrack(() => loadSimilarNotes(current));
-    }
+    const shown = visible;
+    untrack(() => loadSimilarNotesWhenVisible(current, shown));
   });
 
   // Model download and embedding steps, from `embeddings_refresh` or from a

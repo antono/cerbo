@@ -1,5 +1,54 @@
 import { describe, expect, it } from 'vitest';
-import { currentHeadingIndex, extractHeadings, headingsFor, outlineDepths } from './outline';
+import { createJumpHold, currentHeadingIndex, extractHeadings, headingsFor, outlineDepths, pairRenderedHeadings } from './outline';
+
+describe('pairRenderedHeadings', () => {
+  const heads = (items: [number, string][]) => items.map(([level, text], i) => ({ level, text, offset: i, line: i }));
+
+  it('pairs by position when the counts are equal', () => {
+    const h = heads([[1, 'A'], [2, 'B']]);
+    expect(pairRenderedHeadings(h, [{ level: 1, text: 'x' }, { level: 2, text: 'y' }])).toEqual([
+      { heading: 0, rendered: 0 },
+      { heading: 1, rendered: 1 },
+    ]);
+  });
+
+  it('matches by level and text when a raw HTML heading adds one', () => {
+    const h = heads([[1, 'Plan'], [2, 'Budget']]);
+    const rendered = [
+      { level: 1, text: 'Plan' },
+      { level: 3, text: 'From raw html' },
+      { level: 2, text: 'Budget' },
+    ];
+    expect(pairRenderedHeadings(h, rendered)).toEqual([
+      { heading: 0, rendered: 0 },
+      { heading: 1, rendered: 2 },
+    ]);
+  });
+
+  it('ignores inline markup and takes repeated titles in order', () => {
+    const h = heads([[2, '**Notes** on [Berlin](https://x.test)'], [2, 'Notes'], [2, 'Notes']]);
+    const rendered = [
+      { level: 2, text: 'Notes on Berlin' },
+      { level: 2, text: 'Notes' },
+      { level: 1, text: 'Extra' },
+      { level: 2, text: ' Notes ' },
+    ];
+    expect(pairRenderedHeadings(h, rendered)).toEqual([
+      { heading: 0, rendered: 0 },
+      { heading: 1, rendered: 1 },
+      { heading: 2, rendered: 3 },
+    ]);
+  });
+
+  it('leaves out a heading the preview does not show', () => {
+    const h = heads([[1, 'Shown'], [2, 'Gone'], [2, 'Last']]);
+    const rendered = [{ level: 1, text: 'Shown' }, { level: 2, text: 'Last' }];
+    expect(pairRenderedHeadings(h, rendered)).toEqual([
+      { heading: 0, rendered: 0 },
+      { heading: 2, rendered: 1 },
+    ]);
+  });
+});
 
 describe('extractHeadings', () => {
   it('lists headings in order with level, text, line and offset', () => {
@@ -9,6 +58,79 @@ describe('extractHeadings', () => {
       { level: 2, text: 'Budget', offset: md.indexOf('## Budget'), line: 4 },
       { level: 2, text: 'Risks', offset: md.indexOf('## Risks'), line: 5 },
     ]);
+  });
+
+  it('lists setext headings with the level of their underline', () => {
+    const md = 'Title\n=====\n\ntext\n\nSection\n-------\nmore\n';
+    expect(extractHeadings(md)).toEqual([
+      { level: 1, text: 'Title', offset: 0, line: 0 },
+      { level: 2, text: 'Section', offset: md.indexOf('Section'), line: 5 },
+    ]);
+  });
+
+  it('mixes setext and # headings in document order', () => {
+    const md = '# One\nTwo\n---\n### Three\nFour\n=\n';
+    expect(extractHeadings(md).map((h) => [h.level, h.text])).toEqual([
+      [1, 'One'],
+      [2, 'Two'],
+      [3, 'Three'],
+      [1, 'Four'],
+    ]);
+  });
+
+  it('reads a multi-line paragraph over an underline as one heading', () => {
+    const md = 'First line\nsecond line\n===\n';
+    expect(extractHeadings(md)).toEqual([{ level: 1, text: 'First line second line', offset: 0, line: 0 }]);
+  });
+
+  it('does not take a rule, a list item or an orphan underline for a setext heading', () => {
+    expect(extractHeadings('text\n\n---\n\n===\n')).toEqual([]);
+    expect(extractHeadings('- item\n---\n> quote\n---\n')).toEqual([]);
+  });
+
+  const titles = (md: string) => extractHeadings(md).map((h) => h.text);
+
+  it('takes --- after a list item and its continuation lines for a rule', () => {
+    expect(titles('- item\n  continued\n---\n')).toEqual([]);
+    expect(titles('- item\ncontinued lazily\n---\n')).toEqual([]);
+    expect(titles('1. item\n   more\n===\n')).toEqual([]);
+    expect(titles('- item\n\n  second paragraph\n---\n')).toEqual([]);
+  });
+
+  it('takes --- after a block quote and its lazy lines for a rule', () => {
+    expect(titles('> quote\nlazy line\n---\n')).toEqual([]);
+    expect(titles('> quote\n---\n')).toEqual([]);
+  });
+
+  it('takes --- after an HTML block for a rule', () => {
+    expect(titles('<div>\ntext\n---\n')).toEqual([]);
+    expect(titles('<!-- note\nmore\n-->\ntext after\n---\n')).toEqual(['text after']);
+    expect(titles('<details>\nsummary\n===\n')).toEqual([]);
+    expect(titles('<br>\n---\n')).toEqual([]);
+  });
+
+  it('still lists a paragraph with inline HTML, and one after a list or HTML ends', () => {
+    expect(titles('<b>Bold</b> title\n---\n')).toEqual(['<b>Bold</b> title']);
+    expect(titles('- item\n\nTitle\n---\n')).toEqual(['Title']);
+    expect(titles('> quote\n\nTitle\n===\n')).toEqual(['Title']);
+    expect(titles('<div>x</div>\n\nTitle\n---\n')).toEqual(['Title']);
+    expect(titles('- item\n---\nTitle\n---\n')).toEqual(['Title']);
+  });
+
+  it('skips setext look-alikes in fenced code', () => {
+    expect(extractHeadings('```\nNot a title\n=====\n```\n')).toEqual([]);
+  });
+
+  it('skips front matter, including its closing --- and # comments', () => {
+    const md = '---\ntitle: Plan\n# a yaml comment\n---\n# Real\nBody\n---\n';
+    expect(extractHeadings(md)).toEqual([
+      { level: 1, text: 'Real', offset: md.indexOf('# Real'), line: 4 },
+      { level: 2, text: 'Body', offset: md.indexOf('Body'), line: 5 },
+    ]);
+  });
+
+  it('treats an unclosed leading --- as an ordinary rule', () => {
+    expect(extractHeadings('---\n# Real\n')).toEqual([{ level: 1, text: 'Real', offset: 4, line: 1 }]);
   });
 
   it('returns nothing for an empty page or one without headings', () => {
@@ -73,5 +195,29 @@ describe('currentHeadingIndex', () => {
   it('marks nothing above the first heading or without headings', () => {
     expect(currentHeadingIndex(2, (i) => [50, 80][i], 10)).toBe(-1);
     expect(currentHeadingIndex(0, () => 0, 10)).toBe(-1);
+  });
+});
+
+describe('createJumpHold', () => {
+  it('lets a held jump win over the measurement', () => {
+    const hold = createJumpHold();
+    expect(hold.resolve(0)).toBe(0);
+    hold.hold(2);
+    expect(hold.resolve(0)).toBe(2);
+    expect(hold.resolve(-1)).toBe(2);
+  });
+
+  it('follows the measurement again after release', () => {
+    const hold = createJumpHold();
+    hold.hold(2);
+    hold.release();
+    expect(hold.resolve(1)).toBe(1);
+  });
+
+  it('keeps only the latest jump', () => {
+    const hold = createJumpHold();
+    hold.hold(2);
+    hold.hold(1);
+    expect(hold.resolve(0)).toBe(1);
   });
 });

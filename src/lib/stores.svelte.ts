@@ -620,7 +620,9 @@ export async function openPage(uuid: string, options?: OpenPageOptions): Promise
     const v = activeVault();
     if (v) v.lastOpenPage = uuid;
 
-    await loadBacklinks(uuid);
+    // Backlinks, outgoing links and similar notes belong to the Links tab,
+    // which loads them itself while it is visible (spec `desktop-right-panel`,
+    // design D3); loading them here too would load twice, and while hidden.
     await loadAttachments(uuid);
   } catch (e) {
     setError(String(e));
@@ -923,6 +925,22 @@ export async function loadBacklinks(uuid: string): Promise<void> {
   }
 }
 
+/**
+ * Load the Links tab's lists (backlinks and outgoing links) of page `uuid`,
+ * but only while the tab is visible: a hidden tab loads nothing (design D3).
+ */
+export function loadLinksWhenVisible(uuid: string | null | undefined, visible: boolean): void {
+  if (!uuid || !visible) return;
+  void loadBacklinks(uuid);
+  void loadOutgoingLinks(uuid);
+}
+
+/** `loadSimilarNotes`, but only while the Links tab is visible. */
+export function loadSimilarNotesWhenVisible(uuid: string | null | undefined, visible: boolean): void {
+  if (!uuid || !visible) return;
+  void loadSimilarNotes(uuid);
+}
+
 let outgoingRequest = 0;
 
 /** Load the pages that page `uuid` links to; answers for a page left behind are dropped. */
@@ -1017,17 +1035,23 @@ export interface AttachmentInfo {
   mime_type: string | null;
 }
 
+// Loads overlap (opening a page, the panel becoming visible, a save that added
+// a reference): only the newest request may write, or a slow older answer
+// would replace a newer list that already holds the new Attachment.
+let attachmentsRequest = 0;
+
 export async function loadAttachments(uuid: string): Promise<void> {
   if (!app.activeVaultId || !uuid) return;
+  const request = ++attachmentsRequest;
   try {
     const attachments = await invoke<AttachmentInfo[]>('attachment_list', {
       vaultId: app.activeVaultId,
       uuid,
     });
-    app.attachments = attachments;
+    if (request === attachmentsRequest) app.attachments = attachments;
   } catch (e) {
     console.error('Failed to load attachments:', e);
-    app.attachments = [];
+    if (request === attachmentsRequest) app.attachments = [];
   }
 }
 

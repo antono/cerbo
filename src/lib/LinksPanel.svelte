@@ -6,7 +6,7 @@
    */
   import { untrack } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
-  import { app, loadBacklinks, loadOutgoingLinks } from './stores.svelte';
+  import { app, loadLinksWhenVisible } from './stores.svelte';
   import { INDEX_READY_EVENT } from './backlinks';
   import LinkListSection from './LinkListSection.svelte';
   import SimilarNotesSection from './SimilarNotesSection.svelte';
@@ -17,23 +17,15 @@
   // read and write `app`, so only `uuid` and `visible` are dependencies.
   $effect(() => {
     const current = uuid;
-    if (current && visible) {
-      untrack(() => {
-        void loadBacklinks(current);
-        void loadOutgoingLinks(current);
-      });
-    }
+    const shown = visible;
+    untrack(() => loadLinksWhenVisible(current, shown));
   });
 
   // A vault's index may still be building when its page opens; load again
   // once the desktop reports it ready.
   $effect(() => {
     const current = uuid;
-    const unlisten = listen(INDEX_READY_EVENT, () => {
-      if (!current || !visible) return;
-      void loadBacklinks(current);
-      void loadOutgoingLinks(current);
-    });
+    const unlisten = listen(INDEX_READY_EVENT, () => loadLinksWhenVisible(current, visible));
     return () => {
       unlisten.then((stop) => stop());
     };

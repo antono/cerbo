@@ -38,7 +38,7 @@
     type SavedCursorPosition,
   } from './cursor-position';
   import { focusTextareaAtOffset } from './textarea-focus';
-  import { currentHeadingIndex, headingsFor } from './outline';
+  import { createJumpHold, currentHeadingIndex, headingsFor, pairRenderedHeadings, type RenderedHeading } from './outline';
   import { setOutlineBridge } from './outline-bridge';
   import { attachEditorAttachments, type DropIndicator } from './editor-attachments';
   import { attachmentFileName } from './attachment-drop';
@@ -617,6 +617,11 @@
     return surface ? Array.from(surface.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')) : [];
   }
 
+  /** Level and text of rendered headings, for pairing them with the parsed ones. */
+  function renderedInfo(els: HTMLElement[]): RenderedHeading[] {
+    return els.map((el) => ({ level: Number(el.tagName.slice(1)), text: el.textContent ?? '' }));
+  }
+
   /** The nearest ancestor of `el` that scrolls, or null. */
   function scrollParent(el: HTMLElement): HTMLElement | null {
     for (let node = el.parentElement; node; node = node.parentElement) {
@@ -626,16 +631,42 @@
     return null;
   }
 
+  const jumpHold = createJumpHold();
+  // Where the jump left its scroller once the scroll settled. A later scroll
+  // away from there that no wheel, key or pointer event announced (a script,
+  // an anchor, an assistive tool) is the user's too and ends the hold.
+  let jumpSettled: { scroller: Element; top: number } | null = null;
+
+  function settleJump(find: () => Element | null) {
+    jumpSettled = null;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const scroller = find();
+        if (scroller) jumpSettled = { scroller, top: scroller.scrollTop };
+      }),
+    );
+  }
+
   /** Scroll so heading `index` is at the top; in edit mode the cursor moves there too. */
   function jumpToHeading(index: number) {
     const headings = headingsFor(content);
     const heading = headings[index];
     if (!heading) return;
+    // The jump wins over any measurement still pending: it would be taken
+    // before the scroll settled, or on a page too short to scroll at all.
+    if (outlineTimer) clearTimeout(outlineTimer);
+    outlineTimer = null;
+    jumpHold.hold(index);
     app.outlineCurrent = index;
     if (app.editorTab === 'preview') {
       const rendered = previewHeadings();
-      // A count mismatch (raw HTML headings) means the pairing is unknown.
-      if (rendered.length === headings.length) rendered[index].scrollIntoView({ block: 'start' });
+      // Equal counts pair by position; a mismatch (raw HTML headings) pairs by level and text.
+      const pair = pairRenderedHeadings(headings, renderedInfo(rendered)).find((p) => p.heading === index);
+      if (pair) {
+        const target = rendered[pair.rendered];
+        target.scrollIntoView({ block: 'start' });
+        settleJump(() => scrollParent(target));
+      }
       return;
     }
     const input = carta.input;
@@ -644,6 +675,7 @@
     focusTextareaAtOffset(textarea, heading.offset);
     const scroller = editorScroller();
     if (scroller) scroller.scrollTop = textTopAtOffset(input, heading.offset);
+    settleJump(() => scroller ?? null);
   }
 
   /** The heading whose section holds the top of the visible editor area. */
@@ -652,10 +684,16 @@
     if (headings.length === 0) return -1;
     if (app.editorTab === 'preview') {
       const rendered = previewHeadings();
-      if (rendered.length !== headings.length) return -1;
-      const scroller = scrollParent(rendered[0]);
+      const pairs = pairRenderedHeadings(headings, renderedInfo(rendered));
+      if (pairs.length === 0) return -1;
+      const scroller = scrollParent(rendered[pairs[0].rendered]);
       const edge = scroller ? scroller.getBoundingClientRect().top : 0;
-      return currentHeadingIndex(rendered.length, (i) => rendered[i].getBoundingClientRect().top - edge, 8);
+      const found = currentHeadingIndex(
+        pairs.length,
+        (i) => rendered[pairs[i].rendered].getBoundingClientRect().top - edge,
+        8,
+      );
+      return found < 0 ? -1 : pairs[found].heading;
     }
     const input = carta.input;
     const scroller = editorScroller();
@@ -672,7 +710,7 @@
     if (app.rightPanelTab !== 'outline' || outlineTimer) return;
     outlineTimer = setTimeout(() => {
       outlineTimer = null;
-      app.outlineCurrent = app.rightPanelTab === 'outline' ? topHeadingIndex() : -1;
+      app.outlineCurrent = app.rightPanelTab === 'outline' ? jumpHold.resolve(topHeadingIndex()) : -1;
     }, OUTLINE_CURRENT_DELAY_MS);
   }
 
@@ -680,11 +718,26 @@
     const container = editorContainer;
     if (!container) return;
     // `scroll` does not bubble; capture sees the editor's and the preview's own scrollers.
-    const onScroll = () => scheduleOutlineCurrent();
+    const onScroll = (e: Event) => {
+      const settled = jumpSettled;
+      if (settled && e.target === settled.scroller && Math.abs(settled.scroller.scrollTop - settled.top) > 2) {
+        jumpHold.release();
+        jumpSettled = null;
+      }
+      scheduleOutlineCurrent();
+    };
     container.addEventListener('scroll', onScroll, true);
+    // The user taking over (wheel, touch, scrollbar, keys) ends a jump's hold.
+    const onUser = () => {
+      jumpHold.release();
+      scheduleOutlineCurrent();
+    };
+    const userEvents = ['wheel', 'touchmove', 'pointerdown', 'keydown'] as const;
+    for (const type of userEvents) container.addEventListener(type, onUser, { capture: true, passive: true });
     const removeBridge = setOutlineBridge({ jumpTo: jumpToHeading });
     return () => {
       container.removeEventListener('scroll', onScroll, true);
+      for (const type of userEvents) container.removeEventListener(type, onUser, true);
       removeBridge();
       if (outlineTimer) clearTimeout(outlineTimer);
       outlineTimer = null;
@@ -697,7 +750,10 @@
     app.editorTab;
     void content;
     void loadedUuid;
-    untrack(() => scheduleOutlineCurrent());
+    untrack(() => {
+      jumpHold.release();
+      scheduleOutlineCurrent();
+    });
   });
 
   onMount(() => {
