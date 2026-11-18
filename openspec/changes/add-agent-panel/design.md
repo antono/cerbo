@@ -56,5 +56,5 @@ New feature, no data migration. Disabled until an agent CLI is found. Rolling ba
 
 ## Open Questions
 
-- How to deny Claude Code's built-in tools through the adapter (settings file in the agent home or adapter options); checked against the adapter's source when implementing.
+- Claude Code's built-in tools: resolved from the adapter source (0.106). The agent home's `.claude/settings.json` denies them (`permissions.deny`) and `session/new` carries `_meta.claudeCode.options` with `tools: []`, `disallowedTools` and `settingSources: ["user"]` (see `sandbox::claude_session_meta`). The session manager must pass that meta; verify against a real adapter once sessions run.
 - Whether to show token and cost use in the header.

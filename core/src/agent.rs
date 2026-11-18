@@ -71,6 +71,56 @@ struct AgentSettings {
     /// Vault id to level.
     #[serde(default)]
     permissions: BTreeMap<String, AgentPermission>,
+    /// The `[agent]` table: how the daemon runs agent CLIs.
+    #[serde(default)]
+    agent: AgentSection,
+}
+
+/// The `[agent]` table of `agents.toml`: how the daemon runs agent CLIs.
+///
+/// ```toml
+/// [agent]
+/// sandbox = "bwrap"            # or "none": run agents unsandboxed, with a warning
+/// opencode = "/abs/opencode"   # optional, else found on PATH at daemon start
+/// claude = "/abs/claude-agent-acp"
+/// ```
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSection {
+    /// `bwrap` (default) or `none`. Kept as text so a typo costs the agent
+    /// sessions an error message, not the whole file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<String>,
+    /// Absolute path of the OpenCode binary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opencode: Option<String>,
+    /// Absolute path of the `claude-agent-acp` adapter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude: Option<String>,
+}
+
+/// How agent processes are confined (design D8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SandboxMode {
+    #[default]
+    Bwrap,
+    None,
+}
+
+impl AgentSection {
+    /// The sandbox mode; an unknown value is an error, never a silent `none`.
+    pub fn sandbox_mode(&self) -> Result<SandboxMode, String> {
+        match self.sandbox.as_deref() {
+            None | Some("bwrap") => Ok(SandboxMode::Bwrap),
+            Some("none") => Ok(SandboxMode::None),
+            Some(other) => Err(format!("agents.toml: [agent] sandbox = {other:?} is not valid: use \"bwrap\" or \"none\"")),
+        }
+    }
+}
+
+/// The `[agent]` table of `agents.toml`; the defaults when the file is absent
+/// or cannot be read (which keeps the sandbox on).
+pub fn agent_section(ctx: &CerboContext) -> AgentSection {
+    load(ctx).map(|s| s.agent).unwrap_or_default()
 }
 
 fn settings_path(ctx: &CerboContext) -> PathBuf {
@@ -169,6 +219,24 @@ mod tests {
 
     fn ctx(dir: &std::path::Path) -> CerboContext {
         CerboContext { config_dir: dir.join("config"), cache_dir: dir.join("cache") }
+    }
+
+    #[test]
+    fn the_agent_section_defaults_to_the_sandbox_and_survives_a_permission_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = crate::CerboContext { config_dir: tmp.path().into(), cache_dir: tmp.path().into() };
+        assert_eq!(agent_section(&ctx).sandbox_mode(), Ok(SandboxMode::Bwrap));
+        std::fs::write(
+            ctx.config_dir.join("agents.toml"),
+            "[agent]\nsandbox = \"none\"\nopencode = \"/opt/oc\"\n",
+        )
+        .unwrap();
+        set_permission(&ctx, "v137", AgentPermission::Auto).unwrap();
+        let section = agent_section(&ctx);
+        assert_eq!(section.sandbox_mode(), Ok(SandboxMode::None));
+        assert_eq!(section.opencode.as_deref(), Some("/opt/oc"));
+        let typo = AgentSection { sandbox: Some("bwrapp".into()), ..Default::default() };
+        assert!(typo.sandbox_mode().unwrap_err().contains("bwrapp"));
     }
 
     #[test]

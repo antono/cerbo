@@ -9,12 +9,14 @@
 //! ([`ops`]), the file watcher that feeds change events ([`watch`]) and the
 //! server that ties them together ([`server`]).
 
+pub mod agents;
 pub mod approvals;
 pub mod embed;
 pub mod instance;
 pub mod ops;
 pub mod queue;
 pub mod registry;
+pub mod sandbox;
 pub mod server;
 pub mod watch;
 

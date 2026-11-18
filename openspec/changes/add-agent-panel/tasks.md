@@ -1,16 +1,16 @@
 ## 1. ACP in the daemon
 
 - [ ] 1.1 ACP client over stdio: initialize, new session, prompt, cancel, streamed updates, permission requests
-- [ ] 1.2 Agent registry for OpenCode and Claude Code: find command, report unavailable with reason
+- [x] 1.2 Agent registry for OpenCode and Claude Code: find command, report unavailable with reason
 - [ ] 1.3 Process supervision: start, stop, crash reporting with the tail of stderr
 - [ ] 1.4 Pass `cerbo mcp --vault <v>` as the session's MCP server; set working directory to the vault; apply each CLI's file-tool restrictions
 
 ## 1b. Sandbox (D8–D10)
 
-- [ ] 1b.1 bwrap argument builder, probe at session start, clear error when it fails; `agent.sandbox = "none"` opt-out with a warning
-- [ ] 1b.2 Per-session socket: agent-only, bound to the vault, removed on end; `cerbo mcp` reads `CERBO_SOCKET`
-- [ ] 1b.3 Agent homes with generated config (built-in tools denied, `cerbo` MCP allowed) and the login file bound in
-- [ ] 1b.4 Nix: ship bubblewrap with cerboid (`CERBO_BWRAP`); tests for direct write refused, main socket hidden, hello as app refused
+- [x] 1b.1 bwrap argument builder, probe at session start, clear error when it fails; `agent.sandbox = "none"` opt-out with a warning
+- [ ] 1b.2 Per-session socket: agent-only, bound to the vault, removed on end; `cerbo mcp` reads `CERBO_SOCKET` (the `cerbo mcp` half is done; the daemon-side socket needs the session manager)
+- [x] 1b.3 Agent homes with generated config (built-in tools denied, `cerbo` MCP allowed) and the login file bound in
+- [ ] 1b.4 Nix: ship bubblewrap with cerboid (`CERBO_BWRAP`); tests for direct write refused, main socket hidden, hello as app refused (the first two are done in `cerboid/tests/sandbox_bwrap.rs`; the last needs the per-session socket)
 
 ## 1c. Desktop connection (subset of add-cerboid-daemon 7.1–7.2)
 
