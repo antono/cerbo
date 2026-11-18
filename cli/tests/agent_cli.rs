@@ -3,8 +3,8 @@
 //! crate. Agents run without the sandbox here (`sandbox = "none"`): the
 //! sandbox has its own tests in `cerboid`.
 //!
-//! The fake agent binary belongs to another package, so cargo does not build
-//! it for these tests; [`fake_agent`] finds it next to `cerbo` or builds it.
+//! The fake agent is the source of `cerboid`'s `fake-acp-agent`, built as
+//! `cerbo-fake-agent` by this package (see `cli/Cargo.toml`).
 
 #![cfg(unix)]
 
@@ -20,28 +20,14 @@ use cerboid::{Config, Running};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::{Arc, Once};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 const CERBO: &str = env!("CARGO_BIN_EXE_cerbo");
 
 fn fake_agent() -> PathBuf {
-    static BUILD: Once = Once::new();
-    let beside = Path::new(CERBO).parent().unwrap().join("fake-acp-agent");
-    BUILD.call_once(|| {
-        if beside.is_file() {
-            return;
-        }
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let status = Command::new(cargo)
-            .args(["build", "-p", "cerboid", "--bin", "fake-acp-agent"])
-            .status()
-            .expect("cargo runs");
-        assert!(status.success(), "cannot build the fake ACP agent");
-    });
-    assert!(beside.is_file(), "no fake-acp-agent at {}", beside.display());
-    beside
+    PathBuf::from(env!("CARGO_BIN_EXE_cerbo-fake-agent"))
 }
 
 struct Env {

@@ -5,6 +5,18 @@ name = "cerbo"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "cerbo"
+path = "src/main.rs"
+
+# The scripted fake ACP agent of the daemon crate, built here too so that the
+# tests of `cerbo agent` can start it: cargo builds the binaries of a package
+# for its own integration tests only. A test tool, never installed.
+[[bin]]
+name = "cerbo-fake-agent"
+path = "../cerboid/src/bin/fake-acp-agent.rs"
+test = false
+
 [dependencies]
 cerbo-core = { path = "../core", features = ["embeddings"] }
 clap = { version = "4", features = ["derive"] }

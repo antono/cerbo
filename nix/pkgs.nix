@@ -48,6 +48,9 @@ let
       fi
       cp "$manPage" $out/share/man/man1/
 
+      # The scripted agent of the tests is not part of the product.
+      rm -f $out/bin/cerbo-fake-agent
+
       wrapProgram $out/bin/cerbo --set-default ORT_DYLIB_PATH ${ortDylibPath}
     '';
   };
