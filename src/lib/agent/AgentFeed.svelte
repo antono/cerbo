@@ -7,7 +7,7 @@
   import { tick } from 'svelte';
   import { ArrowDown } from 'lucide-svelte';
   import { app, openPage } from '../stores.svelte';
-  import { FEED_WINDOW, windowItems, type FeedItem } from './feed';
+  import { FEED_WINDOW, clipText, TEXT_LIMIT, windowItems, type FeedItem } from './feed';
   import ApprovalCard from './ApprovalCard.svelte';
   import ToolRow from './ToolRow.svelte';
 
@@ -15,11 +15,17 @@
     items,
     loading = false,
     onAnswer,
+    pendingIds = null,
   }: {
     items: FeedItem[];
     loading?: boolean;
     onAnswer: (approval: number, approve: boolean) => void | Promise<void>;
+    /** Approvals the daemon still waits on; null while unknown (buttons then follow the feed alone). */
+    pendingIds?: ReadonlySet<number> | null;
   } = $props();
+
+  /** Keys of long messages the person expanded. */
+  let expanded = $state<Record<number, boolean>>({});
 
   /** How many items the cap allows; "Show earlier" raises it. */
   let limit = $state(FEED_WINDOW);
@@ -57,10 +63,22 @@
     if (scroller) scroller.scrollTop = scroller.scrollHeight - before;
   }
 
+  function shown(key: number, text: string): string {
+    return expanded[key] ? text : clipText(text).text;
+  }
+
   function pageTitle(path: string): string {
     return app.pages.find((p) => p.uuid === path)?.title ?? path;
   }
 </script>
+
+{#snippet more(key: number, text: string)}
+  {#if text.length > TEXT_LIMIT}
+    <button class="expand" data-testid="agent-expand" onclick={() => (expanded[key] = !expanded[key])}>
+      {expanded[key] ? 'Show less' : 'Show more'}
+    </button>
+  {/if}
+{/snippet}
 
 <div class="feed-wrap">
   <div
@@ -82,7 +100,8 @@
     {#each windowed.shown as item (item.key)}
       {#if item.kind === 'user'}
         <div class="message user" data-testid="agent-message" data-role="user">
-          <p class="text">{item.text}</p>
+          <p class="text">{shown(item.key, item.text)}</p>
+          {@render more(item.key, item.text)}
           {#if item.context.length > 0}
             <ul class="context" aria-label="Context pages">
               {#each item.context as ref (ref.path)}
@@ -93,17 +112,19 @@
         </div>
       {:else if item.kind === 'agent'}
         <div class="message agent" data-testid="agent-message" data-role="agent">
-          <p class="text">{item.text}</p>
+          <p class="text">{shown(item.key, item.text)}</p>
+          {@render more(item.key, item.text)}
         </div>
       {:else if item.kind === 'thought'}
         <details class="thought" data-testid="agent-thought">
           <summary>Thinking</summary>
-          <p class="text">{item.text}</p>
+          <p class="text">{shown(item.key, item.text)}</p>
+          {@render more(item.key, item.text)}
         </details>
       {:else if item.kind === 'tool'}
         <ToolRow {item} />
       {:else if item.kind === 'approval'}
-        <ApprovalCard {item} {onAnswer} />
+        <ApprovalCard {item} {onAnswer} live={pendingIds === null || pendingIds.has(item.approval.id)} />
       {:else if item.kind === 'page'}
         <button class="page-link" data-testid="agent-page-link" data-page={item.path} onclick={() => openPage(item.path)}>
           Changed: <span class="page-title">{pageTitle(item.path)}</span>
@@ -251,6 +272,16 @@
     color: var(--fg);
     font-size: 0.7rem;
     white-space: pre-wrap;
+  }
+
+  .expand {
+    align-self: flex-start;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--primary);
+    font-size: 0.72rem;
+    cursor: pointer;
   }
 
   .earlier {

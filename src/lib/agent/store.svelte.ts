@@ -93,8 +93,14 @@ export class AgentStore {
 
   activeInfo = $derived(this.sessions.find((s) => s.id === this.activeId) ?? null);
   view = $derived.by<SessionView>(() => buildSessionView(this.eventsBySession[this.activeId ?? ''] ?? []));
-  /** The agent's state: the feed's last word, else the list's. */
-  sessionState = $derived(this.view.state ?? this.activeInfo?.state ?? null);
+  /** The agent's state: the list's word when the session is over, else the feed's last, else the list's. */
+  sessionState = $derived.by(() => {
+    const listed = this.activeInfo?.state ?? null;
+    if (listed === 'ended' || listed === 'failed') return listed;
+    return this.view.state ?? listed;
+  });
+  /** Ids of approvals still waiting on the daemon: only these may show buttons. */
+  pendingIds = $derived(new Set(this.pending.map((a) => a.id)));
   /** A turn runs: the composer offers Cancel instead of Send. */
   working = $derived(this.sessionState === 'working');
   vaultPending = $derived(pendingForVault(this.pending, app.activeVaultId));
@@ -162,8 +168,41 @@ export class AgentStore {
 
   /** The daemon is reachable: load what the panel shows, and catch up on what was missed. */
   async #onConnected(): Promise<void> {
-    await Promise.all([this.refreshAgents(), this.#loadPending()]);
-    await this.setVault(app.activeVaultId, true);
+    await this.refreshAgents();
+    await this.resync();
+  }
+
+  /**
+   * Catch up after a reconnect or a `resync` event: the session list, the
+   * approvals waiting, and the events of the open session after the last one
+   * held. The shown session stays shown while it is still listed.
+   */
+  async resync(): Promise<void> {
+    const vault = this.#vault;
+    if (!vault || vault !== app.activeVaultId || this.connection.state !== 'connected') {
+      await this.#loadPending();
+      await this.setVault(app.activeVaultId, true);
+      return;
+    }
+    const epoch = this.#epoch;
+    await this.#loadPending();
+    try {
+      const sessions = await call<SessionInfo[]>('session_list', { vault });
+      if (epoch !== this.#epoch) return;
+      this.sessions = sessions;
+      const id = this.activeId;
+      if (id && sessions.some((s) => s.id === id)) {
+        const held = this.eventsBySession[id];
+        await this.#loadEvents(id, held?.length ? lastContiguous(held) : 0);
+      } else {
+        const pick = pickActiveSession(sessions);
+        this.activeId = pick;
+        if (pick) await this.openSession(pick);
+      }
+    } catch (e) {
+      if (epoch === this.#epoch) this.error = errorText(e);
+    }
+    this.syncStatus();
   }
 
   async refreshAgents(): Promise<void> {
@@ -376,6 +415,10 @@ export class AgentStore {
   // ── Live events ────────────────────────────────────────────────────────────
 
   #enqueue(event: AgentDaemonEvent): void {
+    if (event.kind === 'resync') {
+      void this.resync();
+      return;
+    }
     // Approvals are tracked at once: the tab mark must not wait for a batch.
     this.pending = applyApprovalEvent(this.pending, event);
     this.#queue.push(event);

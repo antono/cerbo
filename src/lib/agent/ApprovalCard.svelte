@@ -9,9 +9,12 @@
   let {
     item,
     onAnswer,
+    live = true,
   }: {
     item: Extract<FeedItem, { kind: 'approval' }>;
     onAnswer: (approval: number, approve: boolean) => void | Promise<void>;
+    /** The daemon still lists this approval as waiting; false hides the buttons. */
+    live?: boolean;
   } = $props();
 
   let approval = $derived(item.approval);
@@ -72,7 +75,10 @@
     <!-- svelte-ignore a11y_no_noninteractive_tabindex (a scrollable region must take focus) -->
     <pre class="diff" data-testid="agent-approval-diff" tabindex="0" aria-label="Changes">{#each lines as line, i (i)}<span class="line {line.kind}">{line.text || ' '}</span>{/each}</pre>
   {/if}
-  {#if !item.outcome}
+  {#if !item.outcome && !live}
+    <p class="summary" data-testid="agent-approval-stale">No longer waiting for an answer</p>
+  {/if}
+  {#if !item.outcome && live}
     <div class="actions">
       <button class="btn approve" data-testid="agent-approve" disabled={answering} onclick={() => answer(true)}>
         Approve

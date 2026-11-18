@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diffLines, mergeEvents, buildSessionView, toolStatusKind, windowItems } from './feed';
+import { clipText, TEXT_LIMIT, diffLines, mergeEvents, buildSessionView, toolStatusKind, windowItems } from './feed';
 import { EDIT_APPROVAL, EDIT_TURN, TOOL_APPROVAL, log } from './fixtures';
 
 describe('buildSessionView', () => {
@@ -182,5 +182,44 @@ describe('diffLines', () => {
       'remove',
       'add',
     ]);
+  });
+});
+
+describe('stale approvals', () => {
+  const ask = { type: 'approval_requested', approval: EDIT_APPROVAL } as const;
+
+  it('cancels a pending card when the session ends or fails', () => {
+    for (const state of ['ended', 'failed'] as const) {
+      const view = buildSessionView(log(ask, { type: 'state', state }));
+      expect(view.items[0]).toMatchObject({ kind: 'approval', outcome: 'cancelled' });
+      expect(view.pending).toEqual([]);
+    }
+  });
+
+  it('cancels a pending card when the session resumed', () => {
+    const view = buildSessionView(log(ask, { type: 'resumed', how: 'load' }));
+    expect(view.items[0]).toMatchObject({ outcome: 'cancelled' });
+    expect(view.pending).toEqual([]);
+  });
+
+  it('keeps an answered card as answered and a later ask pending', () => {
+    const view = buildSessionView(
+      log(ask, { type: 'approval_resolved', approval_id: 137, outcome: 'approved' }, { type: 'state', state: 'ended' }),
+    );
+    expect(view.items[0]).toMatchObject({ outcome: 'approved' });
+  });
+});
+
+describe('clipText', () => {
+  it('leaves short text and cuts a huge chunk', () => {
+    expect(clipText('abc')).toEqual({ text: 'abc', clipped: false });
+    const big = clipText('x'.repeat(1_000_000));
+    expect(big.clipped).toBe(true);
+    expect(big.text.length).toBe(TEXT_LIMIT);
+  });
+
+  it('does not split a surrogate pair', () => {
+    const r = clipText('a'.repeat(9) + '\u{1F600}', 10);
+    expect(r.text).toBe('a'.repeat(9));
   });
 });

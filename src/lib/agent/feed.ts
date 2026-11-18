@@ -73,6 +73,13 @@ export function buildSessionView(events: readonly SessionEvent[]): SessionView {
     items.push(item);
     mergeable = null;
   };
+  /** The agent behind every unanswered approval is gone: close the cards. */
+  const cancelPending = () => {
+    pending.clear();
+    items.forEach((it, i) => {
+      if (it.kind === 'approval' && it.outcome === null) items[i] = { ...it, outcome: 'cancelled' };
+    });
+  };
   const toolIndex = (id: string) => items.findIndex((i) => i.kind === 'tool' && i.id === id);
 
   for (const { seq, body } of events) {
@@ -148,6 +155,7 @@ export function buildSessionView(events: readonly SessionEvent[]): SessionView {
       case 'state':
         state = body.state;
         mergeable = null;
+        if (body.state === 'ended' || body.state === 'failed') cancelPending();
         if (body.state === 'failed') {
           push({
             kind: 'notice',
@@ -166,6 +174,8 @@ export function buildSessionView(events: readonly SessionEvent[]): SessionView {
         }
         break;
       case 'resumed':
+        // A resumed session starts without the approvals the old process held.
+        cancelPending();
         push({
           kind: 'notice',
           key: seq,
@@ -211,6 +221,18 @@ export const FEED_WINDOW = 150;
 export function windowItems<T>(items: readonly T[], limit: number): { shown: T[]; hidden: number } {
   if (items.length <= limit) return { shown: items.slice(), hidden: 0 };
   return { shown: items.slice(items.length - limit), hidden: items.length - limit };
+}
+
+/** Longest text a message shows before "Show more"; bigger chunks would stall layout. */
+export const TEXT_LIMIT = 4000;
+
+/** `text` cut to `limit` characters (at a code point), and whether it was cut. */
+export function clipText(text: string, limit = TEXT_LIMIT): { text: string; clipped: boolean } {
+  if (text.length <= limit) return { text, clipped: false };
+  let end = limit;
+  const c = text.charCodeAt(end - 1);
+  if (c >= 0xd800 && c <= 0xdbff) end--; // do not split a surrogate pair
+  return { text: text.slice(0, end), clipped: true };
 }
 
 export type DiffLineKind = 'add' | 'remove' | 'hunk' | 'context';

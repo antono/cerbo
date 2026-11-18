@@ -12,7 +12,9 @@ export const AGENT_CONNECTION_EVENT = 'agent-connection';
 export type AgentDaemonEvent =
   | SessionDaemonEvent
   | { kind: 'approval_requested'; approval: ApprovalInfo }
-  | { kind: 'approval_resolved'; vault: string; approval: number; outcome: ApprovalOutcome };
+  | { kind: 'approval_resolved'; vault: string; approval: number; outcome: ApprovalOutcome }
+  /** The daemon dropped events for this client: refetch what was missed. */
+  | { kind: 'resync' };
 
 /** What `agent-connection` carries. */
 export interface ConnectionPayload {
@@ -38,6 +40,8 @@ export function applyApprovalEvent(pending: readonly ApprovalInfo[], event: Agen
       }
       return pending.slice();
     }
+    case 'resync':
+      return pending.slice();
   }
 }
 

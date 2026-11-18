@@ -215,4 +215,37 @@ describe('AgentStore', () => {
     expect(store.permission).toBe('auto');
     expect(calls.at(-1)).toEqual({ command: 'vault_agent_permission_set', args: { vaultId: 'v1', level: 'auto' } });
   });
+
+  it('keeps the open session on reconnect and refetches only after its last seq', async () => {
+    emit('agent-connection', { state: 'unavailable' });
+    commands.session_events = (args) => (args.afterSeq === 1 ? log({ type: 'state', state: 'idle' }).map((e) => ({ ...e, seq: 2 })) : []);
+    const before = calls.filter((c) => c.command === 'session_events').length;
+    emit('agent-connection', { state: 'connected' });
+    await settle();
+    expect(store.activeId).toBe('s1');
+    const fetches = calls.filter((c) => c.command === 'session_events').slice(before);
+    expect(fetches.map((c) => c.args.afterSeq)).toEqual([1]);
+    expect(store.view.lastSeq).toBe(2);
+  });
+
+  it('resyncs on a resync event: events after the last seq and the approval list', async () => {
+    commands.approval_list = () => [EDIT_APPROVAL];
+    calls.length = 0;
+    emit('agent-event', { kind: 'resync' });
+    await settle();
+    expect(calls.some((c) => c.command === 'approval_list')).toBe(true);
+    expect(calls.find((c) => c.command === 'session_events')!.args.afterSeq).toBe(1);
+    expect(store.activeId).toBe('s1');
+    expect(store.pendingIds.has(137)).toBe(true);
+  });
+
+  it('prefers the listed state when the session ended, even if the feed says working', async () => {
+    live('s1', [{ seq: 2, at: 'x', body: { type: 'state', state: 'working' } }]);
+    await settle();
+    expect(store.working).toBe(true);
+    commands.session_list = () => [session('s1', 'ended')];
+    await store.refreshSessions();
+    expect(store.sessionState).toBe('ended');
+    expect(store.working).toBe(false);
+  });
 });
