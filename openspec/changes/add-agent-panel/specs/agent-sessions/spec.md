@@ -24,19 +24,27 @@ A session SHALL be tied to one vault and given that vault only, through `cerbo m
 
 ### Requirement: The agent runs in a sandbox
 
-The daemon SHALL start every agent process inside a bubblewrap sandbox in which the vault is read-only, the rest of the user's home is hidden except the agent's login file, and the main daemon socket is not reachable. The agent SHALL reach the vault's pages for writing only through the session's own socket, where every connection counts as an agent bound to that vault. If the sandbox cannot be set up, the session SHALL NOT start and SHALL say why, unless the user turned the sandbox off in the daemon config, in which case every session SHALL show a warning.
+The daemon SHALL start every agent process inside a bubblewrap sandbox in which the vault is read-only, the rest of the user's home is hidden except the agent's login file, and the main daemon socket is not reachable. The agent SHALL be able to change pages only through the session's own socket.
 
 #### Scenario: Direct write is refused
 - **WHEN** the agent tries to write a file in the vault folder with its own tools
 - **THEN** the write SHALL fail and the page SHALL stay unchanged
 
-#### Scenario: Agent cannot pose as the app
-- **WHEN** a process in the sandbox connects to the session socket and says it is the app
-- **THEN** the daemon SHALL treat it as an agent of that vault and refuse approval answers
-
 #### Scenario: No bubblewrap
 - **WHEN** `bwrap` is missing or user namespaces are disabled
 - **THEN** starting a session SHALL fail with a message naming the cause
+
+#### Scenario: Sandbox turned off
+- **WHEN** the user set `agent.sandbox = "none"` in the daemon config
+- **THEN** sessions SHALL start without the sandbox and each SHALL show a warning
+
+### Requirement: The session socket is agent-only
+
+Every connection on a session's socket SHALL count as an agent bound to the session's vault, whatever its hello says.
+
+#### Scenario: Agent cannot pose as the app
+- **WHEN** a process in the sandbox connects to the session socket and says it is the app
+- **THEN** the daemon SHALL treat it as an agent of that vault and refuse approval answers
 
 ### Requirement: Sessions survive the window
 
