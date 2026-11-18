@@ -88,6 +88,27 @@ their name get a configuration in which no agent can be found.
 CI runs the suite on pushes to `main` and on pull requests
 (`.github/workflows/e2e.yml`).
 
+### Real agents, without a prompt
+
+`cerboid/tests/real_agents.rs` starts the real OpenCode and the real Claude
+adapter (`claude-agent-acp`) the way the daemon does (bubblewrap, a fake home
+with a placeholder login file) and checks `initialize`, `session/new` and that
+the `cerbo` MCP server connects; no message ever goes to a model. The tests are
+ignored by default:
+
+```bash
+cargo build -p cerbo
+CERBO_REAL_CLAUDE_ACP=$(readlink -f $(command -v claude-agent-acp)) \
+CERBO_REAL_OPENCODE=$(command -v opencode) \
+  cargo test -p cerboid --test real_agents -- --ignored --nocapture
+```
+
+`nixpkgs#claude-agent-acp` is unfree: build it with
+`NIXPKGS_ALLOW_UNFREE=1 nix build --impure nixpkgs#claude-agent-acp`. Set
+`CERBO_RECORD_DIR` to keep the recorded ACP exchange of each agent; the replay
+fixtures under `cerboid/tests/fixtures/acp/` came from there (paths replaced,
+long lists cut).
+
 ## Releases
 
 `.github/workflows/release.yml` is started by hand (workflow dispatch) with a

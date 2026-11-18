@@ -28,11 +28,15 @@ The tab header SHALL show the agent picker (OpenCode, Claude Code), the connecti
 
 ### Requirement: Composer
 
-The composer SHALL send on Enter and add a new line on Shift+Enter. It SHALL show the open page as a context chip that the user can remove. Typing `@` SHALL offer vault pages to add as context. While the agent works, the send action SHALL become a cancel action.
+The composer SHALL send on Enter and add a new line on Shift+Enter. It SHALL show the open page as a context chip that the user can remove. Typing `@` SHALL offer vault pages to add as context. While the agent works, the send action SHALL become a cancel action. While the agent is still starting, the send action SHALL be disabled.
 
 #### Scenario: Mention a page
 - **WHEN** the user types `@ven` and chooses "Vendor onboarding"
 - **THEN** the page SHALL be added to the message as context
+
+#### Scenario: Window fell behind
+- **WHEN** the daemon tells the window it dropped events for it (`resync`)
+- **THEN** the panel SHALL read the sessions, the open feed and the pending approvals again, so nothing stays missing
 
 #### Scenario: Remove page context
 - **WHEN** the user removes the open-page chip and sends
