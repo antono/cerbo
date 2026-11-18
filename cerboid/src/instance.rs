@@ -109,6 +109,33 @@ fn listener_from_env(
     Ok(Some(listener))
 }
 
+/// Whether a socket in the listening state is bound to `path`, from
+/// `/proc/net/unix`; `None` when that table is unavailable.
+fn listening_in_kernel(path: &std::path::Path) -> Option<bool> {
+    let table = std::fs::read_to_string("/proc/net/unix").ok()?;
+    Some(listening_in_table(&table, path))
+}
+
+/// Columns: Num RefCount Protocol Flags Type St Inode Path. A listening
+/// socket has `__SO_ACCEPTCON` (0x10000) in Flags. The path is compared as
+/// bound, after resolving the directory (the table shows the path the binder
+/// used, which may differ by symlinks such as /var/run).
+fn listening_in_table(table: &str, path: &std::path::Path) -> bool {
+    let canonical = path
+        .parent()
+        .zip(path.file_name())
+        .and_then(|(dir, name)| std::fs::canonicalize(dir).ok().map(|d| d.join(name)));
+    table.lines().skip(1).any(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let Some(flags) = fields.get(3).and_then(|f| u32::from_str_radix(f, 16).ok()) else { return false };
+        if flags & 0x10000 == 0 || fields.len() < 8 {
+            return false;
+        }
+        let bound = std::path::PathBuf::from(fields[7..].join(" "));
+        bound == path || canonical.as_deref() == Some(bound.as_path())
+    })
+}
+
 impl Instance {
     /// Mark the socket as systemd's: it is not removed when the daemon stops,
     /// so the next client can activate the service again.
@@ -119,11 +146,21 @@ impl Instance {
     /// Listen on the socket, replacing a stale one. The socket is mode 0600 in
     /// a 0700 directory and never bound to a network address.
     ///
-    /// A socket is stale only when nobody answers on it. If a connection
-    /// succeeds, something listens there (another daemon, or systemd for the
-    /// service's socket unit) and it is left alone.
+    /// A socket is stale only when nobody listens on it. If something does
+    /// (another daemon, or systemd for the service's socket unit) it is left
+    /// alone.
+    ///
+    /// Whether something listens is read from the kernel's socket table, not
+    /// by connecting: a connection to systemd's socket unit, even one closed
+    /// at once, counts as traffic and would make systemd start (or restart)
+    /// the service just to find the lock taken. Only where the table cannot
+    /// be read (not Linux) does it fall back to a connect probe.
     pub fn bind(&mut self) -> Result<UnixListener, String> {
-        if UnixStream::connect(&self.paths.socket).is_ok() {
+        let listening = match listening_in_kernel(&self.paths.socket) {
+            Some(listening) => listening,
+            None => UnixStream::connect(&self.paths.socket).is_ok(),
+        };
+        if listening {
             return Err(format!(
                 "something already listens on {}; not replacing it",
                 self.paths.socket.display()
@@ -228,6 +265,32 @@ mod tests {
         // Still theirs: neither bind nor dropping the instance unlinked it.
         drop(instance);
         assert!(UnixStream::connect(&paths.socket).is_ok());
+    }
+
+    #[test]
+    fn probing_a_live_socket_makes_no_connection() {
+        let (_tmp, paths) = paths();
+        paths.prepare_dir().unwrap();
+        let theirs = UnixListener::bind(&paths.socket).unwrap();
+        theirs.set_nonblocking(true).unwrap();
+
+        let Acquired::Instance(mut instance) = acquire(&paths).unwrap() else { panic!("no instance") };
+        assert!(instance.bind().is_err());
+        // Nothing was queued on their socket, so systemd would not be woken.
+        assert!(matches!(theirs.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock));
+    }
+
+    #[test]
+    fn the_socket_table_tells_listening_from_stale() {
+        let path = std::path::Path::new("/run/user/137/cerbo/cerboid.sock");
+        let table = "Num RefCount Protocol Flags Type St Inode Path\n\
+            0000: 00000002 00000000 00010000 0001 01 137 /run/user/137/cerbo/cerboid.sock\n\
+            0000: 00000002 00000000 00000000 0001 03 138 /run/user/137/other.sock\n";
+        assert!(listening_in_table(table, path));
+        // Same path but connected, not listening, is not a listener.
+        let stale = table.replace("00010000", "00000000");
+        assert!(!listening_in_table(&stale, path));
+        assert!(!listening_in_table(table, std::path::Path::new("/run/user/137/other.sock")));
     }
 
     #[test]

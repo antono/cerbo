@@ -155,6 +155,70 @@
             touch $out
           '';
 
+        # The module's generated ExecStartPre script against a fake `cerbo`
+        # that exits with the status found in $FAKE_CERBO_STATUS: 0 records the
+        # applied level, 2 (vault not registered) warns and lets the service
+        # start, anything else fails the start.
+        checks.home-manager-exec-start-pre =
+          let
+            lib = pkgs.lib;
+            fakeCerbo = pkgs.writeShellScriptBin "cerbo" ''
+              exit "$(cat "$FAKE_CERBO_STATUS")"
+            '';
+            conf = home-manager.lib.homeManagerConfiguration {
+              inherit pkgs;
+              modules = [
+                self.homeManagerModules.default
+                {
+                  home.username = "tester";
+                  home.homeDirectory = "/home/tester";
+                  home.stateVersion = "24.11";
+                  services.cerbo.daemon = {
+                    enable = true;
+                    cliPackage = fakeCerbo;
+                    vaults.Notes.agent = "approve";
+                  };
+                }
+              ];
+            };
+            pre = lib.head (lib.toList conf.config.systemd.user.services.cerboid.Service.ExecStartPre);
+          in
+          pkgs.runCommand "home-manager-exec-start-pre-check" { } ''
+            pre=${pre}
+            export FAKE_CERBO_STATUS=$TMPDIR/status
+            unset XDG_STATE_HOME
+
+            # Runs the script with a fresh state directory and the given status.
+            run() {
+              export HOME=$TMPDIR/home-$1
+              rm -rf "$HOME"; mkdir -p "$HOME"
+              printf '%s' "$1" > "$FAKE_CERBO_STATUS"
+              rc=0
+              "$pre" 2> "$TMPDIR/err-$1" || rc=$?
+              stamps=$(find "$HOME/.local/state/cerbo/declared-agent-levels" -type f 2>/dev/null | wc -l)
+            }
+
+            run 0
+            [ "$rc" = 0 ] || { echo "exit 0 must succeed, got $rc"; exit 1; }
+            [ "$stamps" = 1 ] || { echo "exit 0 must write the stamp"; exit 1; }
+            # Applied once: an unchanged level does not call cerbo again, so a
+            # failing cerbo no longer matters.
+            printf 1 > "$FAKE_CERBO_STATUS"
+            "$pre" || { echo "an applied level must be skipped"; exit 1; }
+
+            run 2
+            [ "$rc" = 0 ] || { echo "exit 2 must not fail the start, got $rc"; exit 1; }
+            [ "$stamps" = 0 ] || { echo "exit 2 must not write the stamp"; exit 1; }
+            grep -q "not registered" "$TMPDIR/err-2" || { echo "exit 2 must warn"; exit 1; }
+
+            run 1
+            [ "$rc" = 1 ] || { echo "exit 1 must fail the start with 1, got $rc"; exit 1; }
+            [ "$stamps" = 0 ] || { echo "exit 1 must not write the stamp"; exit 1; }
+            grep -q "could not set" "$TMPDIR/err-1" || { echo "exit 1 must explain"; exit 1; }
+
+            touch $out
+          '';
+
         # The built daemon under a fake systemd: socket passed as descriptor 3
         # with LISTEN_FDS/LISTEN_PID, a client gets the handshake, a second
         # activated instance fails visibly, the socket survives the stop.

@@ -1415,7 +1415,12 @@ async fn main() -> Result<(), String> {
                     println!("Approved vault: {} ({})", vault.name, vault.id);
                 }
             }
-            VaultCommands::Agent { vault, level, json } => daemon::vault_agent(&ctx, &vault, level, json)?,
+            VaultCommands::Agent { vault, level, json } => {
+                if let Err(e) = daemon::vault_agent(&ctx, &vault, level, json) {
+                    eprintln!("Error: {}", e.message);
+                    std::process::exit(e.exit_code());
+                }
+            }
         },
         Commands::Daemon { action } => match action {
             DaemonCommands::Start { json } => daemon::start(&ctx, json)?,
