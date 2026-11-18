@@ -179,7 +179,13 @@ describe('AgentStore', () => {
     commands.session_create = (args) => ({ ...session('s2', 'starting'), agent: args.agent });
     commands.session_send = () => null;
     commands.session_events = () => [];
-    await expect(store.send('hello', [{ path: 'p-vendor', title: 'Vendor onboarding' }])).resolves.toBe(true);
+    const sent = store.send('hello', [{ path: 'p-vendor', title: 'Vendor onboarding' }]);
+    await settle();
+    // The daemon refuses a message while the agent starts: nothing is sent yet.
+    expect(calls.some((c) => c.command === 'session_send')).toBe(false);
+    live('s2', [{ seq: 1, at: 'x', body: { type: 'state', state: 'idle' } }]);
+    await settle();
+    await expect(sent).resolves.toBe(true);
     expect(calls.find((c) => c.command === 'session_create')!.args).toMatchObject({ vault: 'v1', agent: 'opencode' });
     expect(calls.at(-1)).toEqual({
       command: 'session_send',

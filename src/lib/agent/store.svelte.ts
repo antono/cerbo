@@ -374,6 +374,7 @@ export class AgentStore {
     if (!info || !isLive(info.state)) {
       info = await this.newSession(this.agent, info?.resumable ? info.id : undefined);
       if (!info) return false;
+      if (!(await this.#untilStarted(info.id))) return false;
     }
     try {
       await call('session_send', { session: info.id, text, context });
@@ -382,6 +383,36 @@ export class AgentStore {
       this.error = errorText(e);
       return false;
     }
+  }
+
+  /**
+   * Creating a session answers while its agent is still starting, and the
+   * daemon refuses a message until it is ready: wait for `idle` (the message
+   * stays in the composer meanwhile). The list is read again now and then in
+   * case a state event was missed.
+   */
+  async #untilStarted(id: string, timeoutMs = 60_000): Promise<boolean> {
+    const stateOf = () => this.sessions.find((s) => s.id === id)?.state ?? null;
+    const view = () => (this.activeId === id ? this.sessionState : stateOf());
+    const deadline = Date.now() + timeoutMs;
+    let polled = Date.now();
+    while (view() === 'starting') {
+      if (Date.now() > deadline) {
+        this.error = 'the agent did not start in time';
+        return false;
+      }
+      if (Date.now() - polled > 2000) {
+        polled = Date.now();
+        await this.refreshSessions();
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const state = view();
+    if (state === 'failed' || state === 'ended') {
+      this.error = this.error ?? (state === 'failed' ? 'the agent failed to start' : 'the session ended');
+      return false;
+    }
+    return true;
   }
 
   async cancel(): Promise<void> {
