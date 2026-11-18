@@ -381,6 +381,36 @@ Usage: `cerbo approvals <SUBCOMMAND>`
 
 These commands need a running daemon, except `log`.
 
+The queue also holds the tool requests of agent sessions (see `cerbo agent`): an agent that wants to run one of its own tools, such as a shell command, shows up as a request whose action is `tool`, with the agent's title for the tool and the session it belongs to. Approving it lets the agent run that tool once; rejecting it, or letting it expire, tells the agent no. Pending requests of a session are rejected when the session ends.
+
+## agent
+
+Run an agent CLI, OpenCode or Claude Code (through the ACP adapter `claude-agent-acp`), on a vault without a window, and look after the agent sessions of the daemon. The daemon owns the agent process, so a session keeps running when the desktop app is closed; these commands only ask the daemon (and start it if it does not run). The agent works on the vault through `cerbo mcp` and is held to the vault's agent level (`cerbo vault agent`); it runs in a bubblewrap sandbox (see AGENT PERMISSIONS). Each session is stored, with its messages, tool calls and outcomes, under `$XDG_DATA_HOME/cerbo/sessions/<vault-id>/` (owner-only), outside the vault.
+
+Usage: `cerbo agent <SUBCOMMAND>`
+
+### Subcommands:
+
+- `cerbo agent run --vault <VAULT> [--agent opencode|claude] [--json] [--timeout <SECONDS>] "<PROMPT>"` - Start a session on the vault, send the prompt, wait for the agent's turn to end and print its final answer. The session ends with the command; its transcript stays in the store. `--agent` defaults to `opencode`. With `--timeout`, a turn that has not ended after that many seconds is cancelled and the command exits 4. With `--json` the whole transcript is printed as one JSON object: `{"session", "vault", "agent", "exit_code", "stop_reason", "rejected", "timed_out", "error", "text", "events"}`, where `events` are the session's feed entries (`{"seq", "at", "body"}`). Under `read` and `auto` no person is needed. Under `approve` a change waits for an answer from any client (`cerbo approvals`, or the app) and counts as rejected when nobody answers within the approval time limit (`approval_timeout_secs` in `agents.toml`, default 10 minutes), so a cron job never hangs.
+- `cerbo agent list [--all] [--json]` - The running sessions, one per line: session id, vault, agent, state (`starting`, `idle`, `working`) and title. With `--all` also ended and failed ones. With `--json`, an array of session objects.
+- `cerbo agent stop <SESSION> [--json]` - End a session: its waiting approvals are rejected and the agent process stops. `SESSION` is the id from `cerbo agent list`, or the start of it when that is unambiguous.
+
+**Exit status of `cerbo agent run`:**
+
+- `0` - the turn ended normally and nothing was rejected.
+- `1` - failure: the agent is not installed or not signed in, the sandbox is unavailable, the session could not start, the agent crashed (the message includes the end of its error output), the turn ended with an error or a refusal, or the daemon could not be used. Nothing is retried.
+- `3` - the turn ended, but a change or a tool the agent asked for was rejected, by a person or because nobody answered before the deadline. The agent's answer is still printed; the vault is unchanged by the rejected requests.
+- `4` - `--timeout` ran out; the turn was cancelled.
+
+Examples:
+
+```
+cerbo agent run --vault Notes "Summarize today's inbox page"
+cerbo agent run --vault Notes --agent claude --timeout 600 --json "Tidy the Reading list page" > run.json
+cerbo agent list
+cerbo agent stop 4f2c
+```
+
 ## symlink
 
 Build (or rebuild) a human-readable symlink tree at `<repo-root>/cerbo/`. Each page (Product or Source object) with a `cerbo:slug` value is exposed as a relative symlink named `<slug>.md` pointing directly to the page file inside the object store. Pages that declare a `cerbo:virtualPath` are nested inside corresponding subdirectories. The tree is rebuilt atomically: a new staging directory is written and then swapped into place so readers always see a consistent state.
@@ -422,7 +452,9 @@ claude = "/abs/path/claude-agent-acp"
 
 `bwrap` is taken from the absolute path in the environment variable `CERBO_BWRAP` (the Nix package sets it), never from `PATH`. If it is missing or a test sandbox cannot start (for example user namespaces are disabled), sessions are refused with the reason; they are never started unsandboxed unless `sandbox = "none"` is set. `CERBO_BIN` names the `cerbo` binary the agent runs as its MCP server (default: `cerbo` beside `cerboid`).
 
-**What this protects, and what it does not.** The permissions apply to agents that work through `cerbo mcp`. They are not a security boundary against a process running as your user: such a process can open the daemon's socket (or the vault files) and declare itself the app or the CLI, and those are not limited by the level. Real isolation of agent processes, so that an agent has no other way to your vault, is planned with the agent panel. Until then, treat the level as a guard for well-behaved agent tools, not as a sandbox.
+**The session socket.** For each agent session the daemon listens on `$XDG_RUNTIME_DIR/cerbo/sessions/<session>/agent.sock` (directory mode 0700, socket 0600), binds it into the sandbox and removes it when the session ends. Every connection on it is an agent connection bound to the session's vault, whatever its hello says: it cannot pose as the app or the CLI, answer approvals or send administration lines. The agent's `cerbo mcp` finds it through `CERBO_SOCKET`. An agent reaches the vault only through it, so the level of the vault applies to everything it changes; the page changes it makes are also entered into the session's feed. The agent's own tool requests are mapped to the same level: under `read` and `approve` each asks a person (see `cerbo approvals`), under `auto` only the `cerbo` MCP tools are allowed without asking and everything else (a shell, the network, anything not recognised) still asks. Only the allow-once and reject-once answers are ever given; an "always" choice is never made for you.
+
+**What this protects, and what it does not.** For agent sessions started by the daemon the sandbox is the boundary: the vault is read-only inside it, the agent's own home holds nothing of yours but its login file, and the daemon's main socket is not in it, so the agent can change the vault only through the session socket and the level. The sandbox shares the host network, which the agent needs for its model API: it can reach the internet and services on `localhost`, and it can send what it has read to them. Nothing here limits the network. With `sandbox = "none"` the agent runs with your rights and nothing is enforced beyond the agent CLI's own settings. The permissions are also not a boundary against a process of your own that you start outside the daemon: it can open the daemon's main socket, or the vault files, and declare itself the app or the CLI, which the level does not limit.
 
 What the daemon does hold an agent connection to: it is bound to the one vault named by `cerbo mcp --vault` and is refused any call that names another vault, sees only that vault in the list of vaults and only that vault's page change events (no approval requests, no vault list changes, no daemon status), and cannot answer approvals, read the change log or stop the daemon.
 

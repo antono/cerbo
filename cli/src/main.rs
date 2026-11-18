@@ -1,3 +1,4 @@
+mod agent;
 mod daemon;
 mod mcp;
 
@@ -147,6 +148,11 @@ enum Commands {
         /// Connect to this socket (an agent session socket) instead of the daemon's; never starts a daemon. Default: $CERBO_SOCKET
         #[arg(long)]
         socket: Option<std::path::PathBuf>,
+    },
+    /// Run an agent CLI (OpenCode or Claude Code) on a vault without a window, list and stop agent sessions
+    Agent {
+        #[command(subcommand)]
+        action: AgentCommands,
     },
     /// Answer the changes agents wait to make (vaults set to `approve`) and read the agent change log
     Approvals {
@@ -353,6 +359,53 @@ enum VaultCommands {
         /// read: agents only read. auto: their changes apply at once. approve: each change waits for you. Omit to print the current level
         level: Option<cerbo_core::agent::AgentPermission>,
         /// Output the result as JSON ({"vault", "name", "agent"})
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// The agent CLIs `cerbo agent run` can use.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum AgentArg {
+    Opencode,
+    Claude,
+}
+
+#[derive(Subcommand)]
+enum AgentCommands {
+    /// Start a session on a vault, send the prompt, wait for the turn to end and print the agent's answer.
+    /// Exit status: 0 success, 1 failure (agent missing or not signed in, crash, error), 3 a change or tool
+    /// the agent asked for was rejected (by a person or by the approval deadline), 4 --timeout ran out
+    Run {
+        /// The vault: an ID or name from `cerbo vault list`, or its path
+        #[arg(long)]
+        vault: String,
+        /// Which agent CLI to run
+        #[arg(long, value_enum, default_value = "opencode")]
+        agent: AgentArg,
+        /// Print the whole transcript as JSON ({"session", "exit_code", "stop_reason", "rejected", "text", "events"})
+        #[arg(long)]
+        json: bool,
+        /// Cancel the turn and exit 4 after this many seconds (default: no limit)
+        #[arg(long, value_name = "SECONDS")]
+        timeout: Option<u64>,
+        /// What the agent should do
+        prompt: String,
+    },
+    /// List the running agent sessions with vault, agent and state
+    List {
+        /// Also show ended and failed sessions
+        #[arg(long)]
+        all: bool,
+        /// Output a JSON array
+        #[arg(long)]
+        json: bool,
+    },
+    /// End an agent session: its waiting approvals are rejected and its agent process stops
+    Stop {
+        /// The session id from `cerbo agent list`, or the start of it
+        session: String,
+        /// Output the result as JSON
         #[arg(long)]
         json: bool,
     },
@@ -1315,6 +1368,7 @@ async fn main() -> Result<(), String> {
             | Commands::Daemon { .. }
             | Commands::Mcp { .. }
             | Commands::Approvals { .. }
+            | Commands::Agent { .. }
     );
     if let (true, Some(root), None) = (registers_cwd_vault, cwd_vault_root.as_ref(), cwd_vault_id.as_ref()) {
         let _ = cerbo_core::vault::auto_vault_register(&ctx, root);
@@ -1429,6 +1483,35 @@ async fn main() -> Result<(), String> {
             DaemonCommands::Start { json } => daemon::start(&ctx, json)?,
             DaemonCommands::Stop { json } => daemon::stop(&ctx, json)?,
             DaemonCommands::Status { json } => daemon::status(&ctx, json)?,
+        },
+        Commands::Agent { action } => match action {
+            AgentCommands::Run { vault, agent, json, timeout, prompt } => {
+                let agent = match agent {
+                    AgentArg::Opencode => cerbo_core::rpc::AgentKind::Opencode,
+                    AgentArg::Claude => cerbo_core::rpc::AgentKind::Claude,
+                };
+                let options = agent::RunOptions {
+                    vault,
+                    agent,
+                    json,
+                    timeout: timeout.map(std::time::Duration::from_secs),
+                    prompt,
+                };
+                match agent::run(&ctx, options) {
+                    Ok(agent::EXIT_OK) => {}
+                    Ok(code) => std::process::exit(code),
+                    Err(message) => {
+                        if json {
+                            print_json_error(&message);
+                        } else {
+                            eprintln!("Error: {message}");
+                        }
+                        std::process::exit(agent::EXIT_FAILED);
+                    }
+                }
+            }
+            AgentCommands::List { all, json } => agent::list(&ctx, all, json)?,
+            AgentCommands::Stop { session, json } => agent::stop(&ctx, &session, json)?,
         },
         Commands::Mcp { vault, name, socket } => mcp::run(&ctx, vault, name, socket).await?,
         Commands::Approvals { action } => match action {

@@ -826,16 +826,30 @@ fn session_calls(vault: &str) -> Vec<Call> {
 }
 
 #[test]
-fn agent_list_is_empty_and_session_calls_say_unavailable_until_implemented() {
+fn session_calls_work_without_any_agent_installed_and_name_what_is_missing() {
     let env = env();
     let (id, _) = env.add_vault("main");
-    let _daemon = env.start();
+    // An environment of its own: no agent on the PATH, nothing of the real home.
+    let mut config = env.config();
+    config.agents.host = cerboid::agents::HostEnv {
+        path: Some(env._tmp.path().join("no-bin").into_os_string()),
+        home: Some(env._tmp.path().join("home")),
+        xdg_data_home: Some(env._tmp.path().join("data")),
+        claude_config_dir: None,
+    };
+    let _daemon = cerboid::spawn(config).unwrap().expect("no other daemon runs");
     let mut app = env.connect(ClientKind::App);
 
-    assert_eq!(app.call(Call::AgentList {}).unwrap(), json!([]));
+    let list = app.call(Call::AgentList {}).unwrap();
+    assert!(list.as_array().unwrap().iter().all(|a| a["available"] == false), "{list}");
     for call in session_calls(&id) {
+        if matches!(call, Call::SessionList { .. }) {
+            assert_eq!(app.call(call).unwrap(), json!([]));
+            continue;
+        }
+        // Nothing exists to start, send to or end: each says so, none crashes.
         let err = app.call(call.clone()).unwrap_err();
-        assert_eq!(err.code, cerbo_core::rpc::CODE_UNAVAILABLE, "{call:?}");
+        assert_eq!(err.code, cerbo_core::rpc::CODE_FAILED, "{call:?}");
     }
     assert!(app.call(Call::Ping).is_ok());
 }

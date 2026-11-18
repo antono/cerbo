@@ -351,6 +351,11 @@ pub fn status(ctx: &CerboContext, json: bool) -> Result<(), String> {
 
 // ── cerbo approvals ──────────────────────────────────────────────────────────
 
+/// The running daemon, `Ok(None)` when none runs.
+pub fn running_client(ctx: &CerboContext) -> Result<Option<Client>, String> {
+    running(ctx)
+}
+
 fn need_daemon(ctx: &CerboContext) -> Result<Client, String> {
     running(ctx)?.ok_or_else(|| "cerboid is not running, so there are no pending approvals".to_string())
 }
