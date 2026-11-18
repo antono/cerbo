@@ -5,6 +5,18 @@
 - [ ] 1.3 Process supervision: start, stop, crash reporting with the tail of stderr
 - [ ] 1.4 Pass `cerbo mcp --vault <v>` as the session's MCP server; set working directory to the vault; apply each CLI's file-tool restrictions
 
+## 1b. Sandbox (D8–D10)
+
+- [ ] 1b.1 bwrap argument builder, probe at session start, clear error when it fails; `agent.sandbox = "none"` opt-out with a warning
+- [ ] 1b.2 Per-session socket: agent-only, bound to the vault, removed on end; `cerbo mcp` reads `CERBO_SOCKET`
+- [ ] 1b.3 Agent homes with generated config (built-in tools denied, `cerbo` MCP allowed) and the login file bound in
+- [ ] 1b.4 Nix: ship bubblewrap with cerboid (`CERBO_BWRAP`); tests for direct write refused, main socket hidden, hello as app refused
+
+## 1c. Desktop connection (subset of add-cerboid-daemon 7.1–7.2)
+
+- [ ] 1c.1 Daemon client in `src-tauri` for session calls and events only: connect, start if absent, reconnect
+- [ ] 1c.2 Daemon-unavailable state in the Agent tab with Retry
+
 ## 2. Sessions
 
 - [ ] 2.1 Event model and append-only per-vault session store outside the vault (owner-only permissions)
