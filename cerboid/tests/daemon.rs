@@ -755,7 +755,8 @@ fn a_stopping_daemon_takes_no_new_writes() {
     // the connection is already gone, but never half applied.
     let result = second.call(Call::PageCreate { vault: id, title: "Late".into(), content: None, path: None });
     if let Err(e) = result {
-        assert!(e.code == "shutting_down" || e.message.contains("closed"), "{e:?}");
+        let gone = ["closed", "reset", "Broken pipe", "end of file"].iter().any(|m| e.message.contains(m));
+        assert!(e.code == "shutting_down" || gone, "{e:?}");
     }
     daemon.join().unwrap();
 }

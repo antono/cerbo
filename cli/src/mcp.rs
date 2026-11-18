@@ -323,9 +323,10 @@ impl ServerHandler for VaultServer {
                 router.disable_route(name);
             }
         }
-        let mut result = ListToolsResult::default();
-        result.tools = router.list_all();
-        Ok(result)
+        Ok(ListToolsResult {
+            tools: router.list_all(),
+            ..Default::default()
+        })
     }
 
     /// Tell the client when the user changes the vault's permission, so the
