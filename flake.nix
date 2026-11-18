@@ -225,7 +225,7 @@
         checks.cerboid-socket-activation = pkgs.runCommand "cerboid-socket-activation-check" {
           nativeBuildInputs = [ pkgs.python3 ];
         } ''
-          python3 ${./scripts/check-socket-activation.py} ${cerboid}/bin/cerboid
+          python3 ${./scripts/check-socket-activation.py} ${cerboid}/bin/cerboid ${./core/src/rpc/mod.rs}
           touch $out
         '';
 

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Runtime check of cerboid under a fake systemd (the Home Manager service).
 
-Usage: check-socket-activation.py /path/to/cerboid
+Usage: check-socket-activation.py /path/to/cerboid /path/to/core/src/rpc/mod.rs
+
+The protocol version is read from the RPC source, so the check follows
+every bump of PROTOCOL_VERSION.
 
 Plays the part of systemd's socket unit: binds the daemon's socket, then
 starts cerboid with the socket as descriptor 3 and LISTEN_PID / LISTEN_FDS set
@@ -15,6 +18,7 @@ starts cerboid with the socket as descriptor 3 and LISTEN_PID / LISTEN_FDS set
 Everything lives under a temporary XDG tree; nothing outside it is touched.
 """
 import json
+import re
 import os
 import signal
 import socket
@@ -24,6 +28,8 @@ import tempfile
 import time
 
 cerboid = sys.argv[1]
+with open(sys.argv[2]) as f:
+    PROTOCOL = int(re.search(r"pub const PROTOCOL_VERSION: u32 = (\d+);", f.read()).group(1))
 root = tempfile.mkdtemp(prefix="cerboid-check-")
 env = {
     "PATH": os.environ.get("PATH", ""),
@@ -115,10 +121,10 @@ def talk(lines):
 # 1. The systemd-started daemon serves a client on the inherited socket.
 daemon, daemon_err = start(activated=True)
 welcome, pong = talk([
-    {"hello": {"protocol": 1, "client": "cli", "name": "check"}},
+    {"hello": {"protocol": PROTOCOL, "client": "cli", "name": "check"}},
     {"id": 1, "method": "ping"},
 ])
-if welcome.get("type") != "welcome" or welcome.get("protocol") != 1:
+if welcome.get("type") != "welcome" or welcome.get("protocol") != PROTOCOL:
     fail(f"no handshake: {welcome}; stderr: {stderr_of(daemon_err)}")
 if welcome.get("pid") != daemon:
     fail(f"handshake came from pid {welcome.get('pid')}, not {daemon}")
@@ -135,7 +141,7 @@ if code == 0 or "systemd" not in message:
 print("ok: second activated instance failed visibly:", message.strip())
 
 # The first one is still serving.
-if talk([{"hello": {"protocol": 1, "client": "cli"}}])[0].get("type") != "welcome":
+if talk([{"hello": {"protocol": PROTOCOL, "client": "cli"}}])[0].get("type") != "welcome":
     fail("first daemon stopped answering")
 
 # 3. Stopping the daemon leaves the socket to systemd.
