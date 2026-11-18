@@ -19,28 +19,37 @@ let
   # when the declared value differs from the one applied last time. A level the
   # user changed with `cerbo vault agent` therefore survives restarts and is
   # overwritten only by a switch that changes the option.
+  #
+  # `cerbo vault agent` edits agents.toml directly and never contacts the
+  # daemon, so it cannot wait on the socket this very service is about to
+  # serve (the service Requires cerboid.socket). A failure fails the start,
+  # except exit status 2, a vault that is not registered (yet), which warns.
   applyAgentLevels =
     let
       cerbo = "${cfg.cliPackage}/bin/cerbo";
+      cu = "${pkgs.coreutils}/bin";
       one = name: vault: ''
         apply ${lib.escapeShellArg name} ${vault.agent}
       '';
     in
     pkgs.writeShellScript "cerboid-apply-agent-levels" ''
-      set -u
+      set -eu
       state="''${XDG_STATE_HOME:-$HOME/.local/state}/cerbo/declared-agent-levels"
-      mkdir -p "$state"
+      ${cu}/mkdir -p "$state"
       apply() {
         name="$1"; level="$2"
-        stamp="$state/$(printf '%s' "$name" | ${pkgs.coreutils}/bin/sha256sum | cut -d' ' -f1)"
-        if [ "$(cat "$stamp" 2>/dev/null)" = "$level" ]; then
+        stamp="$state/$(printf '%s' "$name" | ${cu}/sha256sum | ${cu}/cut -d' ' -f1)"
+        if [ "$(${cu}/cat "$stamp" 2>/dev/null || true)" = "$level" ]; then
           return 0
         fi
-        if ${cerbo} vault agent "$name" "$level"; then
-          printf '%s' "$level" > "$stamp"
-        else
-          echo "cerboid: could not set the agent level of vault $name to $level" >&2
-        fi
+        status=0
+        ${cerbo} vault agent "$name" "$level" || status=$?
+        case "$status" in
+          0) printf '%s' "$level" > "$stamp" ;;
+          2) echo "cerboid: vault $name is not registered, so its agent level $level is not applied (see cerbo vault add)" >&2 ;;
+          *) echo "cerboid: could not set the agent level of vault $name to $level" >&2
+             exit "$status" ;;
+        esac
       }
       ${lib.concatStrings (lib.mapAttrsToList one cfg.vaults)}
     '';

@@ -423,9 +423,61 @@ pub fn changes_log(ctx: &CerboContext, vault: &str, limit: usize, json: bool) ->
 
 // ── cerbo vault agent ────────────────────────────────────────────────────────
 
+/// Why a vault could not be looked up.
+#[derive(Debug)]
+pub enum FindVaultError {
+    /// The registry was read, and no vault matches the selector.
+    NotRegistered(String),
+    /// The registry could not be read (corrupt or unreadable `vaults.toml`).
+    Registry(String),
+}
+
+impl std::fmt::Display for FindVaultError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotRegistered(m) | Self::Registry(m) => f.write_str(m),
+        }
+    }
+}
+
+impl From<FindVaultError> for String {
+    fn from(e: FindVaultError) -> String {
+        e.to_string()
+    }
+}
+
+/// Exit status of `cerbo vault agent` when the vault is not registered; every
+/// other failure is 1.
+pub const EXIT_VAULT_NOT_REGISTERED: i32 = 2;
+
+/// A failed `cerbo vault agent`; main exits with [`VaultAgentError::exit_code`].
+#[derive(Debug)]
+pub struct VaultAgentError {
+    pub message: String,
+    pub not_registered: bool,
+}
+
+impl VaultAgentError {
+    pub fn exit_code(&self) -> i32 {
+        if self.not_registered { EXIT_VAULT_NOT_REGISTERED } else { 1 }
+    }
+}
+
+impl From<String> for VaultAgentError {
+    fn from(message: String) -> Self {
+        Self { message, not_registered: false }
+    }
+}
+
+impl From<FindVaultError> for VaultAgentError {
+    fn from(e: FindVaultError) -> Self {
+        Self { not_registered: matches!(e, FindVaultError::NotRegistered(_)), message: e.to_string() }
+    }
+}
+
 /// A registered vault by id, name or path.
-pub fn find_vault(ctx: &CerboContext, selector: &str) -> Result<cerbo_core::vault::Vault, String> {
-    let vaults = cerbo_core::vault::vault_list(ctx)?.vaults;
+pub fn find_vault(ctx: &CerboContext, selector: &str) -> Result<cerbo_core::vault::Vault, FindVaultError> {
+    let vaults = cerbo_core::vault::vault_list(ctx).map_err(FindVaultError::Registry)?.vaults;
     let wanted = std::fs::canonicalize(selector).ok();
     vaults
         .iter()
@@ -433,7 +485,7 @@ pub fn find_vault(ctx: &CerboContext, selector: &str) -> Result<cerbo_core::vaul
         .or_else(|| vaults.iter().find(|v| v.name == selector))
         .or_else(|| vaults.iter().find(|v| wanted.is_some() && std::fs::canonicalize(&v.path).ok() == wanted))
         .cloned()
-        .ok_or_else(|| format!("vault not found: {selector} (see `cerbo vault list`)"))
+        .ok_or_else(|| FindVaultError::NotRegistered(format!("vault not found: {selector} (see `cerbo vault list`)")))
 }
 
 pub fn vault_agent(
@@ -441,7 +493,11 @@ pub fn vault_agent(
     vault: &str,
     level: Option<AgentPermission>,
     json: bool,
-) -> Result<(), String> {
+) -> Result<(), VaultAgentError> {
+    // Works on agents.toml directly and never contacts the daemon, which
+    // picks the level up on its next write; so it is safe in the daemon's own
+    // ExecStartPre. Only a vault that is not registered is told apart (exit 2,
+    // chosen by main from the error); an unreadable registry is a plain failure.
     let vault = find_vault(ctx, vault)?;
     if let Some(level) = level {
         agent::set_permission(ctx, &vault.id, level)?;

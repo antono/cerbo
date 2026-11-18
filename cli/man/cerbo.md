@@ -52,7 +52,7 @@ Usage: `cerbo vault <SUBCOMMAND>`
 - `cerbo vault remove <ID> [--json]` - Remove a vault from the registry by its ID (works on both manually and auto-registered vaults); the vault's files are left alone
 - `cerbo vault active <ID> [--json]` - Set the active vault, used when no vault is found around the current directory (see VAULT AUTO-DISCOVERY)
 - `cerbo vault approve <ID> [--json]` - Promote an auto-registered vault to the manual registry. Moves the entry from `vaults.auto.toml` to `vaults.toml`. Errors if the ID is not in the auto registry or the path is already manually registered.
-- `cerbo vault agent <VAULT> [read|auto|approve] [--json]` - Show or set what agents may do in a vault (see AGENT PERMISSIONS). `VAULT` is a vault ID or name from `cerbo vault list`, or its path. With a level, it is stored and takes effect at once, also for agents that are connected; without one, the current level is printed (`read` for a vault never configured). With `--json`, `{"vault": <id>, "name": ..., "agent": <level>}`. Only you can set the level: no agent tool reads or changes it.
+- `cerbo vault agent <VAULT> [read|auto|approve] [--json]` - Show or set what agents may do in a vault (see AGENT PERMISSIONS). `VAULT` is a vault ID or name from `cerbo vault list`, or its path. With a level, it is stored and takes effect at once, also for agents that are connected; without one, the current level is printed (`read` for a vault never configured). With `--json`, `{"vault": <id>, "name": ..., "agent": <level>}`. Only you can set the level: no agent tool reads or changes it. The command reads and writes `agents.toml` directly and never contacts the daemon (so it works while the daemon is starting, as in the Home Manager service's `ExecStartPre`, and is unaffected by `CERBO_NO_DAEMON`). Exit status: 2 when `VAULT` is not registered (the registry was read and has no such vault); 1 on any other failure, including a `vaults.toml` that cannot be read or parsed.
 
 ## page
 
@@ -329,7 +329,7 @@ Options:
 
 ## daemon
 
-Start, stop and inspect `cerboid`, the daemon that owns every registered vault of the user. The desktop app, `cerbo` and agents are its clients; it gives them one write queue, one semantic index and one place that asks for permission (see AGENT PERMISSIONS). It listens on `$XDG_RUNTIME_DIR/cerbo/cerboid.sock` (without that variable, `run/` under the cache directory), a socket in a directory only you can enter. One daemon runs per user; a second one exits at once. It picks up `cerbo vault add` and `remove` while running, and holds the desktop app lock for as long as it runs, so automatic vault rewrites stay skipped.
+Start, stop and inspect `cerboid`, the daemon that owns every registered vault of the user. The desktop app, `cerbo` and agents are its clients; it gives them one write queue, one semantic index and one place that asks for permission (see AGENT PERMISSIONS). It listens on `$XDG_RUNTIME_DIR/cerbo/cerboid.sock` (without that variable, `run/` under the cache directory), a socket in a directory only you can enter. One daemon runs per user; a second one exits at once (with status 0, but non-zero when systemd started it for the socket, so the failure is visible). It picks up `cerbo vault add` and `remove` while running, and holds the desktop app lock for as long as it runs, so automatic vault rewrites stay skipped.
 
 Usage: `cerbo daemon <SUBCOMMAND>`
 

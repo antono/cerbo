@@ -442,6 +442,21 @@ fn vault_agent_prints_and_sets_the_level() {
     assert!(!out.status.success(), "an unknown level is refused");
     let out = env.cerbo(&["vault", "agent", "nope", "read"]);
     assert!(String::from_utf8_lossy(&out.stderr).contains("vault not found"));
+    assert_eq!(out.status.code(), Some(2), "an unregistered vault has its own exit status");
+}
+
+#[test]
+fn vault_agent_works_while_the_daemon_socket_does_not_answer() {
+    // The service's ExecStartPre runs it while the socket exists but nobody
+    // serves it yet: it must not wait for the daemon.
+    let env = Env::new();
+    env.add_vault("notes");
+    std::fs::create_dir_all(&env.paths.dir).unwrap();
+    let _silent = std::os::unix::net::UnixListener::bind(&env.paths.socket).unwrap();
+
+    let out = env.cerbo(&["vault", "agent", "notes", "auto"]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(env.cerbo_ok(&["vault", "agent", "notes"]).trim(), "auto");
 }
 
 #[test]
