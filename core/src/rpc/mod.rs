@@ -15,6 +15,8 @@ use serde_json::Value;
 
 #[cfg(unix)]
 pub mod client;
+#[cfg(unix)]
+pub mod launch;
 
 /// Bumped whenever a message changes in a way an older peer cannot read.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -29,6 +31,14 @@ pub const CODE_UNKNOWN_VAULT: &str = "unknown_vault";
 pub const CODE_SHUTTING_DOWN: &str = "shutting_down";
 /// Error code for a failed vault operation; the message says why.
 pub const CODE_FAILED: &str = "failed";
+/// Error code for an agent write to a vault whose agent permission is `read`.
+pub const CODE_READ_ONLY: &str = "read_only";
+/// Error code for an agent write that a person rejected.
+pub const CODE_REJECTED: &str = "rejected";
+/// Error code for an agent write nobody answered in time.
+pub const CODE_TIMED_OUT: &str = "timed_out";
+/// Error code for a call an agent connection may not make.
+pub const CODE_FORBIDDEN: &str = "forbidden";
 
 /// What kind of program is on the other end. Agent connections are subject to
 /// the vault's agent permission; app and CLI connections are not (design D5).
@@ -118,6 +128,42 @@ pub enum ChangeKind {
     Removed,
 }
 
+/// An agent change waiting for a person (`approve` mode).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalInfo {
+    pub id: u64,
+    /// Vault id.
+    pub vault: String,
+    pub vault_name: String,
+    /// The agent's name.
+    pub agent: String,
+    /// `create`, `edit`, `rename`, `move`, `trash` or `link`.
+    pub action: String,
+    /// The page it is about; none for a page that does not exist yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<String>,
+    /// One line saying what will change.
+    pub summary: String,
+    /// For an edit or a new page, the difference as a unified diff.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    /// Unix seconds when it was asked.
+    pub requested: u64,
+    /// Unix seconds after which it counts as rejected.
+    pub deadline: u64,
+}
+
+/// How an approval request ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalOutcome {
+    Approved,
+    Rejected,
+    TimedOut,
+    /// The daemon stopped, or the vault went away, before anyone answered.
+    Cancelled,
+}
+
 /// Something the daemon tells subscribed clients.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -127,13 +173,18 @@ pub enum Event {
     PageChanged { vault: String, page: String, change: ChangeKind, origin: Origin },
     /// The list of served vaults changed.
     VaultsChanged,
+    /// An agent asked for a change that waits for a person.
+    ApprovalRequested { approval: ApprovalInfo },
+    /// A pending request ended; clients drop it from their queue.
+    ApprovalResolved { vault: String, approval: u64, outcome: ApprovalOutcome },
 }
 
 impl Event {
     /// The id of the vault this event is about, if any.
     pub fn vault(&self) -> Option<&str> {
         match self {
-            Event::PageChanged { vault, .. } => Some(vault),
+            Event::PageChanged { vault, .. } | Event::ApprovalResolved { vault, .. } => Some(vault),
+            Event::ApprovalRequested { approval } => Some(&approval.vault),
             Event::VaultsChanged => None,
         }
     }
@@ -183,6 +234,26 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         vault: Option<String>,
     },
+
+    /// The pending approval requests, of one vault or all: a list of
+    /// [`ApprovalInfo`]. Not for agent connections.
+    ApprovalList {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vault: Option<String>,
+    },
+    /// Approve or reject a pending request. Not for agent connections.
+    ApprovalAnswer { approval: u64, approve: bool },
+    /// The last applied agent changes of a vault, oldest first: a list of
+    /// [`crate::agent::ChangeEntry`]. Not for agent connections.
+    AgentChanges {
+        vault: String,
+        #[serde(default = "default_log_limit")]
+        limit: usize,
+    },
+    /// The agent permission of a vault: `{"permission": "read" | "auto" |
+    /// "approve"}`. Read-only knowledge, so agent connections may ask; it lets
+    /// the MCP shim list only the tools that can work.
+    Permission { vault: String },
 
     // Reads
     PageList { vault: String },
@@ -260,6 +331,10 @@ fn default_limit() -> usize {
     10
 }
 
+fn default_log_limit() -> usize {
+    50
+}
+
 impl Call {
     /// True for calls that change a vault; they go through its write queue.
     pub fn is_write(&self) -> bool {
@@ -274,11 +349,32 @@ impl Call {
         )
     }
 
+    /// What a write does, in the word the change log and approval prompts use.
+    pub fn action(&self) -> Option<&'static str> {
+        Some(match self {
+            Call::PageCreate { .. } => "create",
+            Call::PageEdit { .. } => "edit",
+            Call::PageRename { .. } => "rename",
+            Call::PageMove { .. } => "move",
+            Call::PageTrash { .. } => "trash",
+            Call::LinkAdd { .. } => "link",
+            _ => return None,
+        })
+    }
+
     /// The vault the call is about, as the client named it.
     pub fn vault(&self) -> Option<&str> {
         match self {
-            Call::Ping | Call::Status | Call::Vaults | Call::Stop | Call::Subscribe { .. } => None,
-            Call::PageList { vault }
+            Call::Ping
+            | Call::Status
+            | Call::Vaults
+            | Call::Stop
+            | Call::Subscribe { .. }
+            | Call::ApprovalList { .. }
+            | Call::ApprovalAnswer { .. } => None,
+            Call::AgentChanges { vault, .. }
+            | Call::Permission { vault }
+            | Call::PageList { vault }
             | Call::PageRead { vault, .. }
             | Call::AttachmentList { vault, .. }
             | Call::AttachmentInfo { vault, .. }
@@ -379,6 +475,38 @@ mod tests {
             call: Call::PageCreate { vault: "v".into(), title: "T".into(), content: None, path: Some("a/b".into()) },
         });
         round_trip(Request { id: 5, call: Call::PageMove { vault: "v".into(), page: "p".into(), path: None } });
+    }
+
+    #[test]
+    fn approval_calls_and_events_round_trip() {
+        round_trip(Request { id: 1, call: Call::ApprovalList { vault: None } });
+        round_trip(Request { id: 2, call: Call::ApprovalAnswer { approval: 137, approve: true } });
+        round_trip(Request { id: 3, call: Call::AgentChanges { vault: "v".into(), limit: 5 } });
+        round_trip(Request { id: 4, call: Call::Permission { vault: "v".into() } });
+        let info = ApprovalInfo {
+            id: 137,
+            vault: "v".into(),
+            vault_name: "Notes".into(),
+            agent: "opencode".into(),
+            action: "edit".into(),
+            page: Some("p".into()),
+            summary: "Edit \"T\"".into(),
+            diff: Some("-a\n+b\n".into()),
+            requested: 1,
+            deadline: 601,
+        };
+        round_trip(ServerMessage::Event { event: Event::ApprovalRequested { approval: info.clone() } });
+        round_trip(ServerMessage::Event {
+            event: Event::ApprovalResolved { vault: "v".into(), approval: 137, outcome: ApprovalOutcome::TimedOut },
+        });
+        assert_eq!(Event::ApprovalRequested { approval: info }.vault(), Some("v"));
+    }
+
+    #[test]
+    fn only_writes_have_an_action_word() {
+        assert_eq!(Call::PageTrash { vault: "v".into(), page: "p".into() }.action(), Some("trash"));
+        assert_eq!(Call::Ping.action(), None);
+        assert_eq!(Call::PageList { vault: "v".into() }.action(), None);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! The socket server: accept connections, run the handshake, dispatch calls,
 //! stream events, and stop gracefully.
 
+use crate::approvals::{self, Approvals};
 use crate::embed::{EmbedWorker, EmbedderFactory};
 use crate::instance::{self, Acquired};
 use crate::ops::{self, OpResult, Written};
@@ -8,9 +9,10 @@ use crate::registry::{Registry, VaultHandle, WatchSettings};
 use crate::watch::WriteTracker;
 use cerbo_core::app_lock::AppLock;
 use cerbo_core::daemon_paths::DaemonPaths;
+use cerbo_core::agent::{self, AgentPermission, ChangeEntry};
 use cerbo_core::rpc::{
-    self, Call, ClientHello, ClientKind, Event, Request, RpcError, ServerMessage, StatusInfo, VaultInfo,
-    PROTOCOL_VERSION,
+    self, ApprovalOutcome, Call, ClientHello, ClientKind, Event, Hello, Origin, Request, RpcError, ServerMessage,
+    StatusInfo, VaultInfo, PROTOCOL_VERSION,
 };
 use cerbo_core::CerboContext;
 use serde_json::{json, Value};
@@ -41,6 +43,10 @@ pub struct Config {
     /// How long a vault must be quiet before its change events are sent.
     pub event_quiet: Duration,
     pub embedder: EmbedderFactory,
+    /// How long an approval request waits for an answer. `None` reads
+    /// `approval_timeout_secs` of `agents.toml` at each request (default 10
+    /// minutes).
+    pub approval_timeout: Option<Duration>,
 }
 
 impl Config {
@@ -51,6 +57,7 @@ impl Config {
             registry_poll: Duration::from_millis(500),
             event_quiet: Duration::from_millis(100),
             embedder: crate::embed::default_factory(),
+            approval_timeout: None,
         }
     }
 }
@@ -137,6 +144,9 @@ fn ready(result: OpResult) -> Fut {
 }
 
 struct Shared {
+    ctx: CerboContext,
+    approvals: Arc<Approvals>,
+    approval_timeout: Option<Duration>,
     registry: Registry,
     events: broadcast::Sender<Event>,
     tracker: Arc<WriteTracker>,
@@ -197,6 +207,9 @@ async fn serve(
     let listener = UnixListener::from_std(instance.bind()?).map_err(|e| e.to_string())?;
 
     let shared = Arc::new(Shared {
+        ctx: config.ctx.clone(),
+        approvals: Arc::new(Approvals::new(events.clone())),
+        approval_timeout: config.approval_timeout,
         registry,
         events,
         tracker,
@@ -225,6 +238,8 @@ async fn serve(
     // writes").
     drop(listener);
     poller.abort();
+    // Requests nobody answered end now; their agents are told the daemon stopped.
+    shared.approvals.cancel_all();
     shared.registry.close_all().await;
     if tokio::time::timeout(DRAIN_LIMIT, shared.inflight.wait_idle()).await.is_err() {
         eprintln!("cerboid: stopping with requests still unanswered");
@@ -359,6 +374,13 @@ async fn connection(shared: Arc<Shared>, stream: UnixStream) {
         let guard = shared.inflight.enter();
 
         let outcome: Result<Fut, RpcError> = match call {
+            // An agent never stops the daemon or sees or answers approvals:
+            // the person decides what the agent may do.
+            Call::Stop | Call::ApprovalList { .. } | Call::ApprovalAnswer { .. } | Call::AgentChanges { .. }
+                if client.client == ClientKind::Agent =>
+            {
+                Err(RpcError::new(rpc::CODE_FORBIDDEN, "agent connections cannot make this call"))
+            }
             Call::Subscribe { vault } => subscribe(&shared, &writer, vault, &mut subscription),
             Call::Stop => {
                 // The guard is held until the answer is written, and the stop
@@ -366,7 +388,7 @@ async fn connection(shared: Arc<Shared>, stream: UnixStream) {
                 shared.shutdown.trigger();
                 Ok(ready(Ok(Value::Null)))
             }
-            other => shared.begin(other, client.client),
+            other => shared.begin(other, &client),
         };
         let writer = writer.clone();
         tokio::spawn(async move {
@@ -441,20 +463,46 @@ impl Shared {
     /// Start `call`. Writes are put on their vault's queue before this
     /// returns, so requests from one connection are applied in the order they
     /// arrived.
-    fn begin(self: &Arc<Self>, call: Call, client: ClientKind) -> Result<Fut, RpcError> {
+    fn begin(self: &Arc<Self>, call: Call, client: &Hello) -> Result<Fut, RpcError> {
         match call {
             Call::Ping => Ok(ready(Ok(json!("pong")))),
             Call::Status => Ok(ready(self.status())),
             Call::Vaults => Ok(ready(serde_json::to_value(self.vault_infos()).map_err(|e| RpcError::failed(e.to_string())))),
             Call::Stop | Call::Subscribe { .. } => unreachable!("handled by the connection"),
+            Call::ApprovalList { vault } => {
+                let id = match vault {
+                    Some(selector) => Some(self.resolve(&selector)?.info.id.clone()),
+                    None => None,
+                };
+                let list = self.approvals.list(id.as_deref());
+                Ok(ready(serde_json::to_value(list).map_err(|e| RpcError::failed(e.to_string()))))
+            }
+            Call::ApprovalAnswer { approval, approve } => {
+                Ok(ready(self.approvals.answer(approval, approve).map(|()| Value::Null)))
+            }
             call => {
                 let selector = call.vault().expect("every other call names a vault").to_string();
-                let vault = self.registry.resolve(&selector).ok_or_else(|| {
-                    RpcError::new(rpc::CODE_UNKNOWN_VAULT, format!("unknown vault: {selector}"))
-                })?;
+                let vault = self.resolve(&selector)?;
+                match &call {
+                    Call::Permission { .. } => {
+                        let level = agent::get_permission(&self.ctx, &vault.info.id);
+                        return Ok(ready(Ok(json!({ "permission": level.as_str() }))));
+                    }
+                    Call::AgentChanges { limit, .. } => {
+                        let changes = agent::read_changes(&self.ctx, &vault.info.id, *limit).map_err(RpcError::failed)?;
+                        return Ok(ready(serde_json::to_value(changes).map_err(|e| RpcError::failed(e.to_string()))));
+                    }
+                    _ => {}
+                }
                 if call.is_write() { self.begin_write(vault, call, client) } else { Ok(self.begin_read(vault, call)) }
             }
         }
+    }
+
+    fn resolve(&self, selector: &str) -> Result<Arc<VaultHandle>, RpcError> {
+        self.registry
+            .resolve(selector)
+            .ok_or_else(|| RpcError::new(rpc::CODE_UNKNOWN_VAULT, format!("unknown vault: {selector}")))
     }
 
     fn vault_infos(&self) -> Vec<VaultInfo> {
@@ -478,22 +526,100 @@ impl Shared {
         Box::pin(async move { task.await.unwrap_or_else(|_| Err(RpcError::failed("the read crashed"))) })
     }
 
-    fn begin_write(&self, vault: Arc<VaultHandle>, call: Call, client: ClientKind) -> Result<Fut, RpcError> {
+    /// A write. App and CLI connections go straight to the vault's queue; an
+    /// agent's is judged by the vault's permission (design D6), read afresh so
+    /// a change applies to connected agents at once.
+    fn begin_write(self: &Arc<Self>, vault: Arc<VaultHandle>, call: Call, client: &Hello) -> Result<Fut, RpcError> {
         if self.shutdown.is_triggered() {
             return Err(RpcError::new(rpc::CODE_SHUTTING_DOWN, "the daemon is stopping and takes no more writes"));
         }
-        let origin = client.into();
+        if client.client != ClientKind::Agent {
+            return self.queue_write(vault, call, client.client.into(), None);
+        }
+        let agent_name = client.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| "agent".to_string());
+        match agent::get_permission(&self.ctx, &vault.info.id) {
+            AgentPermission::Read => Err(read_only(&vault)),
+            AgentPermission::Auto => self.queue_write(vault, call, Origin::Agent, Some(AgentLog::new(agent_name, false))),
+            AgentPermission::Approve => {
+                let preview = ops::preview(&vault, &call);
+                let timeout =
+                    self.approval_timeout.unwrap_or_else(|| agent::approval_timeout(&self.ctx));
+                let (id, rx) = self.approvals.request(
+                    approvals::Request {
+                        vault: vault.info.id.clone(),
+                        vault_name: vault.info.name.clone(),
+                        agent: agent_name.clone(),
+                        action: call.action().unwrap_or("change").to_string(),
+                        page: preview.page,
+                        summary: preview.summary,
+                        diff: preview.diff,
+                    },
+                    timeout,
+                );
+                let this = Arc::clone(self);
+                Ok(Box::pin(async move {
+                    match this.approvals.wait(id, rx, timeout).await {
+                        ApprovalOutcome::Approved => {
+                            // The user may have tightened the vault while this waited.
+                            if !agent::get_permission(&this.ctx, &vault.info.id).can_write() {
+                                return Err(read_only(&vault));
+                            }
+                            match this.queue_write(vault, call, Origin::Agent, Some(AgentLog::new(agent_name, true))) {
+                                Ok(done) => done.await,
+                                Err(e) => Err(e),
+                            }
+                        }
+                        ApprovalOutcome::Rejected => {
+                            Err(RpcError::new(rpc::CODE_REJECTED, "the change was rejected by the user; the vault is unchanged"))
+                        }
+                        ApprovalOutcome::TimedOut => Err(RpcError::new(
+                            rpc::CODE_TIMED_OUT,
+                            "nobody answered the approval request in time, so it counts as rejected; the vault is unchanged",
+                        )),
+                        ApprovalOutcome::Cancelled => {
+                            Err(RpcError::new(rpc::CODE_SHUTTING_DOWN, "the daemon stopped before the change was approved"))
+                        }
+                    }
+                }))
+            }
+        }
+    }
+
+    /// Put a write on its vault's queue. With `log`, an applied change is
+    /// appended to the agent change log from the queue, right after it ran.
+    fn queue_write(
+        &self,
+        vault: Arc<VaultHandle>,
+        call: Call,
+        origin: Origin,
+        log: Option<AgentLog>,
+    ) -> Result<Fut, RpcError> {
         let tracker = Arc::clone(&self.tracker);
+        let ctx = self.ctx.clone();
         let job_vault = Arc::clone(&vault);
         let queued = vault.queue.submit(move || {
             let id = job_vault.info.id.clone();
+            let action = call.action().unwrap_or("change");
             // Attribute the file events before the files change.
             if let Some(page) = target_page(&call) {
                 tracker.note(&id, &page, origin);
             }
             let Written { page, result } = write(&job_vault, call);
-            if let Some(page) = page {
-                tracker.note(&id, &page, origin);
+            if let Some(page) = &page {
+                tracker.note(&id, page, origin);
+                if let Some(log) = &log {
+                    let entry = ChangeEntry {
+                        time: approvals::now_secs(),
+                        vault: id.clone(),
+                        page: page.clone(),
+                        agent: log.agent.clone(),
+                        action: action.to_string(),
+                        approved: log.approved,
+                    };
+                    if let Err(e) = agent::append_change(&ctx, &entry) {
+                        eprintln!("cerboid: cannot record an agent change: {e}");
+                    }
+                }
             }
             result
         });
@@ -501,6 +627,28 @@ impl Shared {
             .map_err(|_| RpcError::new(rpc::CODE_SHUTTING_DOWN, "the daemon is stopping and takes no more writes"))?;
         Ok(Box::pin(async move { done.await.unwrap_or_else(|_| Err(RpcError::failed("the write crashed"))) }))
     }
+}
+
+/// Who an applied write is recorded for.
+struct AgentLog {
+    agent: String,
+    approved: bool,
+}
+
+impl AgentLog {
+    fn new(agent: String, approved: bool) -> Self {
+        Self { agent, approved }
+    }
+}
+
+fn read_only(vault: &VaultHandle) -> RpcError {
+    RpcError::new(
+        rpc::CODE_READ_ONLY,
+        format!(
+            "the vault \"{}\" is read-only for agents, so this change was refused; only the user can allow agents to change it",
+            vault.info.name
+        ),
+    )
 }
 
 /// The page a write names up front, when it names one.

@@ -541,6 +541,8 @@ fn write_endpoints_change_the_vault() {
 fn two_writers_at_once_lose_nothing() {
     let env = env();
     let (id, _) = env.add_vault("race");
+    // The agent writer must be allowed to write.
+    cerbo_core::agent::set_permission(&env.ctx, &id, cerbo_core::agent::AgentPermission::Auto).unwrap();
     let daemon = env.start();
 
     const EACH: usize = 20;
@@ -649,6 +651,7 @@ fn an_automatic_vocabulary_migration_is_skipped_while_the_daemon_runs() {
 fn a_client_write_reaches_subscribers_with_its_origin() {
     let env = env();
     let (id, _) = env.add_vault("events");
+    cerbo_core::agent::set_permission(&env.ctx, &id, cerbo_core::agent::AgentPermission::Auto).unwrap();
     let _daemon = env.start();
     let mut app = env.connect(ClientKind::App);
     let mut agent = env.connect(ClientKind::Agent);

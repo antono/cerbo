@@ -337,3 +337,76 @@ pub fn link_add(vault: &VaultHandle, from: &str, to: &str) -> Written {
         Err(e) => refused(failed(e)),
     }
 }
+
+// ── Previews for approval ────────────────────────────────────────────────────
+
+/// What a write would do, in words and (for text) as a diff.
+pub struct Preview {
+    pub page: Option<String>,
+    pub summary: String,
+    pub diff: Option<String>,
+}
+
+fn title_of(vault: &VaultHandle, id: &str) -> String {
+    page_id(id)
+        .ok()
+        .and_then(|id| meta_of(vault, &id).ok())
+        .map(|m| m.title)
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| id.to_string())
+}
+
+fn unified_diff(old: &str, new: &str) -> String {
+    similar::TextDiff::from_lines(old, new).unified_diff().context_radius(3).to_string()
+}
+
+/// Describe `call` for a person to approve. Never fails: what cannot be read
+/// is described by its id.
+pub fn preview(vault: &VaultHandle, call: &cerbo_core::rpc::Call) -> Preview {
+    use cerbo_core::rpc::Call;
+    match call {
+        Call::PageCreate { title, content, path, .. } => {
+            let text = content.clone().unwrap_or_else(|| format!("# {title}\n"));
+            let place = path.as_deref().filter(|p| !p.is_empty()).map(|p| format!(" in {p}")).unwrap_or_default();
+            Preview {
+                page: None,
+                summary: format!("Create the page \"{title}\"{place}"),
+                diff: Some(unified_diff("", &text)),
+            }
+        }
+        Call::PageEdit { page, content, .. } => {
+            let id = page_id(page).unwrap_or_else(|_| page.clone());
+            let old = object::object_read(&vault.page_ctx, &id).unwrap_or_default();
+            Preview {
+                summary: format!("Edit the page \"{}\"", title_of(vault, &id)),
+                diff: Some(unified_diff(&old, content)),
+                page: Some(id),
+            }
+        }
+        Call::PageRename { page, title, .. } => Preview {
+            page: Some(page.clone()),
+            summary: format!("Rename the page \"{}\" to \"{title}\"", title_of(vault, page)),
+            diff: None,
+        },
+        Call::PageMove { page, path, .. } => Preview {
+            page: Some(page.clone()),
+            summary: format!(
+                "Move the page \"{}\" to {}",
+                title_of(vault, page),
+                path.as_deref().filter(|p| !p.is_empty()).unwrap_or("the root")
+            ),
+            diff: None,
+        },
+        Call::PageTrash { page, .. } => Preview {
+            page: Some(page.clone()),
+            summary: format!("Move the page \"{}\" to the trash", title_of(vault, page)),
+            diff: None,
+        },
+        Call::LinkAdd { from, to, .. } => Preview {
+            page: Some(from.clone()),
+            summary: format!("Add a link from \"{}\" to \"{}\"", title_of(vault, from), title_of(vault, to)),
+            diff: None,
+        },
+        other => Preview { page: None, summary: format!("{other:?}"), diff: None },
+    }
+}
