@@ -80,6 +80,7 @@ impl From<context::CoreContext> for CerboContext {
 pub mod config;
 pub mod context;
 pub mod cursor_positions;
+pub mod daemon_paths;
 pub mod fsio;
 pub mod annotations;
 pub mod app_lock;
@@ -91,6 +92,7 @@ pub mod page;
 pub mod paths;
 pub mod prefix_map;
 pub mod rdf;
+pub mod rpc;
 pub mod semantic;
 pub mod slug;
 pub mod state;

@@ -52,6 +52,30 @@ let
     '';
   };
 
+  # The daemon: one process per user that owns every registered vault. Its
+  # integration tests start real daemons on sockets in temporary directories,
+  # which the build sandbox allows.
+  cerboid = pkgs.rustPlatform.buildRustPackage {
+    pname = "cerboid";
+    version = "0.1.0";
+    src = ../.;
+    cargoLock.lockFile = ../Cargo.lock;
+    cargoBuildFlags = [ "-p" "cerboid" ];
+    cargoTestFlags = [ "-p" "cerboid" ];
+    nativeBuildInputs = [
+      pkgs.pkg-config
+      pkgs.makeWrapper
+      pkgs.rustPlatform.bindgenHook
+    ];
+    buildInputs = [ pkgs.oniguruma ];
+    doCheck = true;
+    meta.mainProgram = "cerboid";
+
+    postInstall = ''
+      wrapProgram $out/bin/cerboid --set-default ORT_DYLIB_PATH ${ortDylibPath}
+    '';
+  };
+
   cerbo-frontend = pkgs.stdenv.mkDerivation {
     pname = "cerbo-frontend";
 
@@ -200,5 +224,5 @@ let
   };
 in
 {
-  inherit cerbo cerbo-frontend cerbo-desktop tauri-driver;
+  inherit cerbo cerboid cerbo-frontend cerbo-desktop tauri-driver;
 }

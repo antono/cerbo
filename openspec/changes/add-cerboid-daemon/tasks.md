@@ -1,19 +1,19 @@
 ## 1. Protocol and crate
 
-- [ ] 1.1 Add the `cerboid` crate to the workspace and wire it into `nix/pkgs.nix` as a package output
-- [ ] 1.2 Define RPC request, response and event types in `core` (newline-delimited JSON) with round-trip tests
-- [ ] 1.3 Add protocol version and the connect handshake with tests for a mismatch
+- [x] 1.1 Add the `cerboid` crate to the workspace and wire it into `nix/pkgs.nix` as a package output
+- [x] 1.2 Define RPC request, response and event types in `core` (newline-delimited JSON) with round-trip tests
+- [x] 1.3 Add protocol version and the connect handshake with tests for a mismatch
 
 ## 2. Daemon core
 
-- [ ] 2.1 Single-instance lock, owner-only socket directory, stale socket replacement, with tests
-- [ ] 2.2 Vault registry: serve every vault in the list and pick up `vault add`/`remove` while running
-- [ ] 2.3 Per-vault write queue using the durable-write helpers; concurrency test with two writers
-- [ ] 2.4 Read endpoints: pages, attachments, links, backlinks, outgoing links, text and semantic search, SPARQL
-- [ ] 2.5 Write endpoints: create, edit, rename, move, trash, link
-- [ ] 2.6 Hold the app lock shared for the daemon's lifetime; test that automatic migration is skipped
-- [ ] 2.7 File watcher and change events to subscribers, including outside edits
-- [ ] 2.8 Graceful stop: finish queued writes, then exit
+- [x] 2.1 Single-instance lock, owner-only socket directory, stale socket replacement, with tests
+- [x] 2.2 Vault registry: serve every vault in the list and pick up `vault add`/`remove` while running
+- [x] 2.3 Per-vault write queue using the durable-write helpers; concurrency test with two writers
+- [x] 2.4 Read endpoints: pages, attachments, links, backlinks, outgoing links, text and semantic search, SPARQL
+- [x] 2.5 Write endpoints: create, edit, rename, move, trash, link
+- [x] 2.6 Hold the app lock shared for the daemon's lifetime; test that automatic migration is skipped
+- [x] 2.7 File watcher and change events to subscribers, including outside edits
+- [x] 2.8 Graceful stop: finish queued writes, then exit
 
 ## 3. Permissions
 
