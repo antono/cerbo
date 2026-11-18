@@ -400,7 +400,7 @@ fn title_of(vault: &VaultHandle, id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-fn unified_diff(old: &str, new: &str) -> String {
+pub fn unified_diff(old: &str, new: &str) -> String {
     similar::TextDiff::from_lines(old, new).unified_diff().context_radius(3).to_string()
 }
 

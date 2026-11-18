@@ -9,7 +9,7 @@
 use cerbo_core::rpc::{ApprovalInfo, ApprovalOutcome, Event, RpcError};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, oneshot};
 
@@ -22,6 +22,11 @@ pub struct Request {
     pub page: Option<String>,
     pub summary: String,
     pub diff: Option<String>,
+    /// The agent session the request belongs to, when it comes from one.
+    pub session: Option<String>,
+    /// For a request to run an agent's own tool: its title and kind.
+    pub tool_title: Option<String>,
+    pub tool_kind: Option<String>,
 }
 
 struct Pending {
@@ -29,10 +34,16 @@ struct Pending {
     tx: oneshot::Sender<ApprovalOutcome>,
 }
 
+/// Told, synchronously, of every request and every end of a request, with the
+/// session the request belongs to (if any). The session manager uses it to
+/// write approval cards into a session's feed without ever missing one.
+pub type Observer = Box<dyn Fn(&Event, Option<&str>) + Send + Sync>;
+
 pub struct Approvals {
     next: AtomicU64,
     pending: Mutex<BTreeMap<u64, Pending>>,
     events: broadcast::Sender<Event>,
+    observer: OnceLock<Observer>,
 }
 
 pub fn now_secs() -> u64 {
@@ -41,7 +52,19 @@ pub fn now_secs() -> u64 {
 
 impl Approvals {
     pub fn new(events: broadcast::Sender<Event>) -> Self {
-        Self { next: AtomicU64::new(1), pending: Mutex::new(BTreeMap::new()), events }
+        Self { next: AtomicU64::new(1), pending: Mutex::new(BTreeMap::new()), events, observer: OnceLock::new() }
+    }
+
+    /// Set the observer; only the first call counts.
+    pub fn set_observer(&self, observer: Observer) {
+        let _ = self.observer.set(observer);
+    }
+
+    fn announce(&self, event: Event, session: Option<&str>) {
+        if let Some(observer) = self.observer.get() {
+            observer(&event, session);
+        }
+        let _ = self.events.send(event);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<u64, Pending>> {
@@ -59,9 +82,9 @@ impl Approvals {
             vault_name: request.vault_name,
             agent: request.agent,
             action: request.action,
-            session: None,
-            tool_title: None,
-            tool_kind: None,
+            session: request.session,
+            tool_title: request.tool_title,
+            tool_kind: request.tool_kind,
             page: request.page,
             summary: request.summary,
             diff: request.diff,
@@ -70,7 +93,8 @@ impl Approvals {
         };
         let (tx, rx) = oneshot::channel();
         self.lock().insert(id, Pending { info: info.clone(), tx });
-        let _ = self.events.send(Event::ApprovalRequested { approval: info });
+        let session = info.session.clone();
+        self.announce(Event::ApprovalRequested { approval: info }, session.as_deref());
         (id, rx)
     }
 
@@ -94,7 +118,10 @@ impl Approvals {
     /// End request `id` with `outcome`. False when it was already over.
     fn resolve(&self, id: u64, outcome: ApprovalOutcome) -> bool {
         let Some(pending) = self.lock().remove(&id) else { return false };
-        let _ = self.events.send(Event::ApprovalResolved { vault: pending.info.vault.clone(), approval: id, outcome });
+        self.announce(
+            Event::ApprovalResolved { vault: pending.info.vault.clone(), approval: id, outcome },
+            pending.info.session.as_deref(),
+        );
         let _ = pending.tx.send(outcome);
         true
     }
@@ -143,6 +170,9 @@ mod tests {
             page: Some("p".into()),
             summary: "Edit".into(),
             diff: None,
+            session: None,
+            tool_title: None,
+            tool_kind: None,
         }
     }
 

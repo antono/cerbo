@@ -618,6 +618,7 @@ name = "cerboid"
 version = "0.1.0"
 dependencies = [
  "cerbo-core",
+ "chrono",
  "notify",
  "serde",
  "serde_json",

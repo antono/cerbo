@@ -19,6 +19,7 @@ pub mod queue;
 pub mod registry;
 pub mod sandbox;
 pub mod server;
+pub mod sessions;
 pub mod watch;
 
 pub use server::{run, Config, ShutdownCtl, Started};

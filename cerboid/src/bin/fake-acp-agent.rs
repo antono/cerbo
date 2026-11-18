@@ -11,6 +11,7 @@
 //! Environment:
 //! - `FAKE_ACP_SCRIPT`: path of the script (default: initialize works, no
 //!   loadSession, every prompt is answered by echoing its text).
+//!   Without it, `$HOME/fake-acp-script.json` when that file exists.
 //! - `FAKE_ACP_LOG`: every line received from the client is appended to this file.
 //! - `FAKE_ACP_REPLAY`: replay mode, see [`replay`].
 //!
@@ -192,6 +193,10 @@ fn eprint_line(text: &str) {
 
 fn main() {
     let first = std::env::args().nth(1);
+    if first.as_deref() == Some("--version") {
+        println!("fake-acp-agent {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if first.as_deref() == Some("mcp-echo") {
         mcp_echo();
         return;
@@ -200,12 +205,18 @@ fn main() {
         replay(&path);
         return;
     }
-    let script = match std::env::var("FAKE_ACP_SCRIPT") {
-        Ok(path) => {
+    // A sandboxed or daemon-started agent has a cleared environment: its script
+    // may also lie in its home, as `fake-acp-script.json`.
+    let script_path = std::env::var("FAKE_ACP_SCRIPT").ok().or_else(|| {
+        let file = std::path::Path::new(&std::env::var_os("HOME")?).join("fake-acp-script.json");
+        file.is_file().then(|| file.to_string_lossy().into_owned())
+    });
+    let script = match script_path {
+        Some(path) => {
             let text = std::fs::read_to_string(&path).unwrap_or_else(|e| die(&format!("cannot read the script {path}: {e}")));
             serde_json::from_str(&text).unwrap_or_else(|e| die(&format!("bad script {path}: {e}")))
         }
-        Err(_) => Script::default(),
+        None => Script::default(),
     };
     let log = std::env::var("FAKE_ACP_LOG").ok().and_then(|p| std::fs::OpenOptions::new().create(true).append(true).open(p).ok());
     let mut agent = Agent {

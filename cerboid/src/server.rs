@@ -6,6 +6,7 @@ use crate::embed::{EmbedWorker, EmbedderFactory};
 use crate::instance::{self, Acquired};
 use crate::ops::{self, OpResult, Written};
 use crate::registry::{Registry, VaultHandle, WatchSettings};
+use crate::sessions::{self, Manager, SocketGuard, VaultRef};
 use crate::watch::WriteTracker;
 use cerbo_core::app_lock::AppLock;
 use cerbo_core::daemon_paths::DaemonPaths;
@@ -17,6 +18,7 @@ use cerbo_core::rpc::{
 use cerbo_core::CerboContext;
 use serde_json::{json, Value};
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -53,10 +55,14 @@ pub struct Config {
     /// Called on the queue's thread at the start of every write job, before
     /// anything is checked or changed. For tests, to hold the queue still.
     pub before_write: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// What the agent session manager looks at: the user's environment, the
+    /// bubblewrap and the `cerbo` binary. Tests give their own.
+    pub agents: sessions::Settings,
 }
 
 impl Config {
     pub fn new(ctx: CerboContext, paths: DaemonPaths) -> Self {
+        let agents = sessions::Settings::from_process(&paths);
         Self {
             ctx,
             paths,
@@ -66,6 +72,7 @@ impl Config {
             approval_timeout: None,
             max_pending_per_agent: MAX_PENDING_PER_AGENT,
             before_write: None,
+            agents,
         }
     }
 }
@@ -154,6 +161,7 @@ fn ready(result: OpResult) -> Fut {
 struct Shared {
     ctx: CerboContext,
     approvals: Arc<Approvals>,
+    sessions: Arc<Manager>,
     approval_timeout: Option<Duration>,
     max_pending_per_agent: usize,
     before_write: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -235,9 +243,12 @@ async fn serve(
     };
     let listener = UnixListener::from_std(std_listener).map_err(|e| e.to_string())?;
 
+    let approvals = Arc::new(Approvals::new(events.clone()));
+    let sessions = Manager::new(config.agents.clone(), config.ctx.clone(), Arc::clone(&approvals), events.clone(), config.approval_timeout);
     let shared = Arc::new(Shared {
         ctx: config.ctx.clone(),
-        approvals: Arc::new(Approvals::new(events.clone())),
+        approvals,
+        sessions,
         approval_timeout: config.approval_timeout,
         max_pending_per_agent: config.max_pending_per_agent,
         before_write: config.before_write.clone(),
@@ -257,7 +268,7 @@ async fn serve(
     loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
-                Ok((stream, _)) => { tokio::spawn(connection(Arc::clone(&shared), stream)); }
+                Ok((stream, _)) => { tokio::spawn(connection(Arc::clone(&shared), stream, None)); }
                 Err(e) => eprintln!("cerboid: accept failed: {e}"),
             },
             () = ctl.triggered() => break,
@@ -269,6 +280,8 @@ async fn serve(
     // writes").
     drop(listener);
     poller.abort();
+    // Agents end with the daemon; their waiting requests are cancelled.
+    shared.sessions.shutdown().await;
     // Requests nobody answered end now; their agents are told the daemon stopped.
     shared.approvals.cancel_all();
     shared.registry.close_all().await;
@@ -342,6 +355,9 @@ impl Writer {
 /// and the means to notice that it went away.
 struct Conn {
     hello: Hello,
+    /// The session an agent connection belongs to, when it came in on a
+    /// session socket.
+    session: Option<String>,
     /// Id of the one vault an agent connection may touch; none for the app
     /// and the CLI.
     bound: Option<String>,
@@ -374,7 +390,27 @@ fn forbidden(message: impl Into<String>) -> RpcError {
     RpcError::new(rpc::CODE_FORBIDDEN, message)
 }
 
-async fn connection(shared: Arc<Shared>, stream: UnixStream) {
+/// What a session's socket forces on every connection that comes in on it
+/// (design D9).
+#[derive(Clone)]
+struct SessionBinding {
+    session: String,
+    /// Id of the session's vault.
+    vault: String,
+    /// Becomes true when the session ends.
+    ended: watch::Receiver<bool>,
+}
+
+/// Resolves when the connection's session ends; never for a connection on the
+/// daemon's main socket.
+async fn wait_session_end(binding: &mut Option<SessionBinding>) {
+    match binding {
+        Some(binding) => wait_closing(&mut binding.ended).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+async fn connection(shared: Arc<Shared>, stream: UnixStream, mut forced: Option<SessionBinding>) {
     let (read_half, write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
     let writer = Writer(Arc::new(Mutex::new(write_half)));
@@ -383,6 +419,12 @@ async fn connection(shared: Arc<Shared>, stream: UnixStream) {
     // Handshake: the first line must be a hello with our protocol version.
     let client = match read_line(&mut reader, &mut buf).await {
         Ok(Line::Text(text)) => match serde_json::from_str::<ClientHello>(&text) {
+            Err(_) if forced.is_some() && admin_line(&text).is_some() => {
+                // Nothing on a session's socket may stop or probe the daemon.
+                let error = forbidden("administration is not available on an agent session socket");
+                writer.send(&ServerMessage::Error { error }).await;
+                return;
+            }
             Err(_) if admin_line(&text).is_some() => {
                 // Version-independent administration: answered whatever the
                 // client's protocol version, so a stale daemon can be stopped.
@@ -403,7 +445,16 @@ async fn connection(shared: Arc<Shared>, stream: UnixStream) {
                 return;
             }
             Ok(hello) => match rpc::check_protocol(hello.hello.protocol) {
-                Ok(()) => hello.hello,
+                Ok(()) => {
+                    let mut hello = hello.hello;
+                    // On a session socket every connection is an agent of the
+                    // session's vault, whatever its hello says.
+                    if let Some(binding) = &forced {
+                        hello.client = ClientKind::Agent;
+                        hello.vault = Some(binding.vault.clone());
+                    }
+                    hello
+                }
                 Err(error) => {
                     writer.send(&ServerMessage::Error { error }).await;
                     return;
@@ -438,7 +489,8 @@ async fn connection(shared: Arc<Shared>, stream: UnixStream) {
         .await;
 
     let (closed_tx, closed_rx) = watch::channel(false);
-    let conn = Conn { hello: client, bound, closed: closed_rx, pending: Arc::new(AtomicUsize::new(0)) };
+    let session = forced.as_ref().map(|b| b.session.clone());
+    let conn = Conn { hello: client, session, bound, closed: closed_rx, pending: Arc::new(AtomicUsize::new(0)) };
     let mut close = shared.close_connections.subscribe();
     let mut subscription: Option<tokio::task::JoinHandle<()>> = None;
 
@@ -454,6 +506,7 @@ async fn connection(shared: Arc<Shared>, stream: UnixStream) {
                 Ok(Line::Eof) | Err(_) => break,
             },
             () = wait_closing(&mut close) => break,
+            () = wait_session_end(&mut forced) => break,
         };
         if text.is_empty() {
             continue;
@@ -584,19 +637,47 @@ impl Shared {
                 Ok(ready(serde_json::to_value(vaults).map_err(|e| RpcError::failed(e.to_string()))))
             }
             Call::Stop | Call::Subscribe { .. } => unreachable!("handled by the connection"),
-            // The session manager lands later; until then the agents are
-            // simply none, and every session call says so.
-            Call::AgentList {} => Ok(ready(Ok(json!([])))),
-            Call::SessionCreate { .. }
-            | Call::SessionSend { .. }
-            | Call::SessionCancel { .. }
-            | Call::SessionEnd { .. }
-            | Call::SessionList { .. }
-            | Call::SessionDelete { .. }
-            | Call::SessionEvents { .. } => Err(RpcError::new(
-                rpc::CODE_UNAVAILABLE,
-                "agent sessions are not available in this daemon yet",
-            )),
+            Call::AgentList {} => {
+                let sessions = Arc::clone(&self.sessions);
+                Ok(Box::pin(async move { sessions.agent_list().await }))
+            }
+            Call::SessionCreate { vault, agent, resume_from } => {
+                let handle = self.resolve(&vault)?;
+                let vault = VaultRef { id: handle.info.id.clone(), name: handle.info.name.clone(), root: handle.root.clone() };
+                let this = Arc::clone(self);
+                Ok(Box::pin(async move {
+                    let opener = |session: &str, vault: &str, dir: &Path| this.open_session_socket(session, vault, dir);
+                    let info = this.sessions.create(vault, agent, resume_from, &opener).await?;
+                    serde_json::to_value(info).map_err(|e| RpcError::failed(e.to_string()))
+                }))
+            }
+            Call::SessionSend { session, text, context } => {
+                let vault = self.sessions.vault_of(&session).and_then(|id| self.registry.resolve(&id));
+                let read_page = move |page: &str| -> Option<String> {
+                    let vault = vault.as_ref()?;
+                    let page = ops::page_read(vault, page).ok()?;
+                    page["content"].as_str().map(str::to_string)
+                };
+                Ok(ready(self.sessions.send(&session, text, context, &read_page).map(|()| Value::Null)))
+            }
+            Call::SessionCancel { session } => Ok(ready(self.sessions.cancel(&session).map(|()| Value::Null))),
+            Call::SessionEnd { session } => {
+                let sessions = Arc::clone(&self.sessions);
+                Ok(Box::pin(async move { sessions.end(&session).await.map(|()| Value::Null) }))
+            }
+            Call::SessionList { vault } => {
+                let id = match vault {
+                    Some(selector) => Some(self.resolve(&selector)?.info.id.clone()),
+                    None => None,
+                };
+                let list = self.sessions.list(id.as_deref());
+                Ok(ready(serde_json::to_value(list).map_err(|e| RpcError::failed(e.to_string()))))
+            }
+            Call::SessionDelete { session } => Ok(ready(self.sessions.delete(&session).map(|()| Value::Null))),
+            Call::SessionEvents { session, after_seq, limit } => {
+                let events = self.sessions.events(&session, after_seq, limit)?;
+                Ok(ready(serde_json::to_value(events).map_err(|e| RpcError::failed(e.to_string()))))
+            }
             Call::ApprovalList { vault } => {
                 let id = match vault {
                     Some(selector) => Some(self.resolve(&selector)?.info.id.clone()),
@@ -628,6 +709,44 @@ impl Shared {
                 if call.is_write() { self.begin_write(vault, call, conn) } else { Ok(self.begin_read(vault, call)) }
             }
         }
+    }
+
+    /// Listen on a session's own socket (design D9): the directory is private,
+    /// the socket owner-only, and every connection on it is an agent of the
+    /// session's vault. The listener stops and the directory goes when the
+    /// returned guard is dropped.
+    fn open_session_socket(self: &Arc<Self>, session: &str, vault: &str, dir: &Path) -> Result<SocketGuard, String> {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
+        if let Some(parent) = dir.parent() {
+            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent).map_err(|e| err(parent, e))?;
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).map_err(|e| err(parent, e))?;
+        }
+        // A directory left by a session that did not end cleanly is replaced.
+        let _ = std::fs::remove_dir_all(dir);
+        std::fs::DirBuilder::new().mode(0o700).create(dir).map_err(|e| err(dir, e))?;
+        let path = dir.join(crate::sandbox::SESSION_SOCKET_NAME);
+        let listener = std::os::unix::net::UnixListener::bind(&path).map_err(|e| err(&path, e))?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).map_err(|e| err(&path, e))?;
+        listener.set_nonblocking(true).map_err(|e| err(&path, e))?;
+        let listener = UnixListener::from_std(listener).map_err(|e| err(&path, e))?;
+        let (ended_tx, ended_rx) = watch::channel(false);
+        let binding = SessionBinding { session: session.to_string(), vault: vault.to_string(), ended: ended_rx };
+        let shared = Arc::clone(self);
+        let task = tokio::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((stream, _)) => {
+                        tokio::spawn(connection(Arc::clone(&shared), stream, Some(binding.clone())));
+                    }
+                    Err(e) => {
+                        eprintln!("cerboid: a session socket cannot accept: {e}");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                }
+            }
+        });
+        Ok(SocketGuard::new(dir.to_path_buf(), task, ended_tx))
     }
 
     /// The vault an agent's hello binds it to: its id.
@@ -715,7 +834,8 @@ impl Shared {
             AgentPermission::Read => Err(read_only(&vault)),
             AgentPermission::Auto => {
                 let closed = Some(conn.closed.clone());
-                self.queue_write(vault, call, Origin::Agent, Some(AgentLog::new(agent_name, false)), given, closed)
+                let log = AgentLog::new(agent_name, false, conn.session.clone());
+                self.queue_write(vault, call, Origin::Agent, Some(log), given, closed)
             }
             AgentPermission::Approve => {
                 let slot = PendingSlot::take(&conn.pending, self.max_pending_per_agent).ok_or_else(|| {
@@ -748,10 +868,14 @@ impl Shared {
                         page: preview.page,
                         summary: preview.summary,
                         diff: preview.diff,
+                        session: conn.session.clone(),
+                        tool_title: None,
+                        tool_kind: None,
                     },
                     timeout,
                 );
                 let this = Arc::clone(self);
+                let session = conn.session.clone();
                 Ok(Box::pin(async move {
                     let _slot = slot;
                     // The agent hanging up ends the request: nobody can be
@@ -773,7 +897,7 @@ impl Shared {
                             if !agent::get_permission(&this.ctx, &vault.info.id).can_write() {
                                 return Err(read_only(&vault));
                             }
-                            let log = Some(AgentLog::new(agent_name, true));
+                            let log = Some(AgentLog::new(agent_name, true, session));
                             match this.queue_write(vault, call, Origin::Agent, log, base, Some(closed)) {
                                 Ok(done) => done.await,
                                 Err(e) => Err(e),
@@ -811,6 +935,7 @@ impl Shared {
         let ctx = self.ctx.clone();
         let job_vault = Arc::clone(&vault);
         let before_write = self.before_write.clone();
+        let sessions = Arc::clone(&self.sessions);
         let queued = vault.queue.submit(move || {
             if let Some(hook) = &before_write {
                 hook();
@@ -845,6 +970,13 @@ impl Shared {
                     if let Err(e) = agent::append_change(&ctx, &entry) {
                         eprintln!("cerboid: cannot record an agent change: {e}");
                     }
+                    // The page change also goes into the feed of the session whose
+                    // agent made it, once it is applied.
+                    if result.is_ok()
+                        && let Some(session) = &log.session
+                    {
+                        sessions.page_changed(session, page);
+                    }
                 }
             }
             result
@@ -866,11 +998,13 @@ fn resident_memory_kb() -> Option<u64> {
 struct AgentLog {
     agent: String,
     approved: bool,
+    /// The agent session the change was made in, if any.
+    session: Option<String>,
 }
 
 impl AgentLog {
-    fn new(agent: String, approved: bool) -> Self {
-        Self { agent, approved }
+    fn new(agent: String, approved: bool, session: Option<String>) -> Self {
+        Self { agent, approved, session }
     }
 }
 

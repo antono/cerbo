@@ -446,18 +446,28 @@ impl AcpClient {
         Ok(InitializeResult { protocol_version: version, capabilities: caps, agent_info, auth_methods })
     }
 
-    fn session_params(cwd: &Path, mcp_servers: &[McpServer]) -> Result<Value, AcpError> {
+    fn session_params(cwd: &Path, mcp_servers: &[McpServer], meta: Option<&Value>) -> Result<Value, AcpError> {
         if !cwd.is_absolute() {
             return Err(AcpError::Protocol(format!("the session directory must be absolute: {}", cwd.display())));
         }
         let cwd = cwd.to_str().ok_or_else(|| AcpError::Protocol("the session directory is not UTF-8".into()))?;
         let servers: Vec<Value> = mcp_servers.iter().map(McpServer::to_value).collect();
-        Ok(json!({"cwd": cwd, "mcpServers": servers}))
+        let mut params = json!({"cwd": cwd, "mcpServers": servers});
+        if let Some(meta) = meta {
+            params["_meta"] = meta.clone();
+        }
+        Ok(params)
     }
 
     /// `session/new`. `cwd` must be absolute.
     pub async fn new_session(&self, cwd: &Path, mcp_servers: &[McpServer]) -> Result<NewSession, AcpError> {
-        let params = Self::session_params(cwd, mcp_servers)?;
+        self.new_session_with_meta(cwd, mcp_servers, None).await
+    }
+
+    /// `session/new` with an `_meta` object (agent-specific options, such as
+    /// the Claude adapter's `claudeCode.options`).
+    pub async fn new_session_with_meta(&self, cwd: &Path, mcp_servers: &[McpServer], meta: Option<&Value>) -> Result<NewSession, AcpError> {
+        let params = Self::session_params(cwd, mcp_servers, meta)?;
         let result = self.request("session/new", params, Some(self.inner.opts.request_timeout)).await?;
         let session_id = result
             .get("sessionId")
@@ -475,12 +485,23 @@ impl AcpClient {
     /// agent replays the history as `UserMessageChunk` / `AgentMessageChunk`
     /// updates before this returns.
     pub async fn load_session(&self, session_id: &str, cwd: &Path, mcp_servers: &[McpServer]) -> Result<LoadedSession, AcpError> {
+        self.load_session_with_meta(session_id, cwd, mcp_servers, None).await
+    }
+
+    /// `session/load` with an `_meta` object, as [`Self::new_session_with_meta`].
+    pub async fn load_session_with_meta(
+        &self,
+        session_id: &str,
+        cwd: &Path,
+        mcp_servers: &[McpServer],
+        meta: Option<&Value>,
+    ) -> Result<LoadedSession, AcpError> {
         match self.capabilities() {
             Some(caps) if caps.load_session => {}
             Some(_) => return Err(AcpError::Unsupported("session/load (the agent did not advertise loadSession)".into())),
             None => return Err(AcpError::Protocol("initialize first".into())),
         }
-        let mut params = Self::session_params(cwd, mcp_servers)?;
+        let mut params = Self::session_params(cwd, mcp_servers, meta)?;
         params["sessionId"] = json!(session_id);
         let result = self.request("session/load", params, Some(self.inner.opts.request_timeout)).await?;
         Ok(LoadedSession {
