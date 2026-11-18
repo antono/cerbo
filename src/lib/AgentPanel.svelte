@@ -63,6 +63,7 @@
     {/if}
     <AgentComposer
       working={store.working}
+      starting={store.starting}
       onSend={(text, context) => store.send(text, context)}
       onCancel={() => store.cancel()}
     />

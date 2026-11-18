@@ -20,10 +20,13 @@
 
   let {
     working,
+    starting = false,
     onSend,
     onCancel,
   }: {
     working: boolean;
+    /** The agent is still starting: a message waits until it is ready. */
+    starting?: boolean;
     onSend: (text: string, context: PageRef[]) => boolean | Promise<boolean>;
     onCancel: () => void | Promise<void>;
   } = $props();
@@ -88,7 +91,7 @@
   }
 
   async function send() {
-    if (!canSend(text, working) || sending) return;
+    if (!canSend(text, working || starting) || sending) return;
     sending = true;
     const sent = text;
     const ctx = context;
@@ -214,7 +217,7 @@
         data-testid="agent-send"
         aria-label="Send"
         title="Send (Enter)"
-        disabled={!canSend(text, working) || sending}
+        disabled={!canSend(text, working || starting) || sending}
         onclick={send}
       >
         <Send size={14} />

@@ -97,6 +97,8 @@ export class AgentStore {
   sessionState = $derived(this.view.state ?? this.activeInfo?.state ?? null);
   /** A turn runs: the composer offers Cancel instead of Send. */
   working = $derived(this.sessionState === 'working');
+  /** The agent is still starting (creating a session answers before it is ready). */
+  starting = $derived(this.sessionState === 'starting');
   vaultPending = $derived(pendingForVault(this.pending, app.activeVaultId));
   panelView = $derived(panelView({ connection: this.connection.state, agents: this.agents, selected: this.selected }));
   /** The agent a new session starts with. */
@@ -376,11 +378,25 @@ export class AgentStore {
   // ── Live events ────────────────────────────────────────────────────────────
 
   #enqueue(event: AgentDaemonEvent): void {
+    if (event.kind === 'resync') {
+      void this.#resync();
+      return;
+    }
     // Approvals are tracked at once: the tab mark must not wait for a batch.
     this.pending = applyApprovalEvent(this.pending, event);
     this.#queue.push(event);
     this.syncStatus();
     if (!this.#timer) this.#timer = setTimeout(() => this.#flush(), BATCH_MS);
+  }
+
+  /** The daemon dropped events for this window: read the approvals, the sessions and the open feed again. */
+  async #resync(): Promise<void> {
+    const id = this.activeId;
+    await Promise.all([this.#loadPending(), this.refreshSessions()]);
+    if (!id || id !== this.activeId) return;
+    const held = this.eventsBySession[id];
+    await this.#loadEvents(id, held?.length ? lastContiguous(held) : 0);
+    this.syncStatus();
   }
 
   #flush(): void {

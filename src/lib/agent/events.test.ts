@@ -41,6 +41,11 @@ describe('applyApprovalEvent', () => {
     expect(done).toEqual([]);
   });
 
+  it('keeps the list on a resync: it is read again, not applied', () => {
+    const list = [EDIT_APPROVAL];
+    expect(applyApprovalEvent(list, { kind: 'resync' })).toEqual(list);
+  });
+
   it('leaves the list alone for other session events', () => {
     const list = [EDIT_APPROVAL];
     const next = applyApprovalEvent(list, {

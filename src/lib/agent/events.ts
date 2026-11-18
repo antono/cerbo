@@ -4,13 +4,14 @@
  * store does with them.
  */
 
-import type { ApprovalInfo, ApprovalOutcome, SessionDaemonEvent, SessionInfo, SessionState } from './types';
+import type { ApprovalInfo, ApprovalOutcome, ResyncDaemonEvent, SessionDaemonEvent, SessionInfo, SessionState } from './types';
 
 export const AGENT_EVENT = 'agent-event';
 export const AGENT_CONNECTION_EVENT = 'agent-connection';
 
 export type AgentDaemonEvent =
   | SessionDaemonEvent
+  | ResyncDaemonEvent
   | { kind: 'approval_requested'; approval: ApprovalInfo }
   | { kind: 'approval_resolved'; vault: string; approval: number; outcome: ApprovalOutcome };
 
@@ -28,6 +29,9 @@ export function applyApprovalEvent(pending: readonly ApprovalInfo[], event: Agen
       return pending.some((a) => a.id === event.approval.id) ? pending.slice() : [...pending, event.approval];
     case 'approval_resolved':
       return pending.filter((a) => a.id !== event.approval);
+    // The list is read again from the daemon; nothing to apply here.
+    case 'resync':
+      return pending.slice();
     case 'session': {
       const body = event.event.body;
       if (body.type === 'approval_requested') {

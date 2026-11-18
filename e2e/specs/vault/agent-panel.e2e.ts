@@ -78,6 +78,8 @@ async function send(text: string) {
   const input = byTestId('agent-input');
   await input.click();
   await input.setValue(text);
+  // Creating a session answers before its agent is ready; Send is off until it is.
+  await byTestId('agent-send').waitForEnabled({ timeout: 30_000 });
   await byTestId('agent-send').click();
 }
 

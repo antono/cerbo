@@ -109,6 +109,18 @@ describe('AgentStore', () => {
     expect(app.agentStatus).toBe('disconnected');
   });
 
+  it('reads the approvals, the sessions and the open feed again when the daemon says it dropped events', async () => {
+    const count = (command: string) => calls.filter((c) => c.command === command).length;
+    const before = { approvals: count('approval_list'), sessions: count('session_list'), events: count('session_events') };
+    emit('agent-event', { kind: 'resync' });
+    await settle();
+    expect(count('approval_list')).toBe(before.approvals + 1);
+    expect(count('session_list')).toBe(before.sessions + 1);
+    expect(count('session_events')).toBe(before.events + 1);
+    const last = calls.filter((c) => c.command === 'session_events').at(-1)!;
+    expect(last.args.session).toBe('s1');
+  });
+
   it('reloads after a reconnect', async () => {
     emit('agent-connection', { state: 'unavailable' });
     const before = calls.filter((c) => c.command === 'session_list').length;

@@ -12,7 +12,7 @@
 //!
 //! The webview hears two Tauri events: `agent-connection` (a
 //! [`ConnectionStatus`]) and `agent-event` (a daemon [`Event`] of the kinds
-//! `session`, `approval_requested`, `approval_resolved`). Everything else the
+//! `session`, `approval_requested`, `approval_resolved`, `resync`). Everything else the
 //! daemon says is of no interest to the Agent tab and is dropped here.
 
 use crate::get_context;
@@ -211,7 +211,7 @@ fn set_status(shared: &Shared, sink: &Sink, status: ConnectionStatus) {
 
 /// Whether the Agent tab wants to hear of `event`.
 fn forwarded(event: &Event) -> bool {
-    matches!(event, Event::Session { .. } | Event::ApprovalRequested { .. } | Event::ApprovalResolved { .. })
+    matches!(event, Event::Session { .. } | Event::ApprovalRequested { .. } | Event::ApprovalResolved { .. } | Event::Resync)
 }
 
 fn event_loop(shared: Arc<Shared>, sink: Sink, wake: Receiver<()>, timing: Timing) {
@@ -317,7 +317,7 @@ pub async fn session_create(
     agent: AgentKind,
     resume_from: Option<String>,
 ) -> Result<Value, CommandError> {
-    call(link, Call::SessionCreate { vault, agent, resume_from }).await
+    call(link, Call::SessionCreate { vault, agent, resume_from, ephemeral: false }).await
 }
 
 #[tauri::command]
@@ -595,6 +595,7 @@ mod tests {
         assert!(forwarded(&session_event(1)));
         assert!(forwarded(&Event::ApprovalResolved { vault: "v".into(), approval: 137, outcome: ApprovalOutcome::Approved }));
         assert!(!forwarded(&Event::VaultsChanged));
+        assert!(forwarded(&Event::Resync), "a window that fell behind must be told");
     }
 
     #[test]

@@ -104,10 +104,20 @@ export interface SessionDaemonEvent {
   event: SessionEvent;
 }
 
+/**
+ * The daemon event sent to a connection that fell behind (`{"kind":"resync"}`):
+ * events were dropped for it, so it reads the state again (`session_list`,
+ * `session_events` after the last `seq` it holds, `approval_list`).
+ */
+export interface ResyncDaemonEvent {
+  kind: "resync";
+}
+
 /** Calls, as `{method, params}`; the answer type is noted per call. */
 export type AgentCall =
   | { method: "agent_list"; params: Record<string, never> } // AgentInfo[]
-  | { method: "session_create"; params: { vault: string; agent: AgentKind; resume_from?: string } } // SessionInfo
+  // SessionInfo, at once, in the `starting` state: `idle` or `failed` follows as a `state` event
+  | { method: "session_create"; params: { vault: string; agent: AgentKind; resume_from?: string } }
   | { method: "session_send"; params: { session: string; text: string; context: PageRef[] } } // null
   | { method: "session_cancel"; params: { session: string } } // null
   | { method: "session_end"; params: { session: string } } // null
