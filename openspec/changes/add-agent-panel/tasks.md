@@ -1,0 +1,36 @@
+## 1. ACP in the daemon
+
+- [ ] 1.1 ACP client over stdio: initialize, new session, prompt, cancel, streamed updates, permission requests
+- [ ] 1.2 Agent registry for OpenCode and Claude Code: find command, report unavailable with reason
+- [ ] 1.3 Process supervision: start, stop, crash reporting with the tail of stderr
+- [ ] 1.4 Pass `cerbo mcp --vault <v>` as the session's MCP server; set working directory to the vault; apply each CLI's file-tool restrictions
+
+## 2. Sessions
+
+- [ ] 2.1 Event model and append-only per-vault session store outside the vault (owner-only permissions)
+- [ ] 2.2 Session API: create, send, cancel, end, list, delete, subscribe; resume or transcript-as-context
+- [ ] 2.3 Map agent tool-permission requests to approval cards under the vault's mode (D3)
+- [ ] 2.4 Replay tests from recorded ACP logs (no real agent needed)
+
+## 3. CLI
+
+- [ ] 3.1 `cerbo agent run --vault [--agent] [--json] "<prompt>"` with exit codes for success, rejection, timeout, failure
+- [ ] 3.2 `cerbo agent list` and `cerbo agent stop <session>`
+- [ ] 3.3 Update `cli/man/cerbo.md`
+
+## 4. Agent tab
+
+- [ ] 4.1 Session store on the frontend: subscribe to events, build the feed from the event list
+- [ ] 4.2 Feed: messages, streaming text, tool-call rows, scroll behaviour, virtualization
+- [ ] 4.3 Header: agent picker, connection state, New session, Sessions list
+- [ ] 4.4 Composer: Enter/Shift+Enter, page context chip, `@` mentions, cancel while working
+- [ ] 4.5 Approval cards with diff; waiting mark on the tab icon
+- [ ] 4.6 Permission control with confirmation when widening
+- [ ] 4.7 Changed-page links and refresh of the open page
+- [ ] 4.8 Empty and error states (no agent, daemon unreachable)
+
+## 5. Verification
+
+- [ ] 5.1 e2e with a scripted fake ACP agent: chat, tool rows, approve and reject, close and reopen the window mid-session
+- [ ] 5.2 Headless e2e: `cerbo agent run` on read, auto and approve vaults, including the approval timeout
+- [ ] 5.3 Run cargo tests, vitest and `nix build .#cerbo .#cerbo-desktop`
