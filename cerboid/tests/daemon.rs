@@ -809,3 +809,49 @@ fn a_vault_that_was_missing_at_the_start_is_served_once_it_is_back() {
     }
     assert!(client.call(Call::PageList { vault: id }).is_ok());
 }
+
+// ── Agent sessions (contract only) ───────────────────────────────────────────
+
+fn session_calls(vault: &str) -> Vec<Call> {
+    use cerbo_core::rpc::AgentKind;
+    vec![
+        Call::SessionCreate { vault: vault.into(), agent: AgentKind::Claude, resume_from: None },
+        Call::SessionSend { session: "s".into(), text: "hi".into(), context: vec![] },
+        Call::SessionCancel { session: "s".into() },
+        Call::SessionEnd { session: "s".into() },
+        Call::SessionList { vault: None },
+        Call::SessionDelete { session: "s".into() },
+        Call::SessionEvents { session: "s".into(), after_seq: None, limit: 10 },
+    ]
+}
+
+#[test]
+fn agent_list_is_empty_and_session_calls_say_unavailable_until_implemented() {
+    let env = env();
+    let (id, _) = env.add_vault("main");
+    let _daemon = env.start();
+    let mut app = env.connect(ClientKind::App);
+
+    assert_eq!(app.call(Call::AgentList {}).unwrap(), json!([]));
+    for call in session_calls(&id) {
+        let err = app.call(call.clone()).unwrap_err();
+        assert_eq!(err.code, cerbo_core::rpc::CODE_UNAVAILABLE, "{call:?}");
+    }
+    assert!(app.call(Call::Ping).is_ok());
+}
+
+#[test]
+fn an_agent_connection_is_refused_every_session_call() {
+    let env = env();
+    let (id, _) = env.add_vault("main");
+    let _daemon = env.start();
+    let mut agent = Client::connect_bound(&env.paths.socket, ClientKind::Agent, Some("opencode"), &id).unwrap();
+
+    let mut calls = session_calls(&id);
+    calls.push(Call::AgentList {});
+    for call in calls {
+        let err = agent.call(call.clone()).unwrap_err();
+        assert_eq!(err.code, cerbo_core::rpc::CODE_FORBIDDEN, "{call:?}");
+    }
+    assert!(agent.call(Call::Ping).is_ok());
+}

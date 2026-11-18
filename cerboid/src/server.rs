@@ -584,6 +584,19 @@ impl Shared {
                 Ok(ready(serde_json::to_value(vaults).map_err(|e| RpcError::failed(e.to_string()))))
             }
             Call::Stop | Call::Subscribe { .. } => unreachable!("handled by the connection"),
+            // The session manager lands later; until then the agents are
+            // simply none, and every session call says so.
+            Call::AgentList {} => Ok(ready(Ok(json!([])))),
+            Call::SessionCreate { .. }
+            | Call::SessionSend { .. }
+            | Call::SessionCancel { .. }
+            | Call::SessionEnd { .. }
+            | Call::SessionList { .. }
+            | Call::SessionDelete { .. }
+            | Call::SessionEvents { .. } => Err(RpcError::new(
+                rpc::CODE_UNAVAILABLE,
+                "agent sessions are not available in this daemon yet",
+            )),
             Call::ApprovalList { vault } => {
                 let id = match vault {
                     Some(selector) => Some(self.resolve(&selector)?.info.id.clone()),
@@ -628,6 +641,9 @@ impl Shared {
     /// Why an agent connection may not make `call`, if it may not.
     fn agent_refusal(&self, conn: &Conn, call: &Call) -> Option<RpcError> {
         let bound = conn.bound.as_deref()?;
+        if call.is_session_call() {
+            return Some(forbidden("agent connections cannot use agent sessions"));
+        }
         if matches!(
             call,
             Call::Stop | Call::Status | Call::ApprovalList { .. } | Call::ApprovalAnswer { .. } | Call::AgentChanges { .. }
