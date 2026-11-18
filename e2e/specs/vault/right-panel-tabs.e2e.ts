@@ -81,20 +81,23 @@ function outlineTitles(): Promise<string[]> {
   );
 }
 
-/** Start counting the commands the page sends to the backend, by name. */
+/**
+ * Start counting the commands the page sends to the backend, by name.
+ * `__TAURI_INTERNALS__.invoke` is read-only, so this watches the
+ * `ipc://localhost/<command>` fetches it makes.
+ */
 function countCommands() {
   return browser.execute(() => {
-    const internals = (window as unknown as {
-      __TAURI_INTERNALS__: { invoke: (c: string, ...rest: unknown[]) => Promise<unknown> };
-    }).__TAURI_INTERNALS__;
     const w = window as unknown as { __cmdCounts?: Record<string, number>; __cmdWrapped?: boolean };
     w.__cmdCounts = {};
     if (w.__cmdWrapped) return;
     w.__cmdWrapped = true;
-    const original = internals.invoke.bind(internals);
-    internals.invoke = (cmd: string, ...rest: unknown[]) => {
-      w.__cmdCounts![cmd] = (w.__cmdCounts![cmd] ?? 0) + 1;
-      return original(cmd, ...rest);
+    const original = window.fetch.bind(window);
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input instanceof Request ? input.url : input);
+      const m = /^(?:ipc:\/\/localhost|https?:\/\/ipc\.localhost)\/([^/?#]+)/.exec(url);
+      if (m) w.__cmdCounts![m[1]] = (w.__cmdCounts![m[1]] ?? 0) + 1;
+      return original(input, init);
     };
   });
 }
@@ -185,7 +188,8 @@ describe('right panel tabs', () => {
     // The selection is saved to ui.toml; reloading the webview reads it back.
     await browser.pause(500);
     await browser.refresh();
-    await $('.page-list .page-btn').waitForDisplayed({ timeout: 30_000 });
+    // The tree lists several pages by now.
+    await $('.page-list .page-btn', { strict: false }).waitForDisplayed({ timeout: 30_000 });
     await $('[data-testid="right-tabs"]').waitForDisplayed({ timeout: 15_000 });
     await expectSelected('attachments');
   });
@@ -212,9 +216,11 @@ describe('right panel tabs', () => {
       await hotkey('3');
       await $('.right-panels').waitForDisplayed({ timeout: 5_000 });
       await expectSelected('outline');
+      // Open the page that is not open, so a page change really happens.
+      const target = (await openedTitle()).includes(PAGE) ? OTHER : PAGE;
       await countCommands();
-      await clickPageRow(PAGE);
-      await browser.waitUntil(async () => (await openedTitle()).includes(PAGE), { timeout: 10_000 });
+      await clickPageRow(target);
+      await browser.waitUntil(async () => (await openedTitle()).includes(target), { timeout: 10_000 });
       await browser.waitUntil(async () => (await commandCount('page_read')) > 0, { timeout: 10_000 });
       await browser.pause(1_000);
       expect(await commandCount('similar_get')).toBe(0);
@@ -232,9 +238,10 @@ describe('right panel tabs', () => {
       expect(await commandCount('outgoing_links_get')).toBe(1);
 
       // With Links selected, opening a page loads its lists once, not twice.
+      const target = (await openedTitle()).includes(PAGE) ? OTHER : PAGE;
       await countCommands();
-      await clickPageRow(OTHER);
-      await browser.waitUntil(async () => (await openedTitle()).includes(OTHER), { timeout: 10_000 });
+      await clickPageRow(target);
+      await browser.waitUntil(async () => (await openedTitle()).includes(target), { timeout: 10_000 });
       await browser.waitUntil(async () => (await commandCount('backlinks_get')) > 0, { timeout: 10_000 });
       await browser.pause(1_000);
       expect(await commandCount('backlinks_get')).toBe(1);
