@@ -251,10 +251,7 @@ async fn poll_registry(shared: Arc<Shared>, every: Duration) {
         let this = Arc::clone(&shared);
         let refreshed = tokio::task::spawn_blocking(move || this.registry.refresh()).await;
         match refreshed.unwrap_or_else(|_| Err("the vault list check crashed".to_string())) {
-            Ok(true) => {
-                let _ = shared.events.send(Event::VaultsChanged);
-            }
-            Ok(false) => {}
+            Ok(_) => {}
             Err(e) => eprintln!("cerboid: cannot read the vault list: {e}"),
         }
     }

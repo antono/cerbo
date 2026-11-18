@@ -98,6 +98,12 @@ impl Registry {
         // Dropped handles stop their watcher; a queue keeps draining what it
         // already took because its worker owns the receiver.
         inner.vaults = next;
+        if changed {
+            // Announced here, not by the caller: a refresh triggered by a
+            // lookup of a new vault must not swallow the event the poller
+            // would otherwise have sent.
+            let _ = self.watch.events.send(Event::VaultsChanged);
+        }
         Ok(changed)
     }
 
