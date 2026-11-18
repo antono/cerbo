@@ -19,6 +19,7 @@
   import DeletePageDialog from '#lib/DeletePageDialog.svelte';
   import WindowToolbar from '#lib/WindowToolbar.svelte';
   import PanelOverlay from '#lib/PanelOverlay.svelte';
+  import { agentStore, initAgentStore } from '#lib/agent/store.svelte.js';
   import { maxPanelWidth } from '#lib/layout.js';
   import { splitVaultPath } from '#lib/vault-path.js';
   import { isInputFocused, confirmationOpen, anyDialogOpen as transientOpen } from '#lib/hotkeys.js';
@@ -79,6 +80,17 @@
       if (uuid !== lastUuid && app.overlay === 'tree') closeOverlay();
       lastUuid = uuid;
     });
+  });
+
+  // The agent store outlives the Agent tab: an approval that arrives while the
+  // panel is hidden still marks the tab. It follows the open vault.
+  onMount(() => {
+    initAgentStore();
+    return () => agentStore.dispose();
+  });
+  $effect(() => {
+    const vault = app.activeVaultId;
+    untrack(() => void agentStore.setVault(vault));
   });
 
   onMount(async () => {

@@ -14,8 +14,8 @@
 
 ## 1c. Desktop connection (subset of add-cerboid-daemon 7.1–7.2)
 
-- [ ] 1c.1 Daemon client in `src-tauri` for session calls and events only: connect, start if absent, reconnect
-- [ ] 1c.2 Daemon-unavailable state in the Agent tab with Retry
+- [x] 1c.1 Daemon client in `src-tauri` for session calls and events only: connect, start if absent, reconnect
+- [x] 1c.2 Daemon-unavailable state in the Agent tab with Retry
 
 ## 2. Sessions
 
@@ -32,14 +32,14 @@
 
 ## 4. Agent tab
 
-- [ ] 4.1 Session store on the frontend: subscribe to events, build the feed from the event list
-- [ ] 4.2 Feed: messages, streaming text, tool-call rows, scroll behaviour, virtualization
-- [ ] 4.3 Header: agent picker, connection state, New session, Sessions list
-- [ ] 4.4 Composer: Enter/Shift+Enter, page context chip, `@` mentions, cancel while working
-- [ ] 4.5 Approval cards with diff; waiting mark on the tab icon
-- [ ] 4.6 Permission control with confirmation when widening
-- [ ] 4.7 Changed-page links and refresh of the open page
-- [ ] 4.8 Empty and error states (no agent, daemon unreachable)
+- [x] 4.1 Session store on the frontend: subscribe to events, build the feed from the event list
+- [x] 4.2 Feed: messages, streaming text, tool-call rows, scroll behaviour, virtualization
+- [x] 4.3 Header: agent picker, connection state, New session, Sessions list
+- [x] 4.4 Composer: Enter/Shift+Enter, page context chip, `@` mentions, cancel while working
+- [x] 4.5 Approval cards with diff; waiting mark on the tab icon
+- [x] 4.6 Permission control with confirmation when widening
+- [x] 4.7 Changed-page links and refresh of the open page
+- [x] 4.8 Empty and error states (no agent, daemon unreachable)
 
 ## 5. Verification
 
