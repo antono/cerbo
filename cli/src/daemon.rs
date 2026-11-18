@@ -275,7 +275,17 @@ pub fn vault_agent(
     level: Option<AgentPermission>,
     json: bool,
 ) -> Result<(), String> {
-    let vault = find_vault(ctx, vault)?;
+    // Works on agents.toml directly and never contacts the daemon, which
+    // picks the level up on its next write; so it is safe in the daemon's own
+    // ExecStartPre. A vault that is not registered exits 2, apart from other
+    // failures (1), so a caller can tell the two apart.
+    let vault = match find_vault(ctx, vault) {
+        Ok(vault) => vault,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(2);
+        }
+    };
     if let Some(level) = level {
         agent::set_permission(ctx, &vault.id, level)?;
     }

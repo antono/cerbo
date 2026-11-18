@@ -186,6 +186,16 @@ async fn serve(
     let mut instance = match instance::acquire(&config.paths)? {
         Acquired::Instance(instance) => instance,
         Acquired::AlreadyRunning => {
+            // Started by systemd for its socket, yet another daemon holds the
+            // lock: exiting 0 would leave a socket nobody serves (and the
+            // service not restarted), so this is a failure.
+            if instance::socket_activated() {
+                return Err(format!(
+                    "another cerboid holds {} although systemd started this one for the socket; \
+                     nobody would serve it",
+                    config.paths.lock.display()
+                ));
+            }
             tell(Ok(Started::AlreadyRunning));
             return Ok(());
         }

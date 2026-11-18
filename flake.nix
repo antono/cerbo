@@ -86,43 +86,67 @@
         checks.home-manager-module =
           let
             lib = pkgs.lib;
+            # `withModule = false` leaves the module out altogether.
             hm =
-              extra:
+              withModule: extra:
               home-manager.lib.homeManagerConfiguration {
                 inherit pkgs;
-                modules = [
-                  self.homeManagerModules.default
-                  {
-                    home.username = "tester";
-                    home.homeDirectory = "/home/tester";
-                    home.stateVersion = "24.11";
-                  }
-                  extra
-                ];
+                modules =
+                  lib.optional withModule self.homeManagerModules.default
+                  ++ [
+                    {
+                      home.username = "tester";
+                      home.homeDirectory = "/home/tester";
+                      home.stateVersion = "24.11";
+                    }
+                    extra
+                  ];
               };
-            baseline = hm { };
-            disabled = hm { services.cerbo.daemon.enable = false; };
-            enabled = hm {
+            # No import of the module at all: what a configuration looks like
+            # without Cerbo. Importing it with enable=false must change nothing.
+            absent = hm false { };
+            disabled = hm true { services.cerbo.daemon.enable = false; };
+            defaulted = hm true { };
+            enabled = hm true {
               services.cerbo.daemon = {
                 enable = true;
                 vaults.Notes.agent = "approve";
               };
             };
+            fakeDaemon = pkgs.runCommand "fake-cerboid" { } ''
+              mkdir -p $out/bin
+              touch $out/bin/cerboid
+            '';
+            custom = hm true {
+              services.cerbo.daemon = {
+                enable = true;
+                package = fakeDaemon;
+              };
+            };
             units = c: c.config.systemd.user;
-            hasUnit = c: lib.hasAttrByPath [ "services" "cerboid" ] (units c) || lib.hasAttrByPath [ "sockets" "cerboid" ] (units c);
+            # Everything the module could touch, reduced to comparable values.
+            footprint = c: {
+              packages = map (p: p.outPath) c.config.home.packages;
+              services = lib.attrNames (units c).services;
+              sockets = lib.attrNames (units c).sockets;
+              files = lib.attrNames c.config.home.file;
+              xdgConfig = lib.attrNames c.config.xdg.configFile;
+            };
             svc = (units enabled).services.cerboid;
             sock = (units enabled).sockets.cerboid;
             asserts = [
-              [ "disabled by default adds no unit" (!(hasUnit baseline)) ]
-              [ "disabled by default adds no package" (baseline.config.home.packages == (hm { }).config.home.packages) ]
-              [ "enable=false equals the default" (builtins.length disabled.config.home.packages == builtins.length baseline.config.home.packages) ]
+              [ "enable=false adds nothing to a configuration without the module" (footprint disabled == footprint absent) ]
+              [ "the default adds nothing to a configuration without the module" (footprint defaulted == footprint absent) ]
+              [ "the footprint check sees an enabled module" (footprint enabled != footprint absent) ]
               [ "service restarts on failure" (svc.Service.Restart == "on-failure") ]
               [ "service runs cerboid" (lib.all (e: lib.hasSuffix "/bin/cerboid" e) (lib.toList svc.Service.ExecStart)) ]
+              [ "a custom package is the one in ExecStart" ((units custom).services.cerboid.Service.ExecStart == "${fakeDaemon}/bin/cerboid") ]
+              [ "a custom package is installed" (builtins.elem fakeDaemon.outPath (footprint custom).packages) ]
               [ "service waits for the socket" (builtins.elem "cerboid.socket" svc.Unit.Requires) ]
               [ "service applies vault levels" (svc.Service.ExecStartPre != [ ]) ]
               [ "socket is owner only" (sock.Socket.SocketMode == "0600" && sock.Socket.DirectoryMode == "0700") ]
               [ "socket path is under the runtime dir" (sock.Socket.ListenStream == "%t/cerbo/cerboid.sock") ]
-              [ "enabling installs daemon and CLI" (builtins.length enabled.config.home.packages == builtins.length baseline.config.home.packages + 2) ]
+              [ "enabling installs daemon and CLI" (builtins.length enabled.config.home.packages == builtins.length absent.config.home.packages + 2) ]
             ];
             failed = map (a: builtins.elemAt a 0) (lib.filter (a: !(builtins.elemAt a 1)) asserts);
           in
@@ -130,6 +154,16 @@
           pkgs.runCommand "home-manager-module-check" { } ''
             touch $out
           '';
+
+        # The built daemon under a fake systemd: socket passed as descriptor 3
+        # with LISTEN_FDS/LISTEN_PID, a client gets the handshake, a second
+        # activated instance fails visibly, the socket survives the stop.
+        checks.cerboid-socket-activation = pkgs.runCommand "cerboid-socket-activation-check" {
+          nativeBuildInputs = [ pkgs.python3 ];
+        } ''
+          python3 ${./scripts/check-socket-activation.py} ${cerboid}/bin/cerboid
+          touch $out
+        '';
 
         apps.screenshot = {
           type = "app";

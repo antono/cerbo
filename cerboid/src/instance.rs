@@ -8,19 +8,19 @@ use cerbo_core::daemon_paths::DaemonPaths;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 
 /// First descriptor systemd passes to a socket-activated service
 /// (`SD_LISTEN_FDS_START`).
 const LISTEN_FDS_START: RawFd = 3;
 
 /// The right to be the daemon. Dropping it releases the lock and removes the
-/// socket file.
+/// socket file, if this instance bound it.
 #[derive(Debug)]
 pub struct Instance {
     paths: DaemonPaths,
     _lock: File,
-    keep_socket: bool,
+    owns_socket: bool,
 }
 
 /// What [`acquire`] found.
@@ -44,7 +44,7 @@ pub fn acquire(paths: &DaemonPaths) -> Result<Acquired, String> {
         .open(&paths.lock)
         .map_err(|e| format!("cannot open {}: {e}", paths.lock.display()))?;
     match file.try_lock() {
-        Ok(()) => Ok(Acquired::Instance(Instance { paths: paths.clone(), _lock: file, keep_socket: false })),
+        Ok(()) => Ok(Acquired::Instance(Instance { paths: paths.clone(), _lock: file, owns_socket: false })),
         Err(TryLockError::WouldBlock) => Ok(Acquired::AlreadyRunning),
         Err(TryLockError::Error(e)) => Err(format!("cannot lock {}: {e}", paths.lock.display())),
     }
@@ -65,6 +65,22 @@ pub fn inherited_listener() -> Result<Option<UnixListener>, String> {
         std::env::remove_var("LISTEN_FDNAMES");
     }
     listener_from_env(pid.as_deref(), fds.as_deref(), std::process::id(), LISTEN_FDS_START)
+}
+
+/// Whether systemd started this process for its socket: the same test as
+/// [`inherited_listener`], without taking anything. Call it before
+/// `inherited_listener`, which clears the variables.
+pub fn socket_activated() -> bool {
+    activated_by(
+        std::env::var("LISTEN_PID").ok().as_deref(),
+        std::env::var("LISTEN_FDS").ok().as_deref(),
+        std::process::id(),
+    )
+}
+
+fn activated_by(listen_pid: Option<&str>, listen_fds: Option<&str>, our_pid: u32) -> bool {
+    listen_pid.and_then(|v| v.trim().parse::<u32>().ok()) == Some(our_pid)
+        && listen_fds.and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0) > 0
 }
 
 fn listener_from_env(
@@ -97,12 +113,22 @@ impl Instance {
     /// Mark the socket as systemd's: it is not removed when the daemon stops,
     /// so the next client can activate the service again.
     pub fn leave_socket_to_systemd(&mut self) {
-        self.keep_socket = true;
+        self.owns_socket = false;
     }
 
     /// Listen on the socket, replacing a stale one. The socket is mode 0600 in
     /// a 0700 directory and never bound to a network address.
-    pub fn bind(&self) -> Result<UnixListener, String> {
+    ///
+    /// A socket is stale only when nobody answers on it. If a connection
+    /// succeeds, something listens there (another daemon, or systemd for the
+    /// service's socket unit) and it is left alone.
+    pub fn bind(&mut self) -> Result<UnixListener, String> {
+        if UnixStream::connect(&self.paths.socket).is_ok() {
+            return Err(format!(
+                "something already listens on {}; not replacing it",
+                self.paths.socket.display()
+            ));
+        }
         match std::fs::remove_file(&self.paths.socket) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -110,6 +136,8 @@ impl Instance {
         }
         let listener = UnixListener::bind(&self.paths.socket)
             .map_err(|e| format!("cannot listen on {}: {e}", self.paths.socket.display()))?;
+        // The file is ours from here on; before this point it was never touched.
+        self.owns_socket = true;
         std::fs::set_permissions(&self.paths.socket, std::fs::Permissions::from_mode(0o600))
             .map_err(|e| format!("cannot protect {}: {e}", self.paths.socket.display()))?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
@@ -121,7 +149,7 @@ impl Drop for Instance {
     fn drop(&mut self) {
         // Still holding the lock here, so the socket is ours to remove,
         // unless systemd owns it.
-        if !self.keep_socket {
+        if self.owns_socket {
             let _ = std::fs::remove_file(&self.paths.socket);
         }
     }
@@ -180,6 +208,29 @@ mod tests {
     }
 
     #[test]
+    fn systemd_start_is_recognised_only_for_this_process() {
+        assert!(activated_by(Some("10"), Some("1"), 10));
+        assert!(!activated_by(Some("11"), Some("1"), 10));
+        assert!(!activated_by(Some("10"), Some("0"), 10));
+        assert!(!activated_by(None, None, 10));
+    }
+
+    #[test]
+    fn a_live_socket_is_never_replaced() {
+        let (_tmp, paths) = paths();
+        paths.prepare_dir().unwrap();
+        // Someone else, such as systemd, listens on the socket.
+        let _theirs = UnixListener::bind(&paths.socket).unwrap();
+
+        let Acquired::Instance(mut instance) = acquire(&paths).unwrap() else { panic!("no instance") };
+        let err = instance.bind().unwrap_err();
+        assert!(err.contains("already listens"), "{err}");
+        // Still theirs: neither bind nor dropping the instance unlinked it.
+        drop(instance);
+        assert!(UnixStream::connect(&paths.socket).is_ok());
+    }
+
+    #[test]
     fn a_socket_left_to_systemd_survives_the_instance() {
         let (_tmp, paths) = paths();
         let Acquired::Instance(mut instance) = acquire(&paths).unwrap() else { panic!("no instance") };
@@ -207,7 +258,7 @@ mod tests {
     #[test]
     fn the_socket_is_owner_only_in_an_owner_only_directory() {
         let (_tmp, paths) = paths();
-        let Acquired::Instance(instance) = acquire(&paths).unwrap() else { panic!("no instance") };
+        let Acquired::Instance(mut instance) = acquire(&paths).unwrap() else { panic!("no instance") };
         let _listener = instance.bind().unwrap();
 
         assert_eq!(mode(&paths.dir), 0o700);
@@ -222,7 +273,7 @@ mod tests {
         drop(UnixListener::bind(&paths.socket).unwrap());
         assert!(paths.socket.exists());
 
-        let Acquired::Instance(instance) = acquire(&paths).unwrap() else { panic!("no instance") };
+        let Acquired::Instance(mut instance) = acquire(&paths).unwrap() else { panic!("no instance") };
         let _listener = instance.bind().expect("a stale socket must not block a start");
         assert!(std::os::unix::net::UnixStream::connect(&paths.socket).is_ok());
     }
@@ -230,7 +281,7 @@ mod tests {
     #[test]
     fn dropping_the_instance_removes_the_socket() {
         let (_tmp, paths) = paths();
-        let Acquired::Instance(instance) = acquire(&paths).unwrap() else { panic!("no instance") };
+        let Acquired::Instance(mut instance) = acquire(&paths).unwrap() else { panic!("no instance") };
         let listener = instance.bind().unwrap();
         drop(listener);
         drop(instance);
