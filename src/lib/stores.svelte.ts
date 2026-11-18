@@ -1035,17 +1035,23 @@ export interface AttachmentInfo {
   mime_type: string | null;
 }
 
+// Loads overlap (opening a page, the panel becoming visible, a save that added
+// a reference): only the newest request may write, or a slow older answer
+// would replace a newer list that already holds the new Attachment.
+let attachmentsRequest = 0;
+
 export async function loadAttachments(uuid: string): Promise<void> {
   if (!app.activeVaultId || !uuid) return;
+  const request = ++attachmentsRequest;
   try {
     const attachments = await invoke<AttachmentInfo[]>('attachment_list', {
       vaultId: app.activeVaultId,
       uuid,
     });
-    app.attachments = attachments;
+    if (request === attachmentsRequest) app.attachments = attachments;
   } catch (e) {
     console.error('Failed to load attachments:', e);
-    app.attachments = [];
+    if (request === attachmentsRequest) app.attachments = [];
   }
 }
 

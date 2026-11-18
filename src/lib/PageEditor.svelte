@@ -632,6 +632,20 @@
   }
 
   const jumpHold = createJumpHold();
+  // Where the jump left its scroller once the scroll settled. A later scroll
+  // away from there that no wheel, key or pointer event announced (a script,
+  // an anchor, an assistive tool) is the user's too and ends the hold.
+  let jumpSettled: { scroller: Element; top: number } | null = null;
+
+  function settleJump(find: () => Element | null) {
+    jumpSettled = null;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const scroller = find();
+        if (scroller) jumpSettled = { scroller, top: scroller.scrollTop };
+      }),
+    );
+  }
 
   /** Scroll so heading `index` is at the top; in edit mode the cursor moves there too. */
   function jumpToHeading(index: number) {
@@ -648,7 +662,11 @@
       const rendered = previewHeadings();
       // Equal counts pair by position; a mismatch (raw HTML headings) pairs by level and text.
       const pair = pairRenderedHeadings(headings, renderedInfo(rendered)).find((p) => p.heading === index);
-      if (pair) rendered[pair.rendered].scrollIntoView({ block: 'start' });
+      if (pair) {
+        const target = rendered[pair.rendered];
+        target.scrollIntoView({ block: 'start' });
+        settleJump(() => scrollParent(target));
+      }
       return;
     }
     const input = carta.input;
@@ -657,6 +675,7 @@
     focusTextareaAtOffset(textarea, heading.offset);
     const scroller = editorScroller();
     if (scroller) scroller.scrollTop = textTopAtOffset(input, heading.offset);
+    settleJump(() => scroller ?? null);
   }
 
   /** The heading whose section holds the top of the visible editor area. */
@@ -699,7 +718,14 @@
     const container = editorContainer;
     if (!container) return;
     // `scroll` does not bubble; capture sees the editor's and the preview's own scrollers.
-    const onScroll = () => scheduleOutlineCurrent();
+    const onScroll = (e: Event) => {
+      const settled = jumpSettled;
+      if (settled && e.target === settled.scroller && Math.abs(settled.scroller.scrollTop - settled.top) > 2) {
+        jumpHold.release();
+        jumpSettled = null;
+      }
+      scheduleOutlineCurrent();
+    };
     container.addEventListener('scroll', onScroll, true);
     // The user taking over (wheel, touch, scrollbar, keys) ends a jump's hold.
     const onUser = () => {
