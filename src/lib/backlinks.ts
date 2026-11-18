@@ -18,21 +18,28 @@ export type BacklinksError =
 /** Emitted by the desktop once the opened vault's index is ready. */
 export const INDEX_READY_EVENT = 'semantic-index-ready';
 
-export const INDEX_BUSY_MESSAGE =
-  'Backlinks are temporarily unavailable: another Cerbo process is using the index.';
+/** The message while another process holds the index; `what` names the list. */
+export function indexBusyMessage(what = 'Backlinks'): string {
+  return `${what} are temporarily unavailable: another Cerbo process is using the index.`;
+}
 
-/** Map a rejected `backlinks_get` call to the panel state and its message. */
-export function backlinksFailure(error: unknown): { status: BacklinksStatus; message: string } {
+export const INDEX_BUSY_MESSAGE = indexBusyMessage();
+
+/**
+ * Map a rejected `backlinks_get` (or `outgoing_links_get`, with `what` set to
+ * its list's name) call to the panel state and its message.
+ */
+export function backlinksFailure(error: unknown, what = 'Backlinks'): { status: BacklinksStatus; message: string } {
   if (typeof error === 'object' && error !== null && 'kind' in error) {
     const e = error as BacklinksError;
     switch (e.kind) {
       case 'building':
         return { status: 'loading', message: '' };
       case 'indexBusy':
-        return { status: 'unavailable', message: INDEX_BUSY_MESSAGE };
+        return { status: 'unavailable', message: indexBusyMessage(what) };
       case 'unavailable':
-        return { status: 'error', message: `Backlinks are unavailable: ${e.message}` };
+        return { status: 'error', message: `${what} are unavailable: ${e.message}` };
     }
   }
-  return { status: 'error', message: `Backlinks are unavailable: ${String(error)}` };
+  return { status: 'error', message: `${what} are unavailable: ${String(error)}` };
 }

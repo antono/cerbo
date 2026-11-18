@@ -5,8 +5,12 @@
   import { attachmentReference } from './attachment-drop';
   import ConfirmationDialog from './ConfirmationDialog.svelte';
 
-  /** The open page. Every action below works on an attachment's own UUID, never on this one. */
-  let { uuid, variant = 'stack' }: { uuid: string; variant?: 'stack' | 'tabs' } = $props();
+  /**
+   * The open page. Every action below works on an attachment's own UUID, never
+   * on this one. `visible` is false while another right panel tab is selected:
+   * the panel stays mounted but loads nothing then.
+   */
+  let { uuid, visible = true }: { uuid: string; visible?: boolean } = $props();
   let loading = $state(false);
   let confirmDelete = $state<AttachmentInfo | null>(null);
   let deleting = $state(false);
@@ -45,18 +49,17 @@
   }
 
   $effect(() => {
-    if (uuid) {
+    if (uuid && visible) {
       refreshAttachments();
     }
   });
 </script>
 
-<div class="attachments-panel" data-variant={variant}>
+<div class="attachments-panel">
   <!-- No header bar (spec `desktop-window-toolbar`): the title scrolls with
        the list. -->
   <div class="panel-content">
-    <!-- In the narrow sheet the "Files" tab names the list (design D8). -->
-    {#if variant === 'stack'}<h3 class="panel-title">Attachments</h3>{/if}
+    <h3 class="panel-title">Attachments</h3>
     {#if loading}
       <p class="status">Loading...</p>
     {:else if app.attachments.length === 0}

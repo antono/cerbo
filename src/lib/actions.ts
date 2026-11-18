@@ -37,6 +37,7 @@ import {
   Trash2,
 } from 'lucide-svelte';
 import { isMac } from './hotkeys';
+import { RIGHT_PANELS, type RightPanelId } from './right-panels';
 
 export type ActionIcon = typeof Search;
 
@@ -49,6 +50,8 @@ export interface ActionContext {
   editorTab: 'write' | 'preview';
   showLeftSidebar: boolean;
   showRightSidebar: boolean;
+  /** The selected right panel tab. */
+  rightPanelTab: RightPanelId;
   canGoBack: boolean;
   canGoForward: boolean;
 
@@ -61,6 +64,8 @@ export interface ActionContext {
   addVault(): void;
   toggleLeftSidebar(): void;
   toggleRightSidebar(): void;
+  /** Show the right panel on tab `id`, or hide it when `id` is already selected. */
+  useRightPanelTab(id: RightPanelId): void;
   toggleEditorMode(): void;
   setTheme(theme: 'light' | 'dark'): void;
   goBack(): void;
@@ -187,6 +192,19 @@ export const ACTIONS: readonly Action[] = [
     run: (ctx) => ctx.toggleRightSidebar(),
     helpLabel: 'Show or hide the right panel',
   },
+  // One "Show <tab>" action per right panel tab, from the registry.
+  ...RIGHT_PANELS.map(
+    (panel): Action => ({
+      id: `panel.right.${panel.id}`,
+      label: `Show ${panel.label}`,
+      icon: panel.icon,
+      hotkey: panel.hotkey,
+      synonyms: ['right panel', 'tab', panel.label.toLowerCase()],
+      when: hasPage,
+      run: (ctx) => ctx.useRightPanelTab(panel.id),
+      helpLabel: `Show ${panel.label} (hide the right panel if already shown)`,
+    }),
+  ),
   {
     id: 'page.mode',
     // The eye switches to preview, the pencil to edit (spec
@@ -365,6 +383,7 @@ export const HELP_ACTIONS: readonly string[] = [
   'page.mode',
   'panel.left',
   'panel.right',
+  ...RIGHT_PANELS.map((p) => `panel.right.${p.id}`),
   'theme.toggle',
   'vault.switch',
   'vault.add',
@@ -421,6 +440,11 @@ export function hotkeyKeys(hotkey: Hotkey, mac = isMac): string[] {
   if (hotkey.shift && !hotkey.displayKey) keys.push('Shift');
   if (hotkey.displayKey) {
     keys.push(hotkey.displayKey);
+    return keys;
+  }
+  const digit = /^Digit(\d)$/.exec(hotkey.code ?? '');
+  if (digit) {
+    keys.push(digit[1]);
     return keys;
   }
   const main = hotkey.code ?? (Array.isArray(hotkey.key) ? hotkey.key[0] : hotkey.key) ?? '';

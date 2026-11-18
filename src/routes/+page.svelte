@@ -2,7 +2,6 @@
   import { app, activeVault, quickAddVault, dockedPanelWidths } from '#lib/stores.svelte.js';
   import PageEditor from '#lib/PageEditor.svelte';
   import RightSidebarPanel from '#lib/RightSidebarPanel.svelte';
-  import AttachmentsPanel from '#lib/AttachmentsPanel.svelte';
   import { actionAvailable, actionById, actionIcon, actionLabel } from '#lib/actions.js';
   import { appActions } from '#lib/action-host.js';
   import { maxPanelWidth } from '#lib/layout.js';
@@ -82,17 +81,13 @@
       ></div>
 
       <!-- Side Panels -->
-      <aside 
-        class="right-panels" 
+      <aside
+        class="right-panels"
+        aria-label="Right panel"
         style="width: {rightWidth}px;"
         tabindex="-1"
       >
-        <div class="panel-section">
-          <RightSidebarPanel uuid={app.currentUuid} />
-        </div>
-        <div class="panel-section">
-          <AttachmentsPanel uuid={app.currentUuid} />
-        </div>
+        <RightSidebarPanel uuid={app.currentUuid} />
       </aside>
     {/if}
   </div>
@@ -183,16 +178,6 @@
     flex-direction: column;
     overflow: hidden;
     border-left: none;
-  }
-
-  .panel-section {
-    flex: 1;
-    min-height: 0;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .panel-section:last-child {
-    border-bottom: none;
   }
 
   .is-resizing {

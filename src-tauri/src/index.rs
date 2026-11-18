@@ -119,12 +119,32 @@ pub async fn backlinks_get(
     _vaultId: String,
     uuid: String,
 ) -> Result<Vec<BacklinkEntry>, BacklinksError> {
-    tauri::async_runtime::spawn_blocking(move || backlinks(&app, &uuid))
+    tauri::async_runtime::spawn_blocking(move || with_index(&app, &uuid, |index, id| index.backlinks(id)))
         .await
         .map_err(|e| BacklinksError::Unavailable { message: e.to_string() })?
 }
 
-fn backlinks(app: &AppHandle, uuid: &str) -> Result<Vec<BacklinkEntry>, BacklinksError> {
+/// The pages that `uuid` links to, from the same index and with the same
+/// failure states as [`backlinks_get`] (design D6 of `add-right-panel-tabs`).
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn outgoing_links_get(
+    app: AppHandle,
+    _vaultId: String,
+    uuid: String,
+) -> Result<Vec<BacklinkEntry>, BacklinksError> {
+    tauri::async_runtime::spawn_blocking(move || with_index(&app, &uuid, |index, id| index.outgoing_links(id)))
+        .await
+        .map_err(|e| BacklinksError::Unavailable { message: e.to_string() })?
+}
+
+/// An index query for the right panel: waits for the build, catches up when
+/// needed, then runs `query` against the open page's lowercase UUID.
+fn with_index<T>(
+    app: &AppHandle,
+    uuid: &str,
+    query: impl FnOnce(&SemanticIndex, &str) -> Result<T, SemanticError>,
+) -> Result<T, BacklinksError> {
     let ctx = get_vault_ctx(app)?;
     let watcher_state = app.state::<WatcherState>();
     let poisoned = || BacklinksError::from("watcher state lock poisoned".to_string());
@@ -153,7 +173,7 @@ fn backlinks(app: &AppHandle, uuid: &str) -> Result<Vec<BacklinkEntry>, Backlink
         }
     }
     // Object directories are named by the lowercase UUID the index uses.
-    Ok(index.backlinks(&uuid.to_ascii_lowercase())?)
+    Ok(query(&index, &uuid.to_ascii_lowercase())?)
 }
 
 pub fn start_watcher(

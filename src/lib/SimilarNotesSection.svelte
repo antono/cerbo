@@ -17,7 +17,12 @@
   } from './similar-notes';
   import { INDEX_READY_EVENT } from './backlinks';
 
-  let { uuid }: { uuid: string } = $props();
+  /**
+   * `visible` is false while another right panel tab is selected: similar
+   * notes are then not computed until Links is selected (spec "Not loaded
+   * while hidden").
+   */
+  let { uuid, visible = true }: { uuid: string; visible?: boolean } = $props();
 
   // Reload when another page opens; answers for a page left behind are
   // dropped by the store (design D2). Only `uuid` is a dependency: the loader
@@ -25,7 +30,7 @@
   // on every request it makes.
   $effect(() => {
     const current = uuid;
-    if (current) {
+    if (current && visible) {
       untrack(() => loadSimilarNotes(current));
     }
   });
@@ -46,7 +51,7 @@
   $effect(() => {
     const current = uuid;
     const unlisten = listen(INDEX_READY_EVENT, () => {
-      if (current && app.similar.status === 'busy') loadSimilarNotes(current);
+      if (current && visible && app.similar.status === 'busy') loadSimilarNotes(current);
     });
     return () => {
       unlisten.then((stop) => stop());

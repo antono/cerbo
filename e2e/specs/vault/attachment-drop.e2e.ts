@@ -88,6 +88,8 @@ describe('drop and paste into the editor', () => {
     // The attachments panel lives in the right panel; the toolbar toggle shows it.
     const showPanels = $('[data-testid="toolbar-right-panel"][aria-pressed="false"]');
     if (await showPanels.isExisting()) await showPanels.click();
+    // Links is the default tab; the attachments panel is one tab over.
+    await $('[data-testid="right-tab-attachments"]').click();
     await $('.attachments-panel').waitForDisplayed({ timeout: 10_000 });
     await browser.execute(() => (document.activeElement as HTMLElement | null)?.blur());
     await browser.keys('i');

@@ -50,6 +50,38 @@ impl SemanticIndex {
         }
         Ok(entries)
     }
+
+    /// The live pages that the `page.md` of `uuid` links to, each once,
+    /// ordered by title then UUID. The mirror of [`Self::backlinks`]: a link to
+    /// a page that does not exist (yet) or has no title is left out. `uuid`
+    /// must be in the normalised form of [`super::link_targets`].
+    pub fn outgoing_links(&self, uuid: &str) -> Result<Vec<BacklinkEntry>, SemanticError> {
+        let sparql = format!(
+            "SELECT DISTINCT ?dst ?title WHERE {{\n\
+             \x20 GRAPH ?g {{ <{source}> <{NS_SCHEMA}citation> ?dst }}\n\
+             \x20 ?dst <{NS_SCHEMA}name> ?title\n\
+             }} ORDER BY ?title ?dst",
+            source = rdf::object_iri(uuid).as_str(),
+        );
+        let QueryOutput::Solutions { rows, .. } = self.live_graph().query(&sparql, &[])? else {
+            unreachable!("a SELECT always yields solutions");
+        };
+
+        let mut entries: Vec<BacklinkEntry> = Vec::with_capacity(rows.len());
+        for row in rows {
+            let (Some(Term::NamedNode(dst)), Some(Term::Literal(title))) = (&row[0], &row[1]) else {
+                continue;
+            };
+            let Some(target) = rdf::uuid_from_object_iri(dst.as_str()) else {
+                continue;
+            };
+            if target == uuid || entries.iter().any(|e| e.uuid == target) {
+                continue;
+            }
+            entries.push(BacklinkEntry { uuid: target.to_string(), title: title.value().to_string() });
+        }
+        Ok(entries)
+    }
 }
 
 /// The backlinks of the object `uuid`, the way the CLI asks: open (building if

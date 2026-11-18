@@ -19,6 +19,7 @@
     gatePreviewRendering,
     nextPlainInput,
     restoreInputView,
+    textTopAtOffset,
     usePlainInput,
   } from './editor-performance';
   import {
@@ -37,6 +38,8 @@
     type SavedCursorPosition,
   } from './cursor-position';
   import { focusTextareaAtOffset } from './textarea-focus';
+  import { currentHeadingIndex, headingsFor } from './outline';
+  import { setOutlineBridge } from './outline-bridge';
   import { attachEditorAttachments, type DropIndicator } from './editor-attachments';
   import { attachmentFileName } from './attachment-drop';
   import { buildPageDiffFile, decideExternalPageChange, loadPageDiffFile, logPageContentDiff, pageChangeKey, pageMdPathToSlug, shouldIgnoreUnchangedPageChange, shouldSkipExternalPageChange } from './page-sync';
@@ -593,6 +596,108 @@
       if (cursorSaveTimer) clearTimeout(cursorSaveTimer);
       cursorSaveTimer = setTimeout(() => void saveCursorPosition(), 1000);
     });
+  });
+
+  // ── Outline (spec `desktop-outline-panel`) ─────────────────────────────────
+
+  // The Outline reads the live text, so it follows typing without a save.
+  $effect(() => {
+    app.pageText = content;
+    app.pageTextUuid = loadedUuid;
+  });
+  $effect(() => () => {
+    app.pageText = '';
+    app.pageTextUuid = null;
+    app.outlineCurrent = -1;
+  });
+
+  /** The rendered headings of the preview, in document order. */
+  function previewHeadings(): HTMLElement[] {
+    const surface = editorContainer?.querySelector('.carta-renderer');
+    return surface ? Array.from(surface.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')) : [];
+  }
+
+  /** The nearest ancestor of `el` that scrolls, or null. */
+  function scrollParent(el: HTMLElement): HTMLElement | null {
+    for (let node = el.parentElement; node; node = node.parentElement) {
+      const overflowY = getComputedStyle(node).overflowY;
+      if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight) return node;
+    }
+    return null;
+  }
+
+  /** Scroll so heading `index` is at the top; in edit mode the cursor moves there too. */
+  function jumpToHeading(index: number) {
+    const headings = headingsFor(content);
+    const heading = headings[index];
+    if (!heading) return;
+    app.outlineCurrent = index;
+    if (app.editorTab === 'preview') {
+      const rendered = previewHeadings();
+      // A count mismatch (raw HTML headings) means the pairing is unknown.
+      if (rendered.length === headings.length) rendered[index].scrollIntoView({ block: 'start' });
+      return;
+    }
+    const input = carta.input;
+    const textarea = input?.textarea;
+    if (!input || !textarea) return;
+    focusTextareaAtOffset(textarea, heading.offset);
+    const scroller = editorScroller();
+    if (scroller) scroller.scrollTop = textTopAtOffset(input, heading.offset);
+  }
+
+  /** The heading whose section holds the top of the visible editor area. */
+  function topHeadingIndex(): number {
+    const headings = headingsFor(content);
+    if (headings.length === 0) return -1;
+    if (app.editorTab === 'preview') {
+      const rendered = previewHeadings();
+      if (rendered.length !== headings.length) return -1;
+      const scroller = scrollParent(rendered[0]);
+      const edge = scroller ? scroller.getBoundingClientRect().top : 0;
+      return currentHeadingIndex(rendered.length, (i) => rendered[i].getBoundingClientRect().top - edge, 8);
+    }
+    const input = carta.input;
+    const scroller = editorScroller();
+    if (!input || !scroller) return -1;
+    return currentHeadingIndex(headings.length, (i) => textTopAtOffset(input, headings[i].offset), scroller.scrollTop + 4);
+  }
+
+  // Measuring a long page is not free: while the Outline is selected, one
+  // update runs shortly after the last scroll or edit.
+  const OUTLINE_CURRENT_DELAY_MS = 120;
+  let outlineTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function scheduleOutlineCurrent() {
+    if (app.rightPanelTab !== 'outline' || outlineTimer) return;
+    outlineTimer = setTimeout(() => {
+      outlineTimer = null;
+      app.outlineCurrent = app.rightPanelTab === 'outline' ? topHeadingIndex() : -1;
+    }, OUTLINE_CURRENT_DELAY_MS);
+  }
+
+  $effect(() => {
+    const container = editorContainer;
+    if (!container) return;
+    // `scroll` does not bubble; capture sees the editor's and the preview's own scrollers.
+    const onScroll = () => scheduleOutlineCurrent();
+    container.addEventListener('scroll', onScroll, true);
+    const removeBridge = setOutlineBridge({ jumpTo: jumpToHeading });
+    return () => {
+      container.removeEventListener('scroll', onScroll, true);
+      removeBridge();
+      if (outlineTimer) clearTimeout(outlineTimer);
+      outlineTimer = null;
+    };
+  });
+
+  // The tab opened, the text changed or the mode switched: mark again.
+  $effect(() => {
+    app.rightPanelTab;
+    app.editorTab;
+    void content;
+    void loadedUuid;
+    untrack(() => scheduleOutlineCurrent());
   });
 
   onMount(() => {
