@@ -28,6 +28,8 @@ pkgs.mkShell {
     GDK_BACKEND = "x11";
     # fastembed loads ONNX Runtime at run time (ort `load-dynamic`).
     ORT_DYLIB_PATH = "${pkgs.onnxruntime}/lib/libonnxruntime.so";
+    # The agent sandbox (cerboid) and its integration test run bwrap from here.
+    CERBO_BWRAP = "${pkgs.bubblewrap}/bin/bwrap";
     WEBKIT_WEBDRIVER = "${pkgs.webkitgtk_4_1}/bin/WebKitWebDriver";
   };
 }

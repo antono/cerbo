@@ -144,6 +144,9 @@ enum Commands {
         /// Name shown in the change log and approval prompts (default: the MCP client's own name)
         #[arg(long)]
         name: Option<String>,
+        /// Connect to this socket (an agent session socket) instead of the daemon's; never starts a daemon. Default: $CERBO_SOCKET
+        #[arg(long)]
+        socket: Option<std::path::PathBuf>,
     },
     /// Answer the changes agents wait to make (vaults set to `approve`) and read the agent change log
     Approvals {
@@ -1427,7 +1430,7 @@ async fn main() -> Result<(), String> {
             DaemonCommands::Stop { json } => daemon::stop(&ctx, json)?,
             DaemonCommands::Status { json } => daemon::status(&ctx, json)?,
         },
-        Commands::Mcp { vault, name } => mcp::run(&ctx, vault, name).await?,
+        Commands::Mcp { vault, name, socket } => mcp::run(&ctx, vault, name, socket).await?,
         Commands::Approvals { action } => match action {
             ApprovalCommands::List { vault, json } => daemon::approvals_list(&ctx, vault, json)?,
             ApprovalCommands::Approve { id, json } => daemon::approvals_answer(&ctx, id, true, json)?,

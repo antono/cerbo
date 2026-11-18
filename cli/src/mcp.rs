@@ -59,6 +59,9 @@ user allowed it; a change may wait for the user's approval, and deleting a page 
 /// waits for approval does not block reads.
 struct Link {
     paths: DaemonPaths,
+    /// A socket given with `--socket` or `CERBO_SOCKET` (an agent's session
+    /// socket, design D9): connect there and never start a daemon.
+    socket: Option<std::path::PathBuf>,
     vault: String,
     name: Mutex<Option<String>>,
     idle: Mutex<Vec<Client>>,
@@ -69,7 +72,7 @@ struct Link {
 
 impl Link {
     fn new(paths: DaemonPaths, vault: String, name: Option<String>) -> Self {
-        Self { paths, vault, name: Mutex::new(name), idle: Mutex::new(Vec::new()), default_timeout: None }
+        Self { paths, socket: None, vault, name: Mutex::new(name), idle: Mutex::new(Vec::new()), default_timeout: None }
     }
 
     fn take(&self) -> Result<Client, RpcError> {
@@ -78,12 +81,12 @@ impl Link {
         }
         let name = self.name.lock().unwrap_or_else(|e| e.into_inner()).clone();
         // The connection is bound to this shim's one vault.
-        let mut client = launch::connect_or_start(
-            &self.paths,
-            ClientKind::Agent,
-            name.as_deref().or(Some("cerbo mcp")),
-            Some(&self.vault),
-        )?;
+        let name = name.as_deref().or(Some("cerbo mcp"));
+        let mut client = match &self.socket {
+            Some(socket) => Client::connect_bound(socket, ClientKind::Agent, name, &self.vault)
+                .map_err(|e| RpcError::failed(format!("cannot reach the session socket {}: {e}", socket.display())))?,
+            None => launch::connect_or_start(&self.paths, ClientKind::Agent, name, Some(&self.vault))?,
+        };
         if let Some(timeout) = self.default_timeout {
             client.set_default_timeout(timeout);
         }
@@ -425,9 +428,22 @@ impl ServerHandler for VaultServer {
 }
 
 /// Run the server until the client closes stdin.
-pub async fn run(ctx: &CerboContext, vault: String, name: Option<String>) -> Result<(), String> {
+/// The socket to use instead of the user's daemon: `--socket`, else a
+/// non-empty `CERBO_SOCKET`.
+pub fn socket_override(flag: Option<std::path::PathBuf>, env: Option<std::ffi::OsString>) -> Option<std::path::PathBuf> {
+    flag.or_else(|| env.filter(|v| !v.is_empty()).map(std::path::PathBuf::from))
+}
+
+pub async fn run(
+    ctx: &CerboContext,
+    vault: String,
+    name: Option<String>,
+    socket: Option<std::path::PathBuf>,
+) -> Result<(), String> {
     let paths = DaemonPaths::for_user(&ctx.cache_dir);
-    let link = Arc::new(Link::new(paths, vault.clone(), name));
+    let mut link = Link::new(paths, vault.clone(), name);
+    link.socket = socket_override(socket, std::env::var_os("CERBO_SOCKET"));
+    let link = Arc::new(link);
 
     // Start the daemon now, and refuse a vault it does not serve, so a wrong
     // `--vault` fails at once with a message instead of at the first tool call.
@@ -456,6 +472,28 @@ pub async fn run(ctx: &CerboContext, vault: String, name: Option<String>) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_flag_beats_the_environment_and_empty_means_unset() {
+        use std::ffi::OsString;
+        use std::path::PathBuf;
+        let env = Some(OsString::from("/env.sock"));
+        assert_eq!(socket_override(Some("/flag.sock".into()), env.clone()), Some(PathBuf::from("/flag.sock")));
+        assert_eq!(socket_override(None, env), Some(PathBuf::from("/env.sock")));
+        assert_eq!(socket_override(None, Some(OsString::new())), None);
+        assert_eq!(socket_override(None, None), None);
+    }
+
+    #[test]
+    fn a_socket_override_never_starts_a_daemon() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = DaemonPaths::in_dir(tmp.path().join("run"));
+        let mut link = Link::new(paths.clone(), "notes".into(), None);
+        link.socket = Some(tmp.path().join("missing.sock"));
+        let err = link.take().err().expect("no socket, no connection");
+        assert!(err.message.contains("session socket"), "{}", err.message);
+        assert!(!paths.dir.exists(), "no daemon directory was created");
+    }
 
     #[test]
     fn a_write_waits_past_the_approval_deadline() {

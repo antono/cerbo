@@ -62,6 +62,12 @@ let
     cargoLock.lockFile = ../Cargo.lock;
     cargoBuildFlags = [ "-p" "cerboid" ];
     cargoTestFlags = [ "-p" "cerboid" ];
+    # The sandbox integration test runs real bwrap (checked: the Nix build
+    # sandbox allows the nested user namespace). Where a builder does not, the
+    # test skips itself with a message instead of failing.
+    preCheck = ''
+      export CERBO_BWRAP=${pkgs.bubblewrap}/bin/bwrap
+    '';
     nativeBuildInputs = [
       pkgs.pkg-config
       pkgs.makeWrapper
@@ -71,10 +77,16 @@ let
     doCheck = true;
     meta.mainProgram = "cerboid";
 
+    # Agents run in a bubblewrap sandbox (design D8): the daemon takes bwrap
+    # from CERBO_BWRAP, never from PATH, and starts the agents' `cerbo mcp` from
+    # CERBO_BIN. A user's own value of either wins (--set-default).
     postInstall = ''
       # The scripted agent is a test tool, not part of the product.
       rm -f $out/bin/fake-acp-agent
-      wrapProgram $out/bin/cerboid --set-default ORT_DYLIB_PATH ${ortDylibPath}
+      wrapProgram $out/bin/cerboid \
+        --set-default ORT_DYLIB_PATH ${ortDylibPath} \
+        --set-default CERBO_BWRAP ${pkgs.bubblewrap}/bin/bwrap \
+        --set-default CERBO_BIN ${cerbo}/bin/cerbo
     '';
   };
 

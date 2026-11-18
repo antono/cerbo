@@ -347,11 +347,12 @@ A client and a daemon of different protocol versions refuse each other; after up
 
 Run an MCP (Model Context Protocol) server on standard input and output, so an agent CLI such as OpenCode or Claude Code can work with one vault. The server holds no vault itself: it forwards each tool call to the daemon, starts the daemon when it is not running (or says why it cannot), and exposes exactly one vault; a page of another vault is reported as not found.
 
-Usage: `cerbo mcp --vault <NAME|ID|PATH> [--name <NAME>]`
+Usage: `cerbo mcp --vault <NAME|ID|PATH> [--name <NAME>] [--socket <PATH>]`
 
 Options:
 - `--vault <NAME|ID|PATH>` - The vault to expose: a registered vault's name or ID, or its path. An unregistered vault is refused at once.
 - `--name <NAME>` - The agent's name in the change log and in approval requests. Default: the name the MCP client gives itself.
+- `--socket <PATH>` - Connect to this Unix socket instead of the user's daemon socket, and never start a daemon. Default: the `CERBO_SOCKET` environment variable. The daemon sets it for the agents it runs in a sandbox, where it names the session's own socket; the connection is an agent connection bound to the one `--vault`.
 
 Tools, always offered: `list_pages`, `read_page`, `search_text`, `search_semantic`, `backlinks`, `outgoing_links`, `list_attachments`, `sparql_query`. A page is named by its UUID; an unknown one is an error result naming the UUID. `read_page` also returns the page's `version`; pass it to `edit_page` as `base_version`, and the edit is refused with a conflict, leaving the page as it is, when the page changed after that read (at `auto` and at `approve`; the check runs in the write queue right before the write). Without `base_version`, an `auto` edit replaces whatever the page holds.
 
@@ -409,6 +410,17 @@ Options:
 # AGENT PERMISSIONS
 
 What an agent connected through `cerbo mcp` may do is set per vault, with `cerbo vault agent <VAULT> [read|auto|approve]`, and judged by the daemon on every write, so a change applies to connected agents at once. The setting lives in `agents.toml` beside `vaults.toml`.
+
+**Agent sandbox.** The daemon runs the agent CLIs of the agent panel (OpenCode, and Claude Code through `claude-agent-acp`) inside a bubblewrap sandbox: the vault read-only, a private home for the agent under `$XDG_DATA_HOME/cerbo/agents/<agent>/home`, an empty `/home` and `/run`, a cleared environment and the host network (the agent needs its model API). The only file of your real home it sees is its login file (`~/.local/share/opencode/auth.json`, `~/.claude/.credentials.json`). It reaches the daemon only through its own session socket, named by `CERBO_SOCKET`, never the main one. Built-in file and shell tools of the agent are switched off; it works through `cerbo mcp`. The `[agent]` table of `agents.toml` sets how agents are run:
+
+```toml
+[agent]
+sandbox = "bwrap"                 # or "none": no sandbox, with a warning in every session
+opencode = "/abs/path/opencode"   # optional; default: found on PATH when the daemon starts
+claude = "/abs/path/claude-agent-acp"
+```
+
+`bwrap` is taken from the absolute path in the environment variable `CERBO_BWRAP` (the Nix package sets it), never from `PATH`. If it is missing or a test sandbox cannot start (for example user namespaces are disabled), sessions are refused with the reason; they are never started unsandboxed unless `sandbox = "none"` is set. `CERBO_BIN` names the `cerbo` binary the agent runs as its MCP server (default: `cerbo` beside `cerboid`).
 
 **What this protects, and what it does not.** The permissions apply to agents that work through `cerbo mcp`. They are not a security boundary against a process running as your user: such a process can open the daemon's socket (or the vault files) and declare itself the app or the CLI, and those are not limited by the level. Real isolation of agent processes, so that an agent has no other way to your vault, is planned with the agent panel. Until then, treat the level as a guard for well-behaved agent tools, not as a sandbox.
 
