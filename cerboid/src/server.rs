@@ -183,7 +183,7 @@ async fn serve(
     ctl: ShutdownCtl,
     tell: &dyn Fn(Result<Started, String>),
 ) -> Result<(), String> {
-    let instance = match instance::acquire(&config.paths)? {
+    let mut instance = match instance::acquire(&config.paths)? {
         Acquired::Instance(instance) => instance,
         Acquired::AlreadyRunning => {
             tell(Ok(Started::AlreadyRunning));
@@ -204,7 +204,16 @@ async fn serve(
         config.ctx.clone(),
         WatchSettings { events: events.clone(), tracker: Arc::clone(&tracker), quiet: config.event_quiet },
     )?;
-    let listener = UnixListener::from_std(instance.bind()?).map_err(|e| e.to_string())?;
+    // Under systemd socket activation the socket already exists and belongs
+    // to systemd: use it as it is, never unlink and rebind it.
+    let std_listener = match instance::inherited_listener()? {
+        Some(listener) => {
+            instance.leave_socket_to_systemd();
+            listener
+        }
+        None => instance.bind()?,
+    };
+    let listener = UnixListener::from_std(std_listener).map_err(|e| e.to_string())?;
 
     let shared = Arc::new(Shared {
         ctx: config.ctx.clone(),

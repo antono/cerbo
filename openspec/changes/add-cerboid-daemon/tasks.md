@@ -38,10 +38,10 @@
 
 ## 6. Nix and systemd
 
-- [ ] 6.1 Export `homeManagerModules.default` with `services.cerbo.daemon.{enable,package}`
-- [ ] 6.2 Define `systemd.user.services.cerboid` and `systemd.user.sockets.cerboid` (restart on failure, socket activation)
-- [ ] 6.3 Add `vaults.<name>.agent` and apply it at service start
-- [ ] 6.4 NixOS VM or `home-manager` build check that the unit is generated and disabled by default
+- [x] 6.1 Export `homeManagerModules.default` with `services.cerbo.daemon.{enable,package}`
+- [x] 6.2 Define `systemd.user.services.cerboid` and `systemd.user.sockets.cerboid` (restart on failure, socket activation)
+- [x] 6.3 Add `vaults.<name>.agent` and apply it at service start
+- [x] 6.4 NixOS VM or `home-manager` build check that the unit is generated and disabled by default
 
 ## 7. Desktop client (staged)
 

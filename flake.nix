@@ -6,6 +6,9 @@
     flake-utils.url = "github:numtide/flake-utils";
     bun2nix.url = "github:nix-community/bun2nix";
     bun2nix.inputs.nixpkgs.follows = "nixpkgs";
+    # Only the flake check of the Home Manager module evaluates against it.
+    home-manager.url = "github:nix-community/home-manager";
+    home-manager.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -14,8 +17,13 @@
       nixpkgs,
       flake-utils,
       bun2nix,
+      home-manager,
     }:
-    flake-utils.lib.eachDefaultSystem (
+    {
+      # `services.cerbo.daemon`: see nix/home-manager.nix.
+      homeManagerModules.default = import ./nix/home-manager.nix { inherit self; };
+    }
+    // flake-utils.lib.eachDefaultSystem (
       system:
       let
         pkgs = import nixpkgs {
@@ -72,6 +80,56 @@
           python3 ${src}/scripts/check-atomic-writes.py ${src}/core/src
           touch $out
         '';
+
+        # The Home Manager module, evaluated with a minimal configuration:
+        # nothing is added unless enabled, and enabling defines both units.
+        checks.home-manager-module =
+          let
+            lib = pkgs.lib;
+            hm =
+              extra:
+              home-manager.lib.homeManagerConfiguration {
+                inherit pkgs;
+                modules = [
+                  self.homeManagerModules.default
+                  {
+                    home.username = "tester";
+                    home.homeDirectory = "/home/tester";
+                    home.stateVersion = "24.11";
+                  }
+                  extra
+                ];
+              };
+            baseline = hm { };
+            disabled = hm { services.cerbo.daemon.enable = false; };
+            enabled = hm {
+              services.cerbo.daemon = {
+                enable = true;
+                vaults.Notes.agent = "approve";
+              };
+            };
+            units = c: c.config.systemd.user;
+            hasUnit = c: lib.hasAttrByPath [ "services" "cerboid" ] (units c) || lib.hasAttrByPath [ "sockets" "cerboid" ] (units c);
+            svc = (units enabled).services.cerboid;
+            sock = (units enabled).sockets.cerboid;
+            asserts = [
+              [ "disabled by default adds no unit" (!(hasUnit baseline)) ]
+              [ "disabled by default adds no package" (baseline.config.home.packages == (hm { }).config.home.packages) ]
+              [ "enable=false equals the default" (builtins.length disabled.config.home.packages == builtins.length baseline.config.home.packages) ]
+              [ "service restarts on failure" (svc.Service.Restart == "on-failure") ]
+              [ "service runs cerboid" (lib.all (e: lib.hasSuffix "/bin/cerboid" e) (lib.toList svc.Service.ExecStart)) ]
+              [ "service waits for the socket" (builtins.elem "cerboid.socket" svc.Unit.Requires) ]
+              [ "service applies vault levels" (svc.Service.ExecStartPre != [ ]) ]
+              [ "socket is owner only" (sock.Socket.SocketMode == "0600" && sock.Socket.DirectoryMode == "0700") ]
+              [ "socket path is under the runtime dir" (sock.Socket.ListenStream == "%t/cerbo/cerboid.sock") ]
+              [ "enabling installs daemon and CLI" (builtins.length enabled.config.home.packages == builtins.length baseline.config.home.packages + 2) ]
+            ];
+            failed = map (a: builtins.elemAt a 0) (lib.filter (a: !(builtins.elemAt a 1)) asserts);
+          in
+          assert lib.assertMsg (failed == [ ]) "home-manager module checks failed: ${lib.concatStringsSep ", " failed}";
+          pkgs.runCommand "home-manager-module-check" { } ''
+            touch $out
+          '';
 
         apps.screenshot = {
           type = "app";
