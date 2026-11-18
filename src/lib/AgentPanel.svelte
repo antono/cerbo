@@ -1,23 +1,84 @@
 <script lang="ts">
   /**
-   * The Agent sub-panel. A placeholder in `add-right-panel-tabs`: it shows the
-   * connection status and nothing else; `add-agent-panel` fills it in.
+   * The Agent sub-panel (change `add-agent-panel`, spec `desktop-agent-panel`):
+   * a chat with an agent working in the open vault. The state lives in
+   * `agentStore` (started by the layout, so the tab mark works while this panel
+   * is hidden); this component only arranges the parts.
    */
-  import { app } from './stores.svelte';
-  import { AGENT_STATUS_LABELS } from './right-panels';
+  import { untrack } from 'svelte';
+  import { agentStore as store } from './agent/store.svelte';
+  import AgentComposer from './agent/AgentComposer.svelte';
+  import AgentFeed from './agent/AgentFeed.svelte';
+  import AgentHeader from './agent/AgentHeader.svelte';
+  import EmptyState from './agent/EmptyState.svelte';
+  import PermissionControl from './agent/PermissionControl.svelte';
+  import SessionsList from './agent/SessionsList.svelte';
 
   let { visible = true }: { visible?: boolean } = $props();
+
+  let sessionsOpen = $state(false);
+
+  // Look again whenever the tab is opened: an agent may have been installed.
+  $effect(() => {
+    if (visible && store.connection.state === 'connected') untrack(() => void store.refreshAgents());
+  });
+
+  let info = $derived(store.activeInfo);
+  let warning = $derived(info && (info.sandboxed === false || info.warning) ? (info.warning ?? 'The agent runs without a sandbox.') : null);
+
+  async function openSession(id: string) {
+    sessionsOpen = false;
+    await store.openSession(id);
+  }
 </script>
 
-<div class="agent-panel" data-testid="agent-panel" data-visible={visible}>
-  <div class="panel-content">
-    <h3 class="panel-title">Agent</h3>
-    <p class="status" data-status={app.agentStatus} role="status">
-      <span class="dot" aria-hidden="true"></span>
-      {AGENT_STATUS_LABELS[app.agentStatus]}
-    </p>
-    <p class="empty">The agent chat is not available yet.</p>
-  </div>
+<div class="agent-panel" data-testid="agent-panel" data-visible={visible} data-view={store.panelView}>
+  <AgentHeader
+    agents={store.agents}
+    selected={store.agent}
+    connection={store.connection.state}
+    {sessionsOpen}
+    onPick={(kind) => store.chooseAgent(kind)}
+    onNew={() => store.newSession()}
+    onToggleSessions={() => (sessionsOpen = !sessionsOpen)}
+  />
+
+  {#if sessionsOpen}
+    <SessionsList
+      sessions={store.sessions}
+      activeId={store.activeId}
+      onOpen={openSession}
+      onDelete={(id) => store.deleteSession(id)}
+    />
+  {/if}
+
+  {#if store.panelView === 'ready'}
+    <PermissionControl value={store.permission} onChange={(level) => store.setPermission(level)} />
+    {#if warning}
+      <p class="warning" data-testid="agent-sandbox-warning" role="alert">{warning}</p>
+    {/if}
+    <AgentFeed items={store.view.items} loading={store.loadingEvents || store.busy} onAnswer={(id, ok) => store.answerApproval(id, ok)} />
+    {#if store.error}
+      <p class="error" data-testid="agent-error" role="alert">{store.error}</p>
+    {/if}
+    <AgentComposer
+      working={store.working}
+      onSend={(text, context) => store.send(text, context)}
+      onCancel={() => store.cancel()}
+    />
+  {:else}
+    <EmptyState
+      view={store.panelView}
+      message={store.connection.message}
+      agents={store.agents ?? []}
+      selected={store.agent}
+      onRetry={() => store.retry()}
+      onRecheck={() => store.refreshAgents()}
+    />
+    {#if store.error && store.panelView !== 'daemon_unavailable'}
+      <p class="error" data-testid="agent-error" role="alert">{store.error}</p>
+    {/if}
+  {/if}
 </div>
 
 <style>
@@ -28,49 +89,22 @@
     overflow: hidden;
   }
 
-  .panel-content {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 1rem;
-  }
-
-  .panel-title {
-    margin: 0 0 0.5rem;
-    font-size: 0.7rem;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--muted-foreground);
-  }
-
-  .status {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin: 0 0 0.5rem;
-    font-size: 0.8125rem;
-    color: var(--fg);
-  }
-
-  .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    border: 1.5px solid var(--muted-foreground);
-    background: transparent;
+  .warning,
+  .error {
+    margin: 0;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.75rem;
     flex-shrink: 0;
   }
 
-  .status[data-status='connected'] .dot {
-    background: var(--primary);
-    border-color: var(--primary);
+  .warning {
+    background: rgb(245 158 11 / 0.15);
+    border-bottom: 1px solid #f59e0b;
+    color: var(--fg);
   }
 
-  .empty {
-    margin: 0;
-    color: var(--muted-foreground);
-    font-size: 0.8125rem;
-    font-style: italic;
+  .error {
+    color: #ef4444;
+    overflow-wrap: anywhere;
   }
 </style>
