@@ -31,6 +31,19 @@ impl DaemonPaths {
         }
     }
 
+    /// Whether a daemon of this user is alive: someone holds the
+    /// single-instance lock. Unlike a socket connection this stays true while
+    /// the daemon starts, stops or is busy, so a client can tell "no daemon"
+    /// from "a daemon that does not answer right now". Never creates the
+    /// lock file and never keeps the lock.
+    #[cfg(unix)]
+    pub fn daemon_alive(&self) -> bool {
+        let Ok(file) = std::fs::OpenOptions::new().read(true).write(true).open(&self.lock) else {
+            return false;
+        };
+        matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+    }
+
     /// Create the directory with mode 0700, or tighten an existing one to it.
     #[cfg(unix)]
     pub fn prepare_dir(&self) -> Result<(), String> {
@@ -59,6 +72,22 @@ mod tests {
         std::fs::set_permissions(&paths.dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         paths.prepare_dir().unwrap();
         assert_eq!(mode(&paths.dir), 0o700);
+    }
+
+    #[test]
+    fn a_held_lock_means_a_daemon_is_alive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = DaemonPaths::in_dir(tmp.path().join("cerbo"));
+        assert!(!paths.daemon_alive(), "no directory, no daemon");
+        paths.prepare_dir().unwrap();
+        assert!(!paths.daemon_alive(), "no lock file, no daemon");
+
+        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&paths.lock).unwrap();
+        assert!(!paths.daemon_alive(), "a free lock is no daemon");
+        file.try_lock().unwrap();
+        assert!(paths.daemon_alive());
+        drop(file);
+        assert!(!paths.daemon_alive(), "released with the daemon");
     }
 
     #[test]

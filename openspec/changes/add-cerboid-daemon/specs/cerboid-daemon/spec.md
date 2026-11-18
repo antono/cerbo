@@ -72,7 +72,7 @@ While running, the daemon SHALL hold the same lock a running desktop app holds, 
 
 ### Requirement: Version match
 
-A client SHALL check the daemon's protocol version when it connects. On a mismatch it SHALL tell the user to restart the daemon and SHALL NOT send requests.
+A client SHALL check the daemon's protocol version when it connects. On a mismatch it SHALL tell the user to restart the daemon and SHALL NOT send requests. A `cerbo` command SHALL work on the vault files directly only when no daemon runs; with a daemon that runs but speaks another version or does not answer, it SHALL fail with a clear message instead.
 
 #### Scenario: Old daemon after upgrade
 - **WHEN** the app is upgraded while an older daemon still runs

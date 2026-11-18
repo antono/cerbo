@@ -4,7 +4,8 @@
 //! desktop app wraps the same protocol in its own async client.
 
 use super::{
-    check_protocol, Call, ClientHello, ClientKind, Event, Hello, Request, RpcError, ServerMessage, PROTOCOL_VERSION,
+    check_protocol, Call, ClientHello, ClientKind, Event, Hello, Request, RpcError, ServerMessage, CODE_CLIENT_TIMEOUT,
+    PROTOCOL_VERSION,
 };
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
@@ -13,8 +14,13 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-/// How long [`Client::call`] waits for an answer before giving up.
+/// How long [`Client::call`] waits for an answer before giving up. A call
+/// that may wait for a person (an agent write at `approve`) uses
+/// [`Client::call_with_timeout`] with the approval deadline instead.
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// What [`Client::read_message`] reports when its time ran out.
+const TIMED_OUT: &str = "the daemon did not answer in time";
 
 /// Why a connection could not be made.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,7 +30,10 @@ pub enum ConnectError {
     /// The daemon runs another protocol version; restart it. Nothing but the
     /// handshake was sent.
     VersionMismatch(RpcError),
-    /// The daemon refused or garbled the handshake.
+    /// The daemon refused the connection, for example an agent's vault is not
+    /// one it serves.
+    Rejected(RpcError),
+    /// The daemon garbled the handshake.
     Refused(String),
 }
 
@@ -32,7 +41,7 @@ impl std::fmt::Display for ConnectError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConnectError::Unavailable(m) | ConnectError::Refused(m) => write!(f, "{m}"),
-            ConnectError::VersionMismatch(e) => write!(f, "{e}"),
+            ConnectError::VersionMismatch(e) | ConnectError::Rejected(e) => write!(f, "{e}"),
         }
     }
 }
@@ -56,13 +65,26 @@ pub struct Client {
     responses: HashMap<u64, Result<Value, RpcError>>,
     partial: String,
     welcome: Welcome,
+    /// How long the current wait for an answer lasts.
+    call_timeout: Duration,
 }
 
 impl Client {
     /// Connect to the socket and complete the handshake. On a protocol
     /// mismatch no request is ever sent.
     pub fn connect(socket: &Path, kind: ClientKind, name: Option<&str>) -> Result<Self, ConnectError> {
-        Self::connect_with_protocol(socket, kind, name, PROTOCOL_VERSION)
+        Self::connect_full(socket, kind, name, None, PROTOCOL_VERSION)
+    }
+
+    /// [`Self::connect`] for a connection bound to one vault, as an agent's
+    /// must be: the daemon then refuses any call about another vault.
+    pub fn connect_bound(
+        socket: &Path,
+        kind: ClientKind,
+        name: Option<&str>,
+        vault: &str,
+    ) -> Result<Self, ConnectError> {
+        Self::connect_full(socket, kind, name, Some(vault), PROTOCOL_VERSION)
     }
 
     /// [`Self::connect`] announcing `protocol` instead of the built-in one.
@@ -71,6 +93,16 @@ impl Client {
         socket: &Path,
         kind: ClientKind,
         name: Option<&str>,
+        protocol: u32,
+    ) -> Result<Self, ConnectError> {
+        Self::connect_full(socket, kind, name, None, protocol)
+    }
+
+    pub(super) fn connect_full(
+        socket: &Path,
+        kind: ClientKind,
+        name: Option<&str>,
+        vault: Option<&str>,
         protocol: u32,
     ) -> Result<Self, ConnectError> {
         let stream = UnixStream::connect(socket)
@@ -85,9 +117,17 @@ impl Client {
             responses: HashMap::new(),
             partial: String::new(),
             welcome: Welcome { protocol: 0, daemon_version: String::new(), pid: 0 },
+            call_timeout: CALL_TIMEOUT,
         };
 
-        let hello = ClientHello { hello: Hello { protocol, client: kind, name: name.map(str::to_string) } };
+        let hello = ClientHello {
+            hello: Hello {
+                protocol,
+                client: kind,
+                name: name.map(str::to_string),
+                vault: vault.map(str::to_string),
+            },
+        };
         client.send_line(&hello).map_err(|e| ConnectError::Unavailable(format!("handshake: {e}")))?;
 
         match client.read_message(None).map_err(ConnectError::Refused)? {
@@ -101,7 +141,7 @@ impl Client {
             Some(ServerMessage::Error { error }) if error.code == super::CODE_PROTOCOL_MISMATCH => {
                 Err(ConnectError::VersionMismatch(error))
             }
-            Some(ServerMessage::Error { error }) => Err(ConnectError::Refused(error.message)),
+            Some(ServerMessage::Error { error }) => Err(ConnectError::Rejected(error)),
             Some(other) => Err(ConnectError::Refused(format!("unexpected answer to the handshake: {other:?}"))),
             None => Err(ConnectError::Refused("the daemon closed the connection".to_string())),
         }
@@ -115,8 +155,19 @@ impl Client {
     /// Send `call` and wait for its answer. Events that arrive meanwhile are
     /// kept for [`Self::next_event`].
     pub fn call(&mut self, call: Call) -> Result<Value, RpcError> {
+        self.call_with_timeout(call, CALL_TIMEOUT)
+    }
+
+    /// [`Self::call`] waiting up to `timeout` for the answer. On a timeout the
+    /// error has code [`CODE_CLIENT_TIMEOUT`]; the request may still be
+    /// pending in the daemon, so the caller should drop this connection (the
+    /// daemon then rejects what the connection left pending).
+    pub fn call_with_timeout(&mut self, call: Call, timeout: Duration) -> Result<Value, RpcError> {
         let id = self.send(call)?;
-        self.wait(id)
+        self.call_timeout = timeout;
+        let answer = self.wait(id);
+        self.call_timeout = CALL_TIMEOUT;
+        answer
     }
 
     /// Send `call` without waiting; collect the answer with [`Self::wait`].
@@ -134,9 +185,11 @@ impl Client {
             if let Some(answer) = self.responses.remove(&id) {
                 return answer;
             }
-            match self.read_message(None).map_err(RpcError::failed)? {
-                Some(message) => self.stash(message),
-                None => return Err(RpcError::failed("the daemon closed the connection")),
+            match self.read_message(None) {
+                Ok(Some(message)) => self.stash(message),
+                Ok(None) => return Err(RpcError::failed("the daemon closed the connection")),
+                Err(e) if e == TIMED_OUT => return Err(RpcError::new(CODE_CLIENT_TIMEOUT, e)),
+                Err(e) => return Err(RpcError::failed(e)),
             }
         }
     }
@@ -181,12 +234,13 @@ impl Client {
         self.writer.flush()
     }
 
-    /// One line from the daemon. `timeout` of `None` uses the call timeout;
+    /// One line from the daemon. `timeout` of `None` uses the current call
+    /// timeout (the total wait is one timeout per line read);
     /// `Ok(None)` is end of stream or, with a timeout, nothing arrived.
     fn read_message(&mut self, timeout: Option<Duration>) -> Result<Option<ServerMessage>, String> {
         self.reader
             .get_ref()
-            .set_read_timeout(Some(timeout.unwrap_or(CALL_TIMEOUT)))
+            .set_read_timeout(Some(timeout.unwrap_or(self.call_timeout)))
             .map_err(|e| e.to_string())?;
         loop {
             match self.reader.read_line(&mut self.partial) {
@@ -199,7 +253,7 @@ impl Client {
                 }
                 Ok(_) => continue,
                 Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                    return if timeout.is_some() { Ok(None) } else { Err("the daemon did not answer in time".into()) };
+                    return if timeout.is_some() { Ok(None) } else { Err(TIMED_OUT.into()) };
                 }
                 Err(e) if e.kind() == ErrorKind::Interrupted => continue,
                 Err(e) => return Err(e.to_string()),

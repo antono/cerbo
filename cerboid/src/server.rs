@@ -12,7 +12,7 @@ use cerbo_core::daemon_paths::DaemonPaths;
 use cerbo_core::agent::{self, AgentPermission, ChangeEntry};
 use cerbo_core::rpc::{
     self, ApprovalOutcome, Call, ClientHello, ClientKind, Event, Hello, Origin, Request, RpcError, ServerMessage,
-    StatusInfo, VaultInfo, PROTOCOL_VERSION,
+    StatusInfo, VaultInfo, MAX_PENDING_PER_AGENT, PROTOCOL_VERSION,
 };
 use cerbo_core::CerboContext;
 use serde_json::{json, Value};
@@ -47,6 +47,9 @@ pub struct Config {
     /// `approval_timeout_secs` of `agents.toml` at each request (default 10
     /// minutes).
     pub approval_timeout: Option<Duration>,
+    /// How many approval requests one agent connection may have waiting;
+    /// more are refused at once. Default [`MAX_PENDING_PER_AGENT`].
+    pub max_pending_per_agent: usize,
 }
 
 impl Config {
@@ -58,6 +61,7 @@ impl Config {
             event_quiet: Duration::from_millis(100),
             embedder: crate::embed::default_factory(),
             approval_timeout: None,
+            max_pending_per_agent: MAX_PENDING_PER_AGENT,
         }
     }
 }
@@ -147,6 +151,7 @@ struct Shared {
     ctx: CerboContext,
     approvals: Arc<Approvals>,
     approval_timeout: Option<Duration>,
+    max_pending_per_agent: usize,
     registry: Registry,
     events: broadcast::Sender<Event>,
     tracker: Arc<WriteTracker>,
@@ -219,6 +224,7 @@ async fn serve(
         ctx: config.ctx.clone(),
         approvals: Arc::new(Approvals::new(events.clone())),
         approval_timeout: config.approval_timeout,
+        max_pending_per_agent: config.max_pending_per_agent,
         registry,
         events,
         tracker,
@@ -311,6 +317,42 @@ impl Writer {
     }
 }
 
+/// What a connection is: who it says it is, the vault an agent is bound to,
+/// and the means to notice that it went away.
+struct Conn {
+    hello: Hello,
+    /// Id of the one vault an agent connection may touch; none for the app
+    /// and the CLI.
+    bound: Option<String>,
+    /// Becomes true when the connection ends.
+    closed: watch::Receiver<bool>,
+    /// Approval requests of this connection that wait for a person.
+    pending: Arc<AtomicUsize>,
+}
+
+/// One of a connection's waiting approval requests; released when dropped.
+struct PendingSlot(Arc<AtomicUsize>);
+
+impl PendingSlot {
+    fn take(count: &Arc<AtomicUsize>, max: usize) -> Option<Self> {
+        if count.fetch_add(1, Ordering::SeqCst) >= max {
+            count.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Self(Arc::clone(count)))
+    }
+}
+
+impl Drop for PendingSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn forbidden(message: impl Into<String>) -> RpcError {
+    RpcError::new(rpc::CODE_FORBIDDEN, message)
+}
+
 async fn connection(shared: Arc<Shared>, stream: UnixStream) {
     let (read_half, write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -335,6 +377,18 @@ async fn connection(shared: Arc<Shared>, stream: UnixStream) {
         },
         _ => return,
     };
+    // An agent is bound to exactly one vault, named in its hello.
+    let bound = if client.client == ClientKind::Agent {
+        match shared.bind_agent(&client) {
+            Ok(id) => Some(id),
+            Err(error) => {
+                writer.send(&ServerMessage::Error { error }).await;
+                return;
+            }
+        }
+    } else {
+        None
+    };
     writer
         .send(&ServerMessage::Welcome {
             protocol: PROTOCOL_VERSION,
@@ -343,6 +397,8 @@ async fn connection(shared: Arc<Shared>, stream: UnixStream) {
         })
         .await;
 
+    let (closed_tx, closed_rx) = watch::channel(false);
+    let conn = Conn { hello: client, bound, closed: closed_rx, pending: Arc::new(AtomicUsize::new(0)) };
     let mut close = shared.close_connections.subscribe();
     let mut subscription: Option<tokio::task::JoinHandle<()>> = None;
 
@@ -379,22 +435,22 @@ async fn connection(shared: Arc<Shared>, stream: UnixStream) {
         let Request { id, call } = request;
         let guard = shared.inflight.enter();
 
+        let refusal = shared.agent_refusal(&conn, &call);
         let outcome: Result<Fut, RpcError> = match call {
-            // An agent never stops the daemon or sees or answers approvals:
-            // the person decides what the agent may do.
-            Call::Stop | Call::ApprovalList { .. } | Call::ApprovalAnswer { .. } | Call::AgentChanges { .. }
-                if client.client == ClientKind::Agent =>
-            {
-                Err(RpcError::new(rpc::CODE_FORBIDDEN, "agent connections cannot make this call"))
+            // An agent never stops the daemon or sees or answers approvals,
+            // and only touches the vault it is bound to: the person decides
+            // what the agent may do.
+            _ if refusal.is_some() => Err(refusal.expect("just checked")),
+            Call::Subscribe { vault } => {
+                subscribe(&shared, &writer, vault, conn.bound.as_deref(), &mut subscription)
             }
-            Call::Subscribe { vault } => subscribe(&shared, &writer, vault, &mut subscription),
             Call::Stop => {
                 // The guard is held until the answer is written, and the stop
                 // waits for every guard, so the answer is delivered first.
                 shared.shutdown.trigger();
                 Ok(ready(Ok(Value::Null)))
             }
-            other => shared.begin(other, &client),
+            other => shared.begin(other, &conn),
         };
         let writer = writer.clone();
         tokio::spawn(async move {
@@ -409,6 +465,9 @@ async fn connection(shared: Arc<Shared>, stream: UnixStream) {
             drop(guard);
         });
     }
+    // Whatever this connection still has waiting for a person is dropped: its
+    // agent can no longer be told the answer, so it must never be applied.
+    closed_tx.send_replace(true);
     if let Some(task) = subscription {
         task.abort();
     }
@@ -420,8 +479,12 @@ fn subscribe(
     shared: &Arc<Shared>,
     writer: &Writer,
     vault: Option<String>,
+    agent_vault: Option<&str>,
     subscription: &mut Option<tokio::task::JoinHandle<()>>,
 ) -> Result<Fut, RpcError> {
+    // An agent hears the page events of its own vault and nothing else.
+    let page_events_only = agent_vault.is_some();
+    let vault = agent_vault.map(str::to_string).or(vault);
     let wanted = match vault {
         Some(selector) => Some(
             shared
@@ -448,7 +511,7 @@ fn subscribe(
                         let wanted_here = match (&wanted, event.vault()) {
                             (Some(wanted), Some(vault)) => wanted == vault,
                             _ => true,
-                        };
+                        } && (!page_events_only || matches!(event, Event::PageChanged { .. }));
                         if wanted_here {
                             writer.send(&ServerMessage::Event { event }).await;
                         }
@@ -469,11 +532,17 @@ impl Shared {
     /// Start `call`. Writes are put on their vault's queue before this
     /// returns, so requests from one connection are applied in the order they
     /// arrived.
-    fn begin(self: &Arc<Self>, call: Call, client: &Hello) -> Result<Fut, RpcError> {
+    fn begin(self: &Arc<Self>, call: Call, conn: &Conn) -> Result<Fut, RpcError> {
         match call {
             Call::Ping => Ok(ready(Ok(json!("pong")))),
             Call::Status => Ok(ready(self.status())),
-            Call::Vaults => Ok(ready(serde_json::to_value(self.vault_infos()).map_err(|e| RpcError::failed(e.to_string())))),
+            Call::Vaults => {
+                let mut vaults = self.vault_infos();
+                if let Some(bound) = &conn.bound {
+                    vaults.retain(|v| &v.id == bound);
+                }
+                Ok(ready(serde_json::to_value(vaults).map_err(|e| RpcError::failed(e.to_string()))))
+            }
             Call::Stop | Call::Subscribe { .. } => unreachable!("handled by the connection"),
             Call::ApprovalList { vault } => {
                 let id = match vault {
@@ -492,7 +561,10 @@ impl Shared {
                 match &call {
                     Call::Permission { .. } => {
                         let level = agent::get_permission(&self.ctx, &vault.info.id);
-                        return Ok(ready(Ok(json!({ "permission": level.as_str() }))));
+                        let wait = self.approval_timeout.unwrap_or_else(|| agent::approval_timeout(&self.ctx));
+                        return Ok(ready(Ok(
+                            json!({ "permission": level.as_str(), "approval_timeout_secs": wait.as_secs() }),
+                        )));
                     }
                     Call::AgentChanges { limit, .. } => {
                         let changes = agent::read_changes(&self.ctx, &vault.info.id, *limit).map_err(RpcError::failed)?;
@@ -500,8 +572,36 @@ impl Shared {
                     }
                     _ => {}
                 }
-                if call.is_write() { self.begin_write(vault, call, client) } else { Ok(self.begin_read(vault, call)) }
+                if call.is_write() { self.begin_write(vault, call, conn) } else { Ok(self.begin_read(vault, call)) }
             }
+        }
+    }
+
+    /// The vault an agent's hello binds it to: its id.
+    fn bind_agent(&self, hello: &Hello) -> Result<String, RpcError> {
+        let selector = hello.vault.as_deref().filter(|v| !v.is_empty()).ok_or_else(|| {
+            RpcError::new(rpc::CODE_BAD_REQUEST, "an agent connection must name the vault it works in, in its hello")
+        })?;
+        Ok(self.resolve(selector)?.info.id.clone())
+    }
+
+    /// Why an agent connection may not make `call`, if it may not.
+    fn agent_refusal(&self, conn: &Conn, call: &Call) -> Option<RpcError> {
+        let bound = conn.bound.as_deref()?;
+        if matches!(
+            call,
+            Call::Stop | Call::Status | Call::ApprovalList { .. } | Call::ApprovalAnswer { .. } | Call::AgentChanges { .. }
+        ) {
+            return Some(forbidden("agent connections cannot make this call"));
+        }
+        let named = match call {
+            Call::Subscribe { vault } => vault.as_deref(),
+            other => other.vault(),
+        };
+        let named = named?;
+        match self.registry.resolve(named) {
+            Some(vault) if vault.info.id == bound => None,
+            _ => Some(forbidden("this agent connection is bound to another vault and cannot use this one")),
         }
     }
 
@@ -536,18 +636,38 @@ impl Shared {
     /// A write. App and CLI connections go straight to the vault's queue; an
     /// agent's is judged by the vault's permission (design D6), read afresh so
     /// a change applies to connected agents at once.
-    fn begin_write(self: &Arc<Self>, vault: Arc<VaultHandle>, call: Call, client: &Hello) -> Result<Fut, RpcError> {
+    fn begin_write(self: &Arc<Self>, vault: Arc<VaultHandle>, call: Call, conn: &Conn) -> Result<Fut, RpcError> {
+        let client = &conn.hello;
         if self.shutdown.is_triggered() {
             return Err(RpcError::new(rpc::CODE_SHUTTING_DOWN, "the daemon is stopping and takes no more writes"));
         }
         if client.client != ClientKind::Agent {
-            return self.queue_write(vault, call, client.client.into(), None);
+            return self.queue_write(vault, call, client.client.into(), None, None);
         }
         let agent_name = client.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| "agent".to_string());
         match agent::get_permission(&self.ctx, &vault.info.id) {
             AgentPermission::Read => Err(read_only(&vault)),
-            AgentPermission::Auto => self.queue_write(vault, call, Origin::Agent, Some(AgentLog::new(agent_name, false))),
+            AgentPermission::Auto => {
+                self.queue_write(vault, call, Origin::Agent, Some(AgentLog::new(agent_name, false)), None)
+            }
             AgentPermission::Approve => {
+                let slot = PendingSlot::take(&conn.pending, self.max_pending_per_agent).ok_or_else(|| {
+                    RpcError::new(
+                        rpc::CODE_TOO_MANY_PENDING,
+                        format!(
+                            "this connection already has {} changes waiting for approval, the most it may have; \
+                             wait until some are answered",
+                            self.max_pending_per_agent
+                        ),
+                    )
+                })?;
+                // What the page was when the agent asked: the approved edit
+                // replaces the whole page, so it must not land on another text.
+                let base = match &call {
+                    Call::PageEdit { page, .. } => ops::page_fingerprint(&vault, page),
+                    _ => None,
+                };
+                let mut closed = conn.closed.clone();
                 let preview = ops::preview(&vault, &call);
                 let timeout =
                     self.approval_timeout.unwrap_or_else(|| agent::approval_timeout(&self.ctx));
@@ -565,13 +685,27 @@ impl Shared {
                 );
                 let this = Arc::clone(self);
                 Ok(Box::pin(async move {
-                    match this.approvals.wait(id, rx, timeout).await {
+                    let _slot = slot;
+                    // The agent hanging up ends the request: nobody can be
+                    // told the answer, so it is never applied.
+                    let outcome = tokio::select! {
+                        outcome = this.approvals.wait(id, rx, timeout) => outcome,
+                        () = wait_closing(&mut closed) => {
+                            this.approvals.cancel(id);
+                            ApprovalOutcome::Cancelled
+                        }
+                    };
+                    match outcome {
                         ApprovalOutcome::Approved => {
+                            let gone = *closed.borrow();
+                            if gone {
+                                return Err(RpcError::new(rpc::CODE_SHUTTING_DOWN, "the agent went away before the change was applied"));
+                            }
                             // The user may have tightened the vault while this waited.
                             if !agent::get_permission(&this.ctx, &vault.info.id).can_write() {
                                 return Err(read_only(&vault));
                             }
-                            match this.queue_write(vault, call, Origin::Agent, Some(AgentLog::new(agent_name, true))) {
+                            match this.queue_write(vault, call, Origin::Agent, Some(AgentLog::new(agent_name, true)), base) {
                                 Ok(done) => done.await,
                                 Err(e) => Err(e),
                             }
@@ -583,9 +717,10 @@ impl Shared {
                             rpc::CODE_TIMED_OUT,
                             "nobody answered the approval request in time, so it counts as rejected; the vault is unchanged",
                         )),
-                        ApprovalOutcome::Cancelled => {
-                            Err(RpcError::new(rpc::CODE_SHUTTING_DOWN, "the daemon stopped before the change was approved"))
-                        }
+                        ApprovalOutcome::Cancelled => Err(RpcError::new(
+                            rpc::CODE_SHUTTING_DOWN,
+                            "the change was cancelled before it was approved (the daemon stopped or the agent went away); the vault is unchanged",
+                        )),
                     }
                 }))
             }
@@ -600,6 +735,7 @@ impl Shared {
         call: Call,
         origin: Origin,
         log: Option<AgentLog>,
+        base: Option<u64>,
     ) -> Result<Fut, RpcError> {
         let tracker = Arc::clone(&self.tracker);
         let ctx = self.ctx.clone();
@@ -611,7 +747,7 @@ impl Shared {
             if let Some(page) = target_page(&call) {
                 tracker.note(&id, &page, origin);
             }
-            let Written { page, result } = write(&job_vault, call);
+            let Written { page, result } = write(&job_vault, call, base);
             if let Some(page) = &page {
                 tracker.note(&id, page, origin);
                 if let Some(log) = &log {
@@ -699,10 +835,10 @@ fn read(vault: &VaultHandle, embed: &EmbedWorker, call: Call) -> OpResult {
     }
 }
 
-fn write(vault: &VaultHandle, call: Call) -> Written {
+fn write(vault: &VaultHandle, call: Call, base: Option<u64>) -> Written {
     match call {
         Call::PageCreate { title, content, path, .. } => ops::page_create(vault, title, content, path),
-        Call::PageEdit { page, content, .. } => ops::page_edit(vault, &page, content),
+        Call::PageEdit { page, content, .. } => ops::page_edit_if(vault, &page, content, base),
         Call::PageRename { page, title, .. } => ops::page_rename(vault, &page, title),
         Call::PageMove { page, path, .. } => ops::page_move(vault, &page, path),
         Call::PageTrash { page, .. } => ops::page_trash(vault, &page),

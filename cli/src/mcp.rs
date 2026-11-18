@@ -8,7 +8,7 @@
 use cerbo_core::agent::AgentPermission;
 use cerbo_core::daemon_paths::DaemonPaths;
 use cerbo_core::rpc::client::Client;
-use cerbo_core::rpc::{launch, Call, ClientKind, RpcError, CODE_UNKNOWN_VAULT};
+use cerbo_core::rpc::{launch, Call, ClientKind, RpcError, CODE_CLIENT_TIMEOUT, CODE_UNKNOWN_VAULT};
 use cerbo_core::CerboContext;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
@@ -25,6 +25,22 @@ use std::time::Duration;
 
 /// The tools that change the vault. Not listed at `read`.
 const WRITE_TOOLS: [&str; 6] = ["create_page", "edit_page", "rename_page", "move_page", "delete_page", "link_pages"];
+
+/// What a write that waits for approval gets on top of the approval time
+/// limit before the shim gives up on the daemon's answer: the write queue may
+/// hold it up a little after the approval.
+const APPROVAL_MARGIN: Duration = Duration::from_secs(60);
+
+/// The approval time limit assumed when the daemon does not say (its default).
+const DEFAULT_APPROVAL_SECS: u64 = 600;
+
+/// How long a write waits for the daemon's answer, given the approval time
+/// limit the daemon reported: the limit and a margin, so an approval answered
+/// late is still seen by the agent, never reported as a failure while it
+/// applies afterwards.
+fn write_wait(approval_secs: Option<u64>) -> Duration {
+    Duration::from_secs(approval_secs.unwrap_or(DEFAULT_APPROVAL_SECS)) + APPROVAL_MARGIN
+}
 
 /// How often the shim checks whether the vault's permission changed.
 const PERMISSION_POLL: Duration = Duration::from_secs(1);
@@ -49,8 +65,8 @@ impl Link {
             return Ok(client);
         }
         let name = self.name.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        launch::connect_or_start(&self.paths, ClientKind::Agent, name.as_deref().or(Some("cerbo mcp")))
-            .map_err(RpcError::failed)
+        // The connection is bound to this shim's one vault.
+        launch::connect_or_start(&self.paths, ClientKind::Agent, name.as_deref().or(Some("cerbo mcp")), Some(&self.vault))
     }
 
     fn give_back(&self, client: Client) {
@@ -63,11 +79,31 @@ impl Link {
     fn run(&self, call: Call) -> Result<Value, RpcError> {
         let retry = !call.is_write();
         let mut client = self.take()?;
-        match client.call(call.clone()) {
+        let result = if call.is_write() {
+            // A write may wait for a person: wait for the answer at least
+            // until the approval deadline, not for the short read limit.
+            let secs = client
+                .call(Call::Permission { vault: self.vault.clone() })
+                .ok()
+                .and_then(|v| v["approval_timeout_secs"].as_u64());
+            client.call_with_timeout(call.clone(), write_wait(secs))
+        } else {
+            client.call(call.clone())
+        };
+        match result {
             Ok(value) => {
                 self.give_back(client);
                 Ok(value)
             }
+            // No answer in time. The connection is dropped, not reused: when
+            // the request still waits for approval, closing the connection
+            // makes the daemon cancel it, so it never applies after the agent
+            // was told it failed.
+            Err(e) if e.code == CODE_CLIENT_TIMEOUT => Err(RpcError::new(
+                CODE_CLIENT_TIMEOUT,
+                "the daemon did not answer in time; a change still waiting for approval was cancelled and not applied, \
+                 but check the page before trying again",
+            )),
             Err(e) if client.call(Call::Ping).is_ok() => {
                 self.give_back(client);
                 Err(e)
@@ -375,4 +411,18 @@ pub async fn run(ctx: &CerboContext, vault: String, name: Option<String>) -> Res
     let service = VaultServer::new(link).serve(stdio()).await.map_err(|e| format!("cannot start the MCP server: {e}"))?;
     service.waiting().await.map_err(|e| format!("the MCP server stopped: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_write_waits_past_the_approval_deadline() {
+        // The plain call limit is 60 s; an approval may take 10 minutes.
+        assert!(write_wait(None) > Duration::from_secs(DEFAULT_APPROVAL_SECS));
+        assert_eq!(write_wait(Some(137)), Duration::from_secs(137) + APPROVAL_MARGIN);
+        assert!(write_wait(Some(1)) > Duration::from_secs(1));
+        assert!(write_wait(Some(3600)) >= Duration::from_secs(3600 + 1));
+    }
 }

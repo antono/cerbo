@@ -48,6 +48,12 @@ type Stamp = [Option<(SystemTime, u64)>; 2];
 struct Inner {
     vaults: Vec<Arc<VaultHandle>>,
     stamp: Stamp,
+    /// A listed vault could not be opened last time (its disk is not
+    /// mounted yet, say): read the list again at the next check even though
+    /// its files did not change.
+    retry: bool,
+    /// Vaults already reported as not served, so a retry does not repeat it.
+    reported: Vec<(String, PathBuf)>,
 }
 
 pub struct Registry {
@@ -59,7 +65,7 @@ pub struct Registry {
 impl Registry {
     /// Load the vault list and start serving it.
     pub fn new(ctx: CerboContext, watch: WatchSettings) -> Result<Self, String> {
-        let registry = Self { ctx, watch, inner: Mutex::new(Inner { vaults: Vec::new(), stamp: [None, None] }) };
+        let registry = Self { ctx, watch, inner: Mutex::new(Inner { vaults: Vec::new(), stamp: [None, None], retry: false, reported: Vec::new() }) };
         registry.refresh()?;
         Ok(registry)
     }
@@ -68,7 +74,7 @@ impl Registry {
     pub fn refresh(&self) -> Result<bool, String> {
         let stamp = self.stamp();
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if stamp == inner.stamp && !inner.vaults.is_empty() {
+        if stamp == inner.stamp && !inner.retry && !inner.vaults.is_empty() {
             return Ok(false);
         }
         let listed = cerbo_core::vault::vault_list(&self.ctx)?.vaults;
@@ -76,15 +82,25 @@ impl Registry {
 
         let mut next: Vec<Arc<VaultHandle>> = Vec::new();
         let mut changed = false;
+        let mut skipped = false;
         for vault in &listed {
             let kept = inner.vaults.iter().find(|h| h.info.id == vault.id && h.root == vault.path);
             match kept {
                 Some(handle) => next.push(Arc::clone(handle)),
                 None => {
-                    // Skip a vault whose directory is gone; it comes back
-                    // when the list is read again after it reappears.
+                    // Skip a vault whose directory is gone, and look again at
+                    // every check until it reappears (an unmounted disk).
                     if !vault.path.join(".cerbo").is_dir() {
-                        eprintln!("cerboid: not serving vault {}: {} is not a vault", vault.name, vault.path.display());
+                        skipped = true;
+                        let key = (vault.id.clone(), vault.path.clone());
+                        if !inner.reported.contains(&key) {
+                            eprintln!(
+                                "cerboid: not serving vault {}: {} is not a vault; will look again",
+                                vault.name,
+                                vault.path.display()
+                            );
+                            inner.reported.push(key);
+                        }
                         continue;
                     }
                     next.push(Arc::new(self.open(vault)));
@@ -98,6 +114,10 @@ impl Registry {
         // Dropped handles stop their watcher; a queue keeps draining what it
         // already took because its worker owns the receiver.
         inner.vaults = next;
+        inner.retry = skipped;
+        if !skipped {
+            inner.reported.clear();
+        }
         // Told here, not by the caller: a lookup of a vault added a moment ago
         // also runs this, and would otherwise swallow the change.
         if changed {

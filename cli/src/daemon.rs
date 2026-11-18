@@ -24,19 +24,37 @@ fn skip_daemon() -> bool {
     std::env::var_os(NO_DAEMON_ENV).is_some_and(|v| !v.is_empty())
 }
 
-/// A connection to the running daemon; none when no daemon answers. A daemon
-/// of another protocol version is reported on stderr and treated as absent, so
-/// the command still works on the files.
-fn connect(ctx: &CerboContext) -> Option<Client> {
+/// How long a command waits for a daemon that runs (it holds the lock) but
+/// does not take connections yet or any more, such as one that is starting
+/// or stopping, before it gives up.
+const BUSY_WAIT: Duration = Duration::from_secs(3);
+
+/// A connection to the running daemon; `Ok(None)` only when no daemon runs
+/// (nobody holds its lock), so the command may work on the files. A daemon
+/// that runs but speaks another protocol version, or does not answer, is an
+/// error: writing the files behind its back would break its write queue.
+fn connect(ctx: &CerboContext) -> Result<Option<Client>, String> {
     if skip_daemon() {
-        return None;
+        return Ok(None);
     }
-    match Client::connect(&paths(ctx).socket, ClientKind::Cli, Some("cerbo")) {
-        Ok(client) => Some(client),
-        Err(ConnectError::Unavailable(_)) => None,
-        Err(e) => {
-            eprintln!("Warning: not using the daemon: {e}");
-            None
+    let paths = paths(ctx);
+    let deadline = Instant::now() + BUSY_WAIT;
+    loop {
+        match Client::connect(&paths.socket, ClientKind::Cli, Some("cerbo")) {
+            Ok(client) => return Ok(Some(client)),
+            Err(ConnectError::Unavailable(why)) => {
+                if !paths.daemon_alive() {
+                    return Ok(None);
+                }
+                if Instant::now() >= deadline {
+                    return Err(format!(
+                        "the daemon is running but does not answer ({why}); try again, or restart it with \
+                         `cerbo daemon stop` and `cerbo daemon start` (CERBO_NO_DAEMON=1 skips it)"
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("cannot use the running daemon: {e}")),
         }
     }
 }
@@ -45,13 +63,17 @@ fn connect(ctx: &CerboContext) -> Option<Client> {
 ///
 /// `None` means "do it yourself": no daemon runs, or it does not serve this
 /// vault (not registered). `Some(Err)` is the daemon's own answer, a failure of
-/// the operation.
+/// the operation, or the reason the daemon that runs cannot be used (another
+/// protocol version, not answering): never a fallback to the files.
 pub fn vault_call(
     ctx: &CerboContext,
     vault_root: &Path,
     build: impl FnOnce(String) -> Call,
 ) -> Option<Result<Value, String>> {
-    let mut client = connect(ctx)?;
+    let mut client = match connect(ctx) {
+        Ok(client) => client?,
+        Err(message) => return Some(Err(message)),
+    };
     let selector = std::fs::canonicalize(vault_root).unwrap_or_else(|_| vault_root.to_path_buf());
     match client.call(build(selector.to_string_lossy().into_owned())) {
         Ok(value) => Some(Ok(value)),
@@ -74,7 +96,10 @@ pub fn start(ctx: &CerboContext, json: bool) -> Result<(), String> {
     let paths = paths(ctx);
     let (client, started) = match running(ctx)? {
         Some(client) => (client, false),
-        None => (rpc::launch::start_daemon(&paths, ClientKind::Cli, Some("cerbo"))?, true),
+        None => (
+            rpc::launch::start_daemon(&paths, ClientKind::Cli, Some("cerbo"), None).map_err(|e| e.message)?,
+            true,
+        ),
     };
     let pid = client.welcome().pid;
     if json {

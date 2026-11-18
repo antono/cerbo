@@ -258,12 +258,45 @@ pub fn page_create(vault: &VaultHandle, title: String, content: Option<String>, 
     }
 }
 
+/// A fingerprint of a page's text, to notice that it changed.
+fn fingerprint(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The fingerprint of page `id` as it is now; none when it cannot be read.
+pub fn page_fingerprint(vault: &VaultHandle, id: &str) -> Option<u64> {
+    let id = page_id(id).ok()?;
+    object::object_read(&vault.page_ctx, &id).ok().map(|text| fingerprint(&text))
+}
+
 pub fn page_edit(vault: &VaultHandle, id: &str, content: String) -> Written {
+    page_edit_if(vault, id, content, None)
+}
+
+/// Replace a page's text. With `base`, the fingerprint of the text the new
+/// text was written against, the edit is refused with a conflict when the page
+/// is not that text any more: a person's edit is never silently overwritten.
+pub fn page_edit_if(vault: &VaultHandle, id: &str, content: String, base: Option<u64>) -> Written {
     let _gate = vault.index_guard();
     let id = match existing(vault, id) {
         Ok(id) => id,
         Err(e) => return refused(e),
     };
+    if let Some(base) = base {
+        let now = object::object_read(&vault.page_ctx, &id).ok().map(|text| fingerprint(&text));
+        if now != Some(base) {
+            return refused(RpcError::new(
+                cerbo_core::rpc::CODE_CONFLICT,
+                format!(
+                    "the page {id} changed after this edit was requested, so it was not applied and the page is \
+                     unchanged; read the page again and make the edit again"
+                ),
+            ));
+        }
+    }
     match cerbo_core::page::page_write(&vault.page_ctx, id.clone(), content) {
         Ok(_) => written(&id, json!({ "uuid": id })),
         Err(e) => refused(failed(e)),

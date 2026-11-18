@@ -42,9 +42,33 @@ At `manage-approve`, each write from the agent SHALL become a pending request sh
 - **WHEN** a person rejects a pending edit
 - **THEN** the page SHALL stay unchanged and the agent SHALL be told the request was rejected
 
+### Requirement: Approved edits never overwrite newer changes
+
+An approved edit replaces the whole page, so the daemon SHALL apply it only when the page is still the text it was when the agent asked. Otherwise it SHALL refuse with a conflict result, tell the agent to read the page again, and leave the page as it is.
+
+#### Scenario: Page changed while waiting
+- **WHEN** a person edits a page while an agent's edit of it waits, then approves the agent's edit
+- **THEN** the agent's edit SHALL NOT apply, the person's edit SHALL remain and the agent SHALL be told about the conflict
+
+### Requirement: Abandoned and excessive requests
+
+A pending request whose agent connection closed SHALL be cancelled and SHALL never be applied. One agent connection SHALL have at most 137 requests waiting; a further change SHALL be refused at once with a message saying so.
+
+#### Scenario: Agent killed while waiting
+- **WHEN** an agent process ends while its change waits for approval
+- **THEN** the request SHALL leave the queue and the change SHALL NOT apply, even if approved later
+
+### Requirement: Scope of the guarantee
+
+The documentation SHALL state that permissions apply to agents that work through `cerbo mcp`, that a process running as the user can bypass them, and that real isolation of agent processes is planned with the agent panel.
+
+#### Scenario: Honest manual
+- **WHEN** a user reads the AGENT PERMISSIONS section of the man page
+- **THEN** it SHALL say plainly that a process of the same user can bypass the permission
+
 ### Requirement: Approvals work headless
 
-A pending request SHALL stay in the daemon until a client answers it, including a client that connects later. A request with no answer within a time limit (default 10 minutes, configurable) SHALL be treated as rejected.
+A pending request SHALL stay in the daemon until a client answers it, including a client that connects later. A request with no answer within a time limit (default 10 minutes, configurable) SHALL be treated as rejected. A client that waits for the answer SHALL wait at least until that time limit, so an approval given late is never reported to the agent as a failure.
 
 #### Scenario: Answered after the app opens
 - **WHEN** an agent requests an edit while no app is open and the user opens the app 3 minutes later

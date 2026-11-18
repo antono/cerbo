@@ -96,6 +96,12 @@ impl Approvals {
         true
     }
 
+    /// End request `id` as cancelled: its agent went away, so it must never
+    /// be applied. False when it was already over.
+    pub fn cancel(&self, id: u64) -> bool {
+        self.resolve(id, ApprovalOutcome::Cancelled)
+    }
+
     /// A person's answer.
     pub fn answer(&self, id: u64, approve: bool) -> Result<(), RpcError> {
         let outcome = if approve { ApprovalOutcome::Approved } else { ApprovalOutcome::Rejected };
@@ -157,6 +163,22 @@ mod tests {
             Event::ApprovalResolved { outcome: ApprovalOutcome::Approved, .. }
         ));
         assert!(queue.answer(id, true).is_err(), "answering twice is an error");
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_request_leaves_the_queue_and_cannot_be_approved() {
+        let (queue, mut events) = queue();
+        let (id, rx) = queue.request(sample("a"), Duration::from_secs(60));
+        assert!(matches!(events.recv().await.unwrap(), Event::ApprovalRequested { .. }));
+        assert!(queue.cancel(id));
+        assert!(queue.list(None).is_empty());
+        assert!(queue.answer(id, true).is_err(), "a cancelled request cannot be approved");
+        assert!(!queue.cancel(id));
+        assert_eq!(rx.await.unwrap(), ApprovalOutcome::Cancelled);
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            Event::ApprovalResolved { outcome: ApprovalOutcome::Cancelled, .. }
+        ));
     }
 
     #[tokio::test]

@@ -553,7 +553,7 @@ fn two_writers_at_once_lose_nothing() {
             let id = id.clone();
             let kind = if who == "app" { ClientKind::App } else { ClientKind::Agent };
             std::thread::spawn(move || {
-                let mut client = Client::connect(&paths.socket, kind, Some(who)).unwrap();
+                let mut client = Client::connect_bound(&paths.socket, kind, Some(who), &id).unwrap();
                 let mut made = Vec::new();
                 for n in 0..EACH {
                     let page = create(&mut client, &id, &format!("{who} {n}"));
@@ -654,7 +654,7 @@ fn a_client_write_reaches_subscribers_with_its_origin() {
     cerbo_core::agent::set_permission(&env.ctx, &id, cerbo_core::agent::AgentPermission::Auto).unwrap();
     let _daemon = env.start();
     let mut app = env.connect(ClientKind::App);
-    let mut agent = env.connect(ClientKind::Agent);
+    let mut agent = Client::connect_bound(&env.paths.socket, ClientKind::Agent, Some("test"), &id).unwrap();
     let page = create(&mut agent, &id, "Shared");
     app.call(Call::Subscribe { vault: Some(id.clone()) }).unwrap();
 
@@ -759,4 +759,35 @@ fn a_stopping_daemon_takes_no_new_writes() {
         assert!(e.code == "shutting_down" || gone, "{e:?}");
     }
     daemon.join().unwrap();
+}
+
+#[test]
+fn a_vault_that_was_missing_at_the_start_is_served_once_it_is_back() {
+    // An unmounted disk: the vault is registered but its directory is gone
+    // while the daemon starts, and returns later without any change to the
+    // vault list. The daemon must look again, not skip it for good.
+    let env = env();
+    // Another vault is served, so "nothing is served yet" cannot hide the bug.
+    let (home_id, _) = env.add_vault("home");
+    let (id, root) = env.add_vault("usb");
+    let away = root.with_file_name("usb-unmounted");
+    std::fs::rename(&root, &away).unwrap();
+    let _daemon = env.start();
+    let mut client = env.connect(ClientKind::Cli);
+    let served = client.call(Call::Vaults).unwrap();
+    assert_eq!(served.as_array().unwrap().len(), 1);
+    assert_eq!(served[0]["id"], home_id.as_str());
+    assert_eq!(client.call(Call::PageList { vault: id.clone() }).unwrap_err().code, CODE_UNKNOWN_VAULT);
+
+    std::fs::rename(&away, &root).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let vaults = client.call(Call::Vaults).unwrap();
+        if vaults.as_array().unwrap().len() == 2 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the vault that came back was never served");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(client.call(Call::PageList { vault: id }).is_ok());
 }

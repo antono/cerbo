@@ -19,7 +19,9 @@ pub mod client;
 pub mod launch;
 
 /// Bumped whenever a message changes in a way an older peer cannot read.
-pub const PROTOCOL_VERSION: u32 = 1;
+///
+/// 2: an agent's hello names the one vault it is bound to.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Error code of a refused handshake.
 pub const CODE_PROTOCOL_MISMATCH: &str = "protocol_mismatch";
@@ -39,6 +41,18 @@ pub const CODE_REJECTED: &str = "rejected";
 pub const CODE_TIMED_OUT: &str = "timed_out";
 /// Error code for a call an agent connection may not make.
 pub const CODE_FORBIDDEN: &str = "forbidden";
+/// Error code for an approved change that was not applied because the page
+/// changed after the agent asked.
+pub const CODE_CONFLICT: &str = "conflict";
+/// Error code for an agent connection that already has the most approval
+/// requests waiting that it may have ([`MAX_PENDING_PER_AGENT`]).
+pub const CODE_TOO_MANY_PENDING: &str = "too_many_pending";
+/// Error code the blocking client gives when no answer came within its
+/// time limit. The request may still be pending in the daemon.
+pub const CODE_CLIENT_TIMEOUT: &str = "client_timeout";
+
+/// How many approval requests one agent connection may have waiting at once.
+pub const MAX_PENDING_PER_AGENT: usize = 137;
 
 /// What kind of program is on the other end. Agent connections are subject to
 /// the vault's agent permission; app and CLI connections are not (design D5).
@@ -85,6 +99,12 @@ pub struct Hello {
     /// CLI's name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The vault (id, name or path) an agent connection is bound to. Required
+    /// for [`ClientKind::Agent`]: the daemon refuses an agent without one, and
+    /// then refuses any call that names another vault. Ignored for the app
+    /// and the CLI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault: Option<String>,
 }
 
 /// A request line: an id chosen by the client plus the call.
@@ -225,11 +245,13 @@ pub enum Call {
     Ping,
     /// Version, process id, uptime and the vaults served: a [`StatusInfo`].
     Status,
-    /// The vaults served: a list of [`VaultInfo`].
+    /// The vaults served: a list of [`VaultInfo`]. An agent connection sees
+    /// only its own vault.
     Vaults,
     /// Stop after queued writes finish.
     Stop,
-    /// Receive [`Event`]s on this connection, for one vault or all.
+    /// Receive [`Event`]s on this connection, for one vault or all. An agent
+    /// connection only gets the page events of its own vault.
     Subscribe {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         vault: Option<String>,
@@ -251,7 +273,9 @@ pub enum Call {
         limit: usize,
     },
     /// The agent permission of a vault: `{"permission": "read" | "auto" |
-    /// "approve"}`. Read-only knowledge, so agent connections may ask; it lets
+    /// "approve", "approval_timeout_secs": n}`; the second is how long a write
+    /// may wait for an approval, so a client can wait that long for its
+    /// answer. Read-only knowledge, so agent connections may ask; it lets
     /// the MCP shim list only the tools that can work.
     Permission { vault: String },
 
@@ -446,9 +470,17 @@ mod tests {
     #[test]
     fn hello_round_trips() {
         let line = round_trip(ClientHello {
-            hello: Hello { protocol: PROTOCOL_VERSION, client: ClientKind::Agent, name: Some("opencode".into()) },
+            hello: Hello {
+                protocol: PROTOCOL_VERSION,
+                client: ClientKind::Agent,
+                name: Some("opencode".into()),
+                vault: Some("Notes".into()),
+            },
         });
-        assert_eq!(line, r#"{"hello":{"protocol":1,"client":"agent","name":"opencode"}}"#);
+        assert_eq!(
+            line,
+            format!(r#"{{"hello":{{"protocol":{PROTOCOL_VERSION},"client":"agent","name":"opencode","vault":"Notes"}}}}"#)
+        );
     }
 
     #[test]
@@ -526,7 +558,7 @@ mod tests {
 
     #[test]
     fn server_messages_round_trip() {
-        round_trip(ServerMessage::Welcome { protocol: 1, daemon_version: "0.1.0".into(), pid: 137 });
+        round_trip(ServerMessage::Welcome { protocol: PROTOCOL_VERSION, daemon_version: "0.1.0".into(), pid: 137 });
         round_trip(ServerMessage::ok(1, serde_json::json!({"a": [1, 2]})));
         round_trip(ServerMessage::err(2, RpcError::failed("no such page")));
         round_trip(ServerMessage::Event {

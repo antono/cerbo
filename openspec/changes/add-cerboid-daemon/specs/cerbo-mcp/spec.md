@@ -48,7 +48,7 @@ In a read-only vault the server SHALL NOT list write tools.
 
 ### Requirement: Scoped to one vault
 
-A server instance SHALL expose exactly one vault. Page references from another vault SHALL NOT resolve.
+A server instance SHALL expose exactly one vault. Page references from another vault SHALL NOT resolve. Its daemon connection SHALL be bound to that vault: the daemon SHALL refuse any call about another vault, show the connection only its own vault in the vault list, and send it only page change events of that vault.
 
 #### Scenario: Other vault
 - **WHEN** the agent passes the UUID of a page that lives in a different vault

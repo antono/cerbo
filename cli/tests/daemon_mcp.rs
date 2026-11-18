@@ -570,3 +570,111 @@ fn the_cli_paths_use_a_runtime_dir_of_their_own() {
     let socket: &Path = &env.paths.socket;
     assert!(socket.starts_with(env.xdg.path()));
 }
+
+// ── The daemon-first path never goes around a daemon that runs ───────────────
+
+/// A stand-in for a daemon on the socket that answers every handshake with
+/// `reply`, such as one of another protocol version.
+fn fake_daemon(env: &Env, reply: cerbo_core::rpc::ServerMessage) {
+    env.paths.prepare_dir().unwrap();
+    let listener = std::os::unix::net::UnixListener::bind(&env.paths.socket).unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut line = String::new();
+            let _ = BufReader::new(&stream).read_line(&mut line);
+            let mut out = stream;
+            let _ = writeln!(out, "{}", serde_json::to_string(&reply).unwrap());
+        }
+    });
+}
+
+fn pages_on_disk(env: &Env, root: &Path) -> String {
+    let out = env.cmd().env("CERBO_NO_DAEMON", "1").args(["page", "list"]).current_dir(root).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn a_daemon_of_another_protocol_version_is_refused_not_bypassed() {
+    let env = Env::new();
+    let (_id, root) = env.add_vault("notes");
+    fake_daemon(
+        &env,
+        cerbo_core::rpc::ServerMessage::Error {
+            error: cerbo_core::rpc::check_protocol(cerbo_core::rpc::PROTOCOL_VERSION + 1).unwrap_err(),
+        },
+    );
+
+    for args in [["page", "create", "Sneaky"], ["page", "list", ""]] {
+        let args: Vec<&str> = args.into_iter().filter(|a| !a.is_empty()).collect();
+        let out = env.cmd().args(&args).current_dir(&root).output().unwrap();
+        assert!(!out.status.success(), "{args:?} must not fall back to the files");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("restart the daemon"), "{args:?}: {stderr}");
+    }
+    assert!(!pages_on_disk(&env, &root).contains("Sneaky"), "nothing was written behind the daemon");
+}
+
+#[test]
+fn a_daemon_that_runs_but_does_not_answer_is_an_error_not_a_fallback() {
+    let env = Env::new();
+    let (_id, root) = env.add_vault("notes");
+    // Alive, as far as the lock says, but nothing listens on the socket.
+    env.paths.prepare_dir().unwrap();
+    let lock = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&env.paths.lock).unwrap();
+    lock.try_lock().unwrap();
+
+    let out = env.cmd().args(["page", "create", "Sneaky"]).current_dir(&root).output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("running but does not answer"), "{stderr}");
+    assert!(!pages_on_disk(&env, &root).contains("Sneaky"));
+
+    // The daemon goes away: now the command works on the files.
+    drop(lock);
+    let out = env.cmd().args(["page", "create", "Direct"]).current_dir(&root).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(pages_on_disk(&env, &root).contains("Direct"));
+}
+
+#[test]
+fn a_stale_socket_without_a_daemon_still_falls_back_to_the_files() {
+    let env = Env::new();
+    let (_id, root) = env.add_vault("notes");
+    env.paths.prepare_dir().unwrap();
+    // A crashed daemon leaves its socket file behind, and no lock is held.
+    drop(std::os::unix::net::UnixListener::bind(&env.paths.socket).unwrap());
+    assert!(env.paths.socket.exists());
+    let out = env.cmd().args(["page", "create", "Direct"]).current_dir(&root).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(pages_on_disk(&env, &root).contains("Direct"));
+}
+
+// ── An agent that goes away takes its pending change with it ─────────────────
+
+#[test]
+fn a_killed_mcp_shim_cancels_the_change_it_left_waiting() {
+    let env = Env::new();
+    let (_id, root) = env.add_vault("notes");
+    env.cerbo_ok(&["vault", "agent", "notes", "approve"]);
+    let _daemon = env.start_daemon();
+    let mut mcp = env.mcp("notes", Some("opencode"));
+    let _pending = mcp.start_call("create_page", json!({ "title": "Never" }));
+
+    let queue_len = || {
+        let list: Value = serde_json::from_str(&env.cerbo_ok(&["approvals", "list", "--json"])).unwrap();
+        list.as_array().unwrap().len()
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while queue_len() == 0 {
+        assert!(Instant::now() < deadline, "the request never queued");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    drop(mcp); // kills the shim, its connection closes
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while queue_len() != 0 {
+        assert!(Instant::now() < deadline, "the abandoned request is still waiting");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!pages_on_disk(&env, &root).contains("Never"), "an abandoned request is never applied");
+}

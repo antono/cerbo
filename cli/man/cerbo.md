@@ -341,7 +341,7 @@ Usage: `cerbo daemon <SUBCOMMAND>`
 
 A client and a daemon of different protocol versions refuse each other; after upgrading, run `cerbo daemon stop` and start it again. Vault files are never in a daemon-only format, so everything keeps working without it.
 
-**Daemon-first commands.** `cerbo page list|create|read|write|delete|move|backlinks`, `cerbo search`, `cerbo similar` and `cerbo sparql --json` use the daemon when it runs and work on the vault files directly when it does not, so scripts run the same on a machine without the service. The daemon serves only registered vaults; a command for any other vault works on its files. Set `CERBO_NO_DAEMON=1` to skip the daemon.
+**Daemon-first commands.** `cerbo page list|create|read|write|delete|move|backlinks`, `cerbo search`, `cerbo similar` and `cerbo sparql --json` use the daemon when it runs and work on the vault files directly when it does not, so scripts run the same on a machine without the service. The daemon serves only registered vaults; a command for any other vault works on its files. A daemon that runs (it holds its lock) but speaks another protocol version, or does not answer within a few seconds, is never bypassed: the command fails and says to restart the daemon (`cerbo daemon stop`, then `cerbo daemon start`), so the files are not written behind the daemon's back. Set `CERBO_NO_DAEMON=1` to skip the daemon.
 
 ## mcp
 
@@ -355,7 +355,7 @@ Options:
 
 Tools, always offered: `list_pages`, `read_page`, `search_text`, `search_semantic`, `backlinks`, `outgoing_links`, `list_attachments`, `sparql_query`. A page is named by its UUID; an unknown one is an error result naming the UUID.
 
-Tools that change the vault, offered only when the vault's agent level is `auto` or `approve`: `create_page`, `edit_page`, `rename_page`, `move_page`, `delete_page`, `link_pages`. `delete_page` moves the page to the vault trash, from where it is recovered. At `approve` a call waits until a person answers (see `cerbo approvals`). The tool list follows a change of the level while the server runs.
+Tools that change the vault, offered only when the vault's agent level is `auto` or `approve`: `create_page`, `edit_page`, `rename_page`, `move_page`, `delete_page`, `link_pages`. `delete_page` moves the page to the vault trash, from where it is recovered. At `approve` a call waits until a person answers (see `cerbo approvals`), up to the approval time limit; the server waits for the daemon's answer that long (plus a minute), so a late approval is reported as a success, never as a failure that applies later. The tool list follows a change of the level while the server runs.
 
 Register it with an agent CLI like any stdio MCP server, for example in OpenCode's `opencode.json` and with Claude Code:
 
@@ -408,11 +408,15 @@ Options:
 
 # AGENT PERMISSIONS
 
-What an agent connected through `cerbo mcp` may do is set per vault, with `cerbo vault agent <VAULT> [read|auto|approve]`, and judged by the daemon on every write, so a change applies to connected agents at once and a client cannot get around it. The setting lives in `agents.toml` beside `vaults.toml`.
+What an agent connected through `cerbo mcp` may do is set per vault, with `cerbo vault agent <VAULT> [read|auto|approve]`, and judged by the daemon on every write, so a change applies to connected agents at once. The setting lives in `agents.toml` beside `vaults.toml`.
+
+**What this protects, and what it does not.** The permissions apply to agents that work through `cerbo mcp`. They are not a security boundary against a process running as your user: such a process can open the daemon's socket (or the vault files) and declare itself the app or the CLI, and those are not limited by the level. Real isolation of agent processes, so that an agent has no other way to your vault, is planned with the agent panel. Until then, treat the level as a guard for well-behaved agent tools, not as a sandbox.
+
+What the daemon does hold an agent connection to: it is bound to the one vault named by `cerbo mcp --vault` and is refused any call that names another vault, sees only that vault in the list of vaults and only that vault's page change events (no approval requests, no vault list changes, no daemon status), and cannot answer approvals, read the change log or stop the daemon.
 
 - `read` - the default for every vault never configured. The agent can only read. Its write tools are not listed, and a write request that arrives anyway is refused with a message saying the vault is read-only; the vault stays unchanged.
 - `auto` - the agent's changes apply at once. Each one is appended to the agent change log (time, page, agent name, action) in `agent-changes.jsonl` beside `agents.toml`, readable with `cerbo approvals log`.
-- `approve` - each change waits as a pending request showing what will change (for an edit, the difference). It applies only after a person approves it with `cerbo approvals approve` or in the desktop app. A rejection leaves the vault unchanged and tells the agent; so does a timeout.
+- `approve` - each change waits as a pending request showing what will change (for an edit, the difference). It applies only after a person approves it with `cerbo approvals approve` or in the desktop app. A rejection leaves the vault unchanged and tells the agent; so does a timeout. An agent that disconnects while its request waits (for example because it was killed) has the request cancelled, and it is never applied. An approved edit replaces the whole page, so it is only applied when the page is still as it was when the agent asked: if the page changed meanwhile, the edit is refused with a conflict message, the agent is told to read the page again, and your own change stays. An agent connection may have at most 137 requests waiting at once; further changes are refused at once with a message saying so, until some are answered.
 
 An agent deleting a page moves it to the vault trash at every level, so even `auto` cannot destroy a page. Lowering the level while a request waits refuses it when it is approved. Changes you make yourself through the app or `cerbo` are never agent changes and are not limited by the level. No tool reads or changes the level: an agent cannot raise its own access.
 

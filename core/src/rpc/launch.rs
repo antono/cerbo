@@ -3,7 +3,7 @@
 //! single-instance lock settles a race).
 
 use super::client::{Client, ConnectError};
-use super::ClientKind;
+use super::{ClientKind, RpcError};
 use crate::daemon_paths::DaemonPaths;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -33,9 +33,16 @@ pub fn find_daemon_binary() -> Option<PathBuf> {
 
 /// Start `cerboid` detached from this process (its own process group, no
 /// terminal) and wait until it accepts connections.
-pub fn start_daemon(paths: &DaemonPaths, kind: ClientKind, name: Option<&str>) -> Result<Client, String> {
+pub fn start_daemon(
+    paths: &DaemonPaths,
+    kind: ClientKind,
+    name: Option<&str>,
+    vault: Option<&str>,
+) -> Result<Client, RpcError> {
     let bin = find_daemon_binary().ok_or_else(|| {
-        format!("cannot start the daemon: no `cerboid` next to this program or in PATH (set {DAEMON_BIN_ENV})")
+        RpcError::failed(format!(
+            "cannot start the daemon: no `cerboid` next to this program or in PATH (set {DAEMON_BIN_ENV})"
+        ))
     })?;
     let spawn = || {
         Command::new(&bin)
@@ -44,42 +51,52 @@ pub fn start_daemon(paths: &DaemonPaths, kind: ClientKind, name: Option<&str>) -
             .stderr(Stdio::null())
             .process_group(0)
             .spawn()
-            .map_err(|e| format!("cannot start {}: {e}", bin.display()))
+            .map_err(|e| RpcError::failed(format!("cannot start {}: {e}", bin.display())))
     };
     let mut child = spawn()?;
 
     let deadline = Instant::now() + START_TIMEOUT;
     loop {
-        match Client::connect(&paths.socket, kind, name) {
+        match Client::connect_full(&paths.socket, kind, name, vault, super::PROTOCOL_VERSION) {
             Ok(client) => return Ok(client),
             Err(ConnectError::Unavailable(_)) => {}
-            Err(other) => return Err(other.to_string()),
+            Err(ConnectError::Rejected(error) | ConnectError::VersionMismatch(error)) => return Err(error),
+            Err(other) => return Err(RpcError::failed(other.to_string())),
         }
         // A start that failed ends the process. One that exited cleanly lost
         // the race to a daemon that was still shutting down (it held the
         // instance lock a moment longer than its socket): start again.
         if let Ok(Some(status)) = child.try_wait() {
             if !status.success() {
-                return Err(format!(
+                return Err(RpcError::failed(format!(
                     "{} stopped at start-up ({status}); run it in a terminal to see why",
                     bin.display()
-                ));
+                )));
             }
             std::thread::sleep(Duration::from_millis(100));
             child = spawn()?;
         }
         if Instant::now() >= deadline {
-            return Err(format!("the daemon did not accept connections within {}s", START_TIMEOUT.as_secs()));
+            return Err(RpcError::failed(format!(
+                "the daemon did not accept connections within {}s",
+                START_TIMEOUT.as_secs()
+            )));
         }
         std::thread::sleep(Duration::from_millis(50));
     }
 }
 
 /// Connect to the running daemon, or start one and connect to that.
-pub fn connect_or_start(paths: &DaemonPaths, kind: ClientKind, name: Option<&str>) -> Result<Client, String> {
-    match Client::connect(&paths.socket, kind, name) {
+pub fn connect_or_start(
+    paths: &DaemonPaths,
+    kind: ClientKind,
+    name: Option<&str>,
+    vault: Option<&str>,
+) -> Result<Client, RpcError> {
+    match Client::connect_full(&paths.socket, kind, name, vault, super::PROTOCOL_VERSION) {
         Ok(client) => Ok(client),
-        Err(ConnectError::Unavailable(_)) => start_daemon(paths, kind, name),
-        Err(other) => Err(other.to_string()),
+        Err(ConnectError::Unavailable(_)) => start_daemon(paths, kind, name, vault),
+        Err(ConnectError::Rejected(error) | ConnectError::VersionMismatch(error)) => Err(error),
+        Err(other) => Err(RpcError::failed(other.to_string())),
     }
 }
