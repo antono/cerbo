@@ -140,7 +140,7 @@
               [ "the footprint check sees an enabled module" (footprint enabled != footprint absent) ]
               [ "service restarts on failure" (svc.Service.Restart == "on-failure") ]
               [ "service runs cerboid" (lib.all (e: lib.hasSuffix "/bin/cerboid" e) (lib.toList svc.Service.ExecStart)) ]
-              [ "a custom package is the one in ExecStart" ((units custom).services.cerboid.Service.ExecStart == "${fakeDaemon}/bin/cerboid") ]
+              [ "a custom package is the one in ExecStart" (lib.toList (units custom).services.cerboid.Service.ExecStart == [ "${fakeDaemon}/bin/cerboid" ]) ]
               [ "a custom package is installed" (builtins.elem fakeDaemon.outPath (footprint custom).packages) ]
               [ "service waits for the socket" (builtins.elem "cerboid.socket" svc.Unit.Requires) ]
               [ "service applies vault levels" (svc.Service.ExecStartPre != [ ]) ]
