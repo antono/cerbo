@@ -57,7 +57,7 @@
     {#if warning}
       <p class="warning" data-testid="agent-sandbox-warning" role="alert">{warning}</p>
     {/if}
-    <AgentFeed items={store.view.items} loading={store.loadingEvents || store.busy} onAnswer={(id, ok) => store.answerApproval(id, ok)} />
+    <AgentFeed items={store.view.items} pendingIds={store.connection.state === 'connected' ? store.pendingIds : null} loading={store.loadingEvents || store.busy} onAnswer={(id, ok) => store.answerApproval(id, ok)} />
     {#if store.error}
       <p class="error" data-testid="agent-error" role="alert">{store.error}</p>
     {/if}
