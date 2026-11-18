@@ -435,6 +435,47 @@ async fn cancel_answers_the_pending_permission_and_ends_the_turn_cancelled() {
 }
 
 #[tokio::test]
+async fn a_permission_request_made_while_the_turn_is_cancelled_is_answered_cancelled_and_never_shown() {
+    let env = Env::new();
+    // The agent asks only after it has been told to cancel.
+    let (client, mut events, sid) = env.session(script(json!([[{"do": "permission", "after_cancel": true, "allow": [{"do": "text", "text": "ALLOWED"}]}], [{"do": "permission"}]]))).await;
+    let turn = prompt(&client, &sid, "go");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    client.cancel(&sid);
+    let stop = tokio::time::timeout(Duration::from_secs(10), turn).await.expect("the agent was answered, so the turn ends").unwrap().unwrap();
+    assert_eq!(stop, StopReason::Cancelled);
+    let seen = drain(&mut events);
+    assert!(!seen.iter().any(|e| matches!(e, AcpEvent::Permission(_))), "no card for a request of a cancelled turn: {seen:?}");
+    let text = message_text(&seen);
+    assert!(text.contains("permission: cancelled") && !text.contains("ALLOWED"), "{text}");
+
+    // The next turn is not affected by the old cancel.
+    let again = prompt(&client, &sid, "again");
+    let req = next_permission(&mut events).await;
+    assert!(!req.is_cancelled());
+    req.cancel();
+    again.await.unwrap().unwrap();
+    client.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_request_waiting_in_the_event_stream_when_cancel_runs_is_marked_cancelled() {
+    let env = Env::new();
+    let (client, mut events, sid) = env
+        .session(script(json!([[{"do": "permission", "allow": [{"do": "text", "text": "ALLOWED"}]}, {"do": "text", "text": "x"}]])))
+        .await;
+    let turn = prompt(&client, &sid, "go");
+    let req = next_permission(&mut events).await;
+    assert!(!req.is_cancelled());
+    client.cancel(&sid);
+    // A reader that only now looks at the request (the driver behind a busy
+    // queue) must see that it is stale, with no await between cancel and look.
+    assert!(req.is_cancelled());
+    assert_eq!(turn.await.unwrap().unwrap(), StopReason::Cancelled);
+    client.shutdown().await;
+}
+
+#[tokio::test]
 async fn cancel_ends_a_running_turn() {
     let env = Env::new();
     let (client, _events, sid) = env.session(script(json!([[{"do": "wait_cancel"}, {"do": "text", "text": "x"}]]))).await;
@@ -799,6 +840,88 @@ async fn the_opencode_handshake_replays() {
         .collect();
     assert_eq!(kinds, ["available_commands_update"]);
     assert!(client.shutdown().await.success);
+}
+
+/// The cerbo MCP entry as the daemon builds it, with the paths the fixtures use.
+fn fixture_mcp() -> McpServer {
+    McpServer::stdio(
+        "cerbo",
+        "/nix/store/cerbo/bin/cerbo",
+        vec!["mcp".into(), "--vault".into(), "/vault".into()],
+        vec![("CERBO_SOCKET".into(), "/run/cerbo/session/agent.sock".into())],
+    )
+}
+
+/// The recorded session of the real Claude adapter (0.106.0): what the daemon
+/// sends on `session/new` is exactly what that adapter was started with, and the
+/// start mode the vault's settings picked is put back.
+#[tokio::test]
+async fn the_real_claude_adapter_session_replays_with_the_locked_down_meta_and_the_mode_pin() {
+    let env = Env::new();
+    let record = env.path("out.jsonl");
+    let log = fixture("claude-agent-acp-0.106.0-session.jsonl");
+    let (client, _events) = AcpClient::spawn(replay_command(&log), replay_opts(&record)).unwrap();
+    let init = client.initialize().await.unwrap();
+    assert_eq!(init.agent_info.as_ref().unwrap().name, "@agentclientprotocol/claude-agent-acp");
+    assert!(init.capabilities.load_session && init.capabilities.prompt.embedded_context && init.capabilities.mcp.http);
+    let meta = cerboid::sandbox::claude_session_meta();
+    let session = client.new_session_with_meta(Path::new("/vault"), &[fixture_mcp()], Some(&meta)).await.unwrap();
+    // The adapter chose `auto` itself, because the vault's settings asked for bypassPermissions.
+    assert_eq!(session.modes.as_ref().unwrap()["currentModeId"], "auto");
+    let changed = client.pin_mode(&session.session_id, session.modes.as_ref(), cerboid::sandbox::START_MODE).await.unwrap();
+    assert!(changed, "the start mode was put back");
+    let exit = client.shutdown().await;
+    assert!(exit.success, "what the client sent differs from what the real adapter was sent: {exit}");
+    // The meta in the recording is the one the daemon sends today.
+    let expected = replay::parse_log(&std::fs::read_to_string(&log).unwrap()).unwrap();
+    let sent_meta = expected.iter().find(|e| e.msg["method"] == "session/new").unwrap().msg["params"]["_meta"].clone();
+    assert_eq!(sent_meta, meta);
+    assert_eq!(sent_meta["claudeCode"]["options"]["strictMcpConfig"], true);
+}
+
+#[tokio::test]
+async fn the_real_opencode_session_with_the_cerbo_server_replays() {
+    let env = Env::new();
+    let record = env.path("out.jsonl");
+    let (client, mut events) = AcpClient::spawn(replay_command(&fixture("opencode-2.2.6-session.jsonl")), replay_opts(&record)).unwrap();
+    client.initialize().await.unwrap();
+    let session = client.new_session(Path::new("/vault"), &[fixture_mcp()]).await.unwrap();
+    assert!(session.session_id.starts_with("ses_"));
+    assert!(session.modes.is_none(), "OpenCode has config options, not modes");
+    // No modes, so nothing to pin.
+    assert!(!client.pin_mode(&session.session_id, session.modes.as_ref(), cerboid::sandbox::START_MODE).await.unwrap());
+    // Give the command list that follows session/new a moment to arrive.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!drain(&mut events).is_empty(), "the command list arrives after session/new");
+    assert!(client.shutdown().await.success);
+}
+
+#[tokio::test]
+async fn the_start_mode_is_pinned_only_when_the_agent_is_somewhere_else() {
+    let modes = |current: &str| json!({"currentModeId": current, "availableModes": [{"id": "default"}, {"id": "auto"}]});
+    let scripted = |current: &str| json!({"modes": modes(current), "turns": [[{"do": "text", "text": "x"}]]});
+
+    // Started in `auto`: put into `default`.
+    let env = Env::new();
+    let (client, _events) = env.start(scripted("auto"));
+    client.initialize().await.unwrap();
+    let started = client.new_session(&env.cwd(), &[]).await.unwrap();
+    assert_eq!(started.modes.as_ref().unwrap()["currentModeId"], "auto");
+    assert!(client.pin_mode(&started.session_id, started.modes.as_ref(), "default").await.unwrap());
+    assert!(env.received().iter().any(|m| m["method"] == "session/set_mode" && m["params"]["modeId"] == "default" && m["params"]["sessionId"] == started.session_id.as_str()));
+
+    // Already there, or no modes at all: nothing is sent.
+    let env2 = Env::new();
+    let (client2, _events2, sid2) = env2.session(scripted("default")).await;
+    assert!(!client2.pin_mode(&sid2, Some(&modes("default")), "default").await.unwrap());
+    assert!(!client2.pin_mode(&sid2, None, "default").await.unwrap());
+    assert!(!env2.received().iter().any(|m| m["method"] == "session/set_mode"));
+
+    // A mode the agent does not offer is an error, not a silent skip.
+    let err = client2.pin_mode(&sid2, Some(&json!({"currentModeId": "auto", "availableModes": [{"id": "auto"}]})), "default").await.unwrap_err();
+    assert!(matches!(err, AcpError::Unsupported(_)), "{err}");
+    client.shutdown().await;
+    client2.shutdown().await;
 }
 
 #[tokio::test]

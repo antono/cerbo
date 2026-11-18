@@ -137,6 +137,7 @@ fn the_agent_sees_a_read_only_vault_a_private_world_and_only_its_session_socket(
         login_file: Some(login.clone()),
         real_home: env.home.clone(),
         host_path: env.path.clone(),
+        protected: Vec::new(),
     };
     let launch = sandbox::plan(&Confinement::Bwrap(bwrap), &spec, &RealFs).unwrap();
     assert!(launch.sandboxed);

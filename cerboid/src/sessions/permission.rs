@@ -41,6 +41,15 @@ pub fn decide(mode: AgentPermission, tool: &ToolCallUpdate) -> Decision {
 /// `cerbo_<tool>` (OpenCode) or `mcp__cerbo__<tool>` (Claude Code). A title
 /// that merely mentions such a name, as a shell command line would, does not
 /// count.
+///
+/// The name is all a permission request shows: ACP does not say which server a
+/// tool belongs to, so a second MCP server that called itself `cerbo` could not
+/// be told apart here. That is closed at the source instead of by matching: the
+/// Claude session is started with `strictMcpConfig` (only the server the daemon
+/// passes exists; a vault's `.mcp.json`, settings and plugins add none, see
+/// `sandbox::claude_session_meta`) and OpenCode with
+/// `OPENCODE_DISABLE_PROJECT_CONFIG` (a vault's `opencode.json` and `.opencode/`
+/// are not read), and neither agent's home holds an MCP server of its own.
 pub fn is_vault_tool(tool: &ToolCallUpdate) -> bool {
     let kind_ok = matches!(
         tool.kind,

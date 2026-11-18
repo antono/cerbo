@@ -32,6 +32,7 @@ struct Env {
     data: PathBuf,
     bin_dir: PathBuf,
     sandbox_none: bool,
+    feed_cap: u64,
 }
 
 fn env() -> Env {
@@ -41,7 +42,7 @@ fn env() -> Env {
     let data = tmp.path().join("data");
     let bin_dir = tmp.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
-    let env = Env { tmp, ctx, paths, data, bin_dir, sandbox_none: true };
+    let env = Env { tmp, ctx, paths, data, bin_dir, sandbox_none: true, feed_cap: cerboid::sessions::store::FEED_CAP_BYTES };
     env.write_agents_toml(Path::new(FAKE));
     env.login();
     env
@@ -75,6 +76,7 @@ impl Env {
             cerbo_bin_env: Some(FAKE.into()),
             current_exe: None,
             sockets_dir: self.paths.dir.join("sessions"),
+            feed_cap: self.feed_cap,
         }
     }
 
@@ -136,9 +138,26 @@ impl Env {
     }
 }
 
+/// A session once its agent has started (or failed to): creating answers at
+/// once, in the `starting` state.
+fn settle(client: &mut Client, id: &str) -> SessionInfo {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let list: Vec<SessionInfo> = serde_json::from_value(client.call(Call::SessionList { vault: None }).unwrap()).unwrap();
+        let info = list.into_iter().find(|s| s.id == id).expect("the session is listed");
+        if info.state != SessionState::Starting {
+            return info;
+        }
+        assert!(Instant::now() < deadline, "the session never left starting");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn create(client: &mut Client, vault: &str) -> SessionInfo {
-    let value = client.call(Call::SessionCreate { vault: vault.into(), agent: AgentKind::Opencode, resume_from: None }).unwrap();
-    serde_json::from_value(value).unwrap()
+    let value = client.call(Call::SessionCreate { vault: vault.into(), agent: AgentKind::Opencode, resume_from: None, ephemeral: false }).unwrap();
+    let created: SessionInfo = serde_json::from_value(value).unwrap();
+    assert_eq!(created.state, SessionState::Starting, "creating answers before the agent is ready");
+    settle(client, &created.id)
 }
 
 fn send(client: &mut Client, session: &str, text: &str) {
@@ -228,14 +247,14 @@ fn an_unavailable_or_signed_out_agent_makes_no_session() {
     let (vault, _) = env.add_vault("Notes");
     let _daemon = env.start();
     let mut person = env.person();
-    let err = person.call(Call::SessionCreate { vault: vault.clone(), agent: AgentKind::Claude, resume_from: None }).unwrap_err();
+    let err = person.call(Call::SessionCreate { vault: vault.clone(), agent: AgentKind::Claude, resume_from: None, ephemeral: false }).unwrap_err();
     assert_eq!(err.code, CODE_FAILED);
     assert!(err.message.contains("not available") && err.message.contains("claude-agent-acp"), "{}", err.message);
 
     std::fs::remove_file(env.data.join("opencode/auth.json")).unwrap();
     // The registry looks again after its time to live; ask for the list to refresh it.
     person.call(Call::AgentList {}).unwrap();
-    let err = person.call(Call::SessionCreate { vault, agent: AgentKind::Opencode, resume_from: None }).unwrap_err();
+    let err = person.call(Call::SessionCreate { vault, agent: AgentKind::Opencode, resume_from: None, ephemeral: false }).unwrap_err();
     assert!(err.message.contains("not signed in") && err.message.contains("opencode auth login"), "{}", err.message);
     let list: Vec<SessionInfo> = serde_json::from_value(person.call(Call::SessionList { vault: None }).unwrap()).unwrap();
     assert!(list.is_empty(), "nothing is left behind");
@@ -674,10 +693,10 @@ fn resuming_without_load_session_sends_the_transcript_as_context() {
     collect(&mut viewer, &info.id, turn_ended);
     person.call(Call::SessionEnd { session: info.id.clone() }).unwrap();
 
-    let value = person.call(Call::SessionCreate { vault: vault.clone(), agent: AgentKind::Opencode, resume_from: Some(info.id.clone()) }).unwrap();
+    let value = person.call(Call::SessionCreate { vault: vault.clone(), agent: AgentKind::Opencode, resume_from: Some(info.id.clone()), ephemeral: false }).unwrap();
     let resumed: SessionInfo = serde_json::from_value(value).unwrap();
     assert_eq!(resumed.id, info.id, "the same session continues");
-    assert_eq!(resumed.state, SessionState::Idle);
+    assert_eq!(settle(&mut person, &info.id).state, SessionState::Idle);
     let feed = replay(&mut person, &info.id);
     assert!(feed.iter().any(|e| matches!(&e.body, SessionEventBody::Resumed { how: ResumeHow::Transcript })), "{feed:?}");
 
@@ -687,7 +706,7 @@ fn resuming_without_load_session_sends_the_transcript_as_context() {
     assert!(text.contains("User: remember seven") && text.contains("what did I say"), "{text}");
 
     // Still running sessions cannot be resumed; another vault's cannot either.
-    let err = person.call(Call::SessionCreate { vault, agent: AgentKind::Opencode, resume_from: Some(info.id.clone()) }).unwrap_err();
+    let err = person.call(Call::SessionCreate { vault, agent: AgentKind::Opencode, resume_from: Some(info.id.clone()), ephemeral: false }).unwrap_err();
     assert!(err.message.contains("still running"), "{}", err.message);
 }
 
@@ -710,7 +729,8 @@ fn resuming_with_load_session_loads_the_agents_own_session_and_keeps_the_feed() 
     person.call(Call::SessionEnd { session: info.id.clone() }).unwrap();
     let before = replay(&mut person, &info.id).len();
 
-    person.call(Call::SessionCreate { vault, agent: AgentKind::Opencode, resume_from: Some(info.id.clone()) }).unwrap();
+    person.call(Call::SessionCreate { vault, agent: AgentKind::Opencode, resume_from: Some(info.id.clone()), ephemeral: false }).unwrap();
+    settle(&mut person, &info.id);
     let feed = replay(&mut person, &info.id);
     assert!(feed.iter().any(|e| matches!(&e.body, SessionEventBody::Resumed { how: ResumeHow::Load })), "{feed:?}");
     // The history the agent replays while loading is not added a second time.
@@ -746,6 +766,404 @@ fn stored_sessions_survive_a_restart_and_show_as_ended() {
     assert!(feed.iter().any(|e| matches!(&e.body, SessionEventBody::UserMessage { text, .. } if text == "persist me")));
     // It can be deleted without ending: nothing runs.
     person.call(Call::SessionDelete { session: id }).unwrap();
+}
+
+// ── Review fixes: starting, resuming, cancelling, limits ─────────────────────
+
+/// `start` of the daemon with `tweak` applied to its config.
+fn start_tweaked(env: &Env, tweak: impl FnOnce(&mut Config)) -> Running {
+    let mut config = env.config(Some(Duration::from_secs(30)), None);
+    tweak(&mut config);
+    cerboid::spawn(config).unwrap().expect("no other daemon runs")
+}
+
+fn raw_create(client: &mut Client, vault: &str, resume: Option<&str>, ephemeral: bool) -> Result<SessionInfo, cerbo_core::rpc::RpcError> {
+    client
+        .call(Call::SessionCreate { vault: vault.into(), agent: AgentKind::Opencode, resume_from: resume.map(str::to_string), ephemeral })
+        .map(|v| serde_json::from_value(v).unwrap())
+}
+
+fn feed_states(feed: &[SessionEvent]) -> Vec<SessionState> {
+    feed.iter()
+        .filter_map(|e| match &e.body {
+            SessionEventBody::State { state, .. } => Some(*state),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn two_creates_that_resume_the_same_session_make_one() {
+    let env = env();
+    let (vault, _) = env.add_vault("Notes");
+    let _daemon = env.start();
+    let mut person = env.person();
+    let info = create(&mut person, &vault);
+    person.call(Call::SessionEnd { session: info.id.clone() }).unwrap();
+
+    // From now on the agent takes its time to start, so both requests meet
+    // while the first one is still starting.
+    env.script(json!({"init_delay_ms": 600}));
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let attempts: Vec<_> = (0..2)
+        .map(|_| {
+            let (socket, vault, id, barrier) = (env.paths.socket.clone(), vault.clone(), info.id.clone(), Arc::clone(&barrier));
+            std::thread::spawn(move || {
+                let mut client = Client::connect(&socket, ClientKind::Cli, Some("racer")).unwrap();
+                barrier.wait();
+                raw_create(&mut client, &vault, Some(&id), false)
+            })
+        })
+        .collect();
+    let results: Vec<_> = attempts.into_iter().map(|h| h.join().unwrap()).collect();
+    let ok = results.iter().filter(|r| r.is_ok()).count();
+    assert_eq!(ok, 1, "exactly one resume wins: {results:?}");
+    let refused = results.iter().find_map(|r| r.as_ref().err()).unwrap();
+    assert!(refused.message.contains("still running or starting"), "{}", refused.message);
+
+    assert_eq!(settle(&mut person, &info.id).state, SessionState::Idle);
+    let feed = replay(&mut person, &info.id);
+    assert_eq!(feed.iter().filter(|e| matches!(e.body, SessionEventBody::Resumed { .. })).count(), 1, "one agent was started: {feed:?}");
+    // And a third try, with the session live, is refused as well.
+    let err = raw_create(&mut person, &vault, Some(&info.id), false).unwrap_err();
+    assert!(err.message.contains("still running"), "{}", err.message);
+}
+
+#[test]
+fn creating_answers_at_once_and_the_start_finishes_through_state_events() {
+    let env = env();
+    env.script(json!({"init_delay_ms": 1500}));
+    let (vault, _) = env.add_vault("Notes");
+    let _daemon = env.start();
+    let mut viewer = env.viewer();
+    let mut person = env.person();
+    let began = Instant::now();
+    let created = raw_create(&mut person, &vault, None, false).unwrap();
+    assert!(began.elapsed() < Duration::from_millis(1200), "create waited for the agent: {:?}", began.elapsed());
+    assert_eq!(created.state, SessionState::Starting);
+    // A message now is refused, politely.
+    let err = person.call(Call::SessionSend { session: created.id.clone(), text: "too early".into(), context: vec![] }).unwrap_err();
+    assert!(err.message.contains("still starting"), "{}", err.message);
+    // The session cannot be deleted while it starts.
+    assert!(person.call(Call::SessionDelete { session: created.id.clone() }).is_err());
+    // The listing shows it starting, not ended.
+    assert_eq!(state_of(&mut person, &created.id), SessionState::Starting);
+
+    let events = collect(&mut viewer, &created.id, |b| matches!(b, SessionEventBody::State { state: SessionState::Idle, .. }));
+    assert!(matches!(events.last(), Some(SessionEventBody::State { state: SessionState::Idle, .. })));
+    send(&mut person, &created.id, "now");
+    collect(&mut viewer, &created.id, turn_ended);
+}
+
+#[test]
+fn a_failed_start_after_an_instant_answer_is_a_failed_state_event() {
+    let env = env();
+    env.script(json!({"init_error": "no way 137"}));
+    let (vault, _) = env.add_vault("Notes");
+    let _daemon = env.start();
+    let mut viewer = env.viewer();
+    let mut person = env.person();
+    let created = raw_create(&mut person, &vault, None, false).unwrap();
+    assert_eq!(created.state, SessionState::Starting);
+    let events = collect(&mut viewer, &created.id, |b| matches!(b, SessionEventBody::State { state: SessionState::Failed, .. }));
+    let Some(SessionEventBody::State { reason, .. }) = events.last() else { unreachable!() };
+    assert!(reason.as_deref().unwrap().contains("no way 137"), "{reason:?}");
+}
+
+#[test]
+fn ending_a_session_while_it_starts_wins() {
+    let env = env();
+    env.script(json!({"init_delay_ms": 800}));
+    let (vault, _) = env.add_vault("Notes");
+    let _daemon = env.start();
+    let mut person = env.person();
+    let created = raw_create(&mut person, &vault, None, false).unwrap();
+    person.call(Call::SessionEnd { session: created.id.clone() }).unwrap();
+    assert_eq!(state_of(&mut person, &created.id), SessionState::Ended);
+
+    // The agent finishes starting meanwhile; the session stays ended.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while env.session_dir(&created.id).exists() {
+        assert!(Instant::now() < deadline, "the socket of the ended session was never removed");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(state_of(&mut person, &created.id), SessionState::Ended);
+    let feed = replay(&mut person, &created.id);
+    let states = feed_states(&feed);
+    assert_eq!(states.last(), Some(&SessionState::Ended), "{states:?}");
+    assert!(!states.contains(&SessionState::Idle) && !states.contains(&SessionState::Failed), "{states:?}");
+    let err = person.call(Call::SessionSend { session: created.id.clone(), text: "x".into(), context: vec![] }).unwrap_err();
+    assert!(err.message.contains("ended"), "{}", err.message);
+}
+
+#[test]
+fn a_permission_request_made_while_the_turn_is_cancelled_makes_no_card() {
+    let env = env();
+    // The agent asks only after it was told to cancel.
+    env.script(json!({"turns": [[{"do": "permission", "after_cancel": true, "title": "Run a shell"}]]}));
+    let (vault, _) = env.add_vault("Notes");
+    env.set(&vault, AgentPermission::Approve);
+    let _daemon = env.start();
+    let mut viewer = env.viewer();
+    let mut person = env.person();
+    let info = create(&mut person, &vault);
+    send(&mut person, &info.id, "go");
+    collect(&mut viewer, &info.id, |b| matches!(b, SessionEventBody::State { state: SessionState::Working, .. }));
+    std::thread::sleep(Duration::from_millis(200));
+    person.call(Call::SessionCancel { session: info.id.clone() }).unwrap();
+    let events = collect(&mut viewer, &info.id, turn_ended);
+    assert!(!events.iter().any(|e| matches!(e, SessionEventBody::ApprovalRequested { .. })), "no card for the cancelled turn: {events:?}");
+    assert!(matches!(events.last(), Some(SessionEventBody::TurnEnded { stop_reason }) if stop_reason == "cancelled"));
+    let queue: Vec<ApprovalInfo> = serde_json::from_value(person.call(Call::ApprovalList { vault: None }).unwrap()).unwrap();
+    assert!(queue.is_empty(), "{queue:?}");
+}
+
+#[test]
+fn a_subscriber_that_fell_behind_is_told_to_read_again() {
+    let env = env();
+    // Tens of thousands of one-character chunks: far more than the daemon's
+    // event buffer holds while a slow reader's socket is full.
+    env.script(json!({"turns": [[{"do": "text", "text": "x".repeat(40_000), "chunk_size": 1}]]}));
+    let (vault, _) = env.add_vault("Notes");
+    let _daemon = env.start();
+    let mut slow = env.viewer();
+    let mut person = env.person();
+    let info = create(&mut person, &vault);
+    send(&mut person, &info.id, "flood");
+    // Do not read until the turn is over.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while state_of(&mut person, &info.id) != SessionState::Idle {
+        assert!(Instant::now() < deadline, "the turn never ended");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let mut resync = false;
+    let mut seen = 0usize;
+    while let Some(event) = slow.next_event(Duration::from_millis(500)).unwrap() {
+        seen += 1;
+        resync |= event == Event::Resync;
+    }
+    assert!(resync, "the slow reader lost events and was not told ({seen} events read)");
+    // After a resync the stored feed has everything, to the end of the turn.
+    let tail = replay_after(&mut person, &info.id, 40_000);
+    assert!(tail.iter().any(|e| matches!(e.body, SessionEventBody::TurnEnded { .. })), "{} events after 40000", tail.len());
+}
+
+#[test]
+fn an_ephemeral_session_ends_with_the_connection_that_made_it() {
+    let env = env();
+    let (vault, _) = env.add_vault("Notes");
+    let _daemon = env.start();
+    let mut person = env.person();
+    let mut owner = env.person();
+    let ephemeral = raw_create(&mut owner, &vault, None, true).unwrap();
+    let lasting = raw_create(&mut owner, &vault, None, false).unwrap();
+    assert_eq!(settle(&mut person, &ephemeral.id).state, SessionState::Idle);
+    assert_eq!(settle(&mut person, &lasting.id).state, SessionState::Idle);
+
+    drop(owner);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while state_of(&mut person, &ephemeral.id) != SessionState::Ended {
+        assert!(Instant::now() < deadline, "the session outlived its connection");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while env.session_dir(&ephemeral.id).exists() {
+        assert!(Instant::now() < deadline, "its socket stayed");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(state_of(&mut person, &lasting.id), SessionState::Idle, "a session made without the flag stays");
+}
+
+#[test]
+fn a_session_a_dead_daemon_left_running_is_ended_with_the_reason() {
+    use cerboid::sessions::store::{Meta, Store};
+    let env = env();
+    let (vault, _) = env.add_vault("Notes");
+    let id = "00000000-0000-4000-8000-000000000137".to_string();
+    {
+        // What a daemon that crashed in the middle of a turn leaves.
+        let store = Store::new(env.data.join("cerbo/sessions"));
+        let mut log = store.open_log(&vault, &id).unwrap();
+        log.append(SessionEventBody::State { state: SessionState::Idle, reason: None, stderr_tail: None }).unwrap();
+        log.append(SessionEventBody::UserMessage { text: "mid-turn".into(), context: vec![] }).unwrap();
+        log.append(SessionEventBody::State { state: SessionState::Working, reason: None, stderr_tail: None }).unwrap();
+        store
+            .write_meta(&Meta {
+                id: id.clone(),
+                vault: vault.clone(),
+                agent: AgentKind::Opencode,
+                title: "mid-turn".into(),
+                state: SessionState::Working,
+                created_at: "2026-01-01T00:00:00.000Z".into(),
+                updated_at: "2026-01-01T00:00:01.000Z".into(),
+                resumable: false,
+                sandboxed: false,
+                warning: None,
+                acp_session_id: None,
+            })
+            .unwrap();
+    }
+    let daemon = env.start();
+    let mut person = env.person();
+    let feed = replay(&mut person, &id);
+    let last = feed.last().unwrap();
+    assert!(
+        matches!(&last.body, SessionEventBody::State { state: SessionState::Ended, reason, .. } if reason.as_deref() == Some("daemon restarted")),
+        "{feed:?}"
+    );
+    assert_eq!(state_of(&mut person, &id), SessionState::Ended);
+    // Looking again changes nothing, and neither does another daemon.
+    assert_eq!(replay(&mut person, &id).len(), feed.len());
+    drop(daemon);
+    let _again = env.start();
+    let mut person = env.person();
+    assert_eq!(replay(&mut person, &id).len(), feed.len(), "settled once");
+}
+
+#[test]
+fn what_an_agent_sends_is_cut_to_a_size_and_the_feed_has_a_cap() {
+    let env = env();
+    env.script(json!({"turns": [[
+        {"do": "tool_call", "id": "i".repeat(500), "title": "t".repeat(2000), "kind": "other"},
+        {"do": "text", "text": "y".repeat(70_000)}
+    ]]}));
+    let (vault, _) = env.add_vault("Notes");
+    let _daemon = env.start();
+    let mut viewer = env.viewer();
+    let mut person = env.person();
+    let info = create(&mut person, &vault);
+    send(&mut person, &info.id, "go");
+    let events = collect(&mut viewer, &info.id, turn_ended);
+    let text = texts(&events);
+    assert_eq!(text.chars().count(), 64 * 1024 + 1, "one chunk is cut to the limit, with a mark");
+    let call = events.iter().find_map(|e| match e {
+        SessionEventBody::ToolCall { id, title, .. } => Some((id.clone(), title.clone())),
+        _ => None,
+    });
+    let (id, title) = call.unwrap();
+    assert_eq!(id.chars().count(), 200);
+    assert_eq!(title.chars().count(), 401);
+}
+
+#[test]
+fn a_feed_that_reaches_its_cap_ends_the_session_with_an_error() {
+    let mut env = env();
+    env.feed_cap = 20_000;
+    env.script(json!({"turns": [[{"do": "text", "text": "z".repeat(100_000), "chunk_size": 100}]]}));
+    let (vault, _) = env.add_vault("Notes");
+    let _daemon = env.start();
+    let mut person = env.person();
+    let info = create(&mut person, &vault);
+    send(&mut person, &info.id, "flood");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while state_of(&mut person, &info.id) != SessionState::Failed {
+        assert!(Instant::now() < deadline, "the session never failed");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let feed = replay(&mut person, &info.id);
+    let reason = feed.iter().rev().find_map(|e| match &e.body {
+        SessionEventBody::State { state: SessionState::Failed, reason, .. } => reason.clone(),
+        _ => None,
+    });
+    assert!(reason.unwrap().contains("size limit"));
+    assert!(feed.iter().any(|e| matches!(&e.body, SessionEventBody::Error { message } if message.contains("size limit"))));
+    let file = env.data.join("cerbo/sessions").join(&vault).join(format!("{}.jsonl", info.id));
+    let size = std::fs::metadata(&file).unwrap().len();
+    assert!(size < 20_000 + 1024 * 1024, "{size}");
+    assert!(size > 19_000 - 2_000, "the feed grew to its cap: {size}");
+    // The agent is stopped: nothing more arrives.
+    let before = replay(&mut person, &info.id).len();
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(replay(&mut person, &info.id).len(), before);
+    assert!(person.call(Call::SessionSend { session: info.id.clone(), text: "x".into(), context: vec![] }).is_err());
+}
+
+#[test]
+fn the_pending_cap_counts_a_session_not_a_connection() {
+    let env = env();
+    let (vault, _) = env.add_vault("Notes");
+    let page = seed_page(&env, &vault, "Page", "old");
+    env.set(&vault, AgentPermission::Approve);
+    let _daemon = start_tweaked(&env, |config| config.max_pending_per_agent = 2);
+    let mut person = env.person();
+    let info = create(&mut person, &vault);
+    let socket = env.agent_socket(&info.id);
+    let connect = || Client::connect_bound(&socket, ClientKind::Agent, Some("fake"), &vault).unwrap();
+
+    // Two connections of the agent use the two places.
+    let mut a = connect();
+    let mut b = connect();
+    a.send(edit(&vault, &page, "one")).unwrap();
+    b.send(edit(&vault, &page, "two")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let queue: Vec<ApprovalInfo> = serde_json::from_value(person.call(Call::ApprovalList { vault: None }).unwrap()).unwrap();
+        if queue.len() == 2 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{queue:?}");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    // A third connection, and a fourth, get none: opening connections does not help.
+    for _ in 0..2 {
+        let mut more = connect();
+        let err = more.call(edit(&vault, &page, "three")).unwrap_err();
+        assert_eq!(err.code, cerbo_core::rpc::CODE_TOO_MANY_PENDING, "{}", err.message);
+        assert!(err.message.contains("this session"), "{}", err.message);
+    }
+}
+
+#[test]
+fn an_agent_that_starts_in_another_mode_is_put_into_the_default_mode() {
+    let env = env();
+    // A real adapter can pick `auto` from a vault's settings; the fake does.
+    env.script(json!({"modes": {"currentModeId": "auto", "availableModes": [{"id": "default"}, {"id": "auto"}]}}));
+    let (vault, _) = env.add_vault("Notes");
+    let _daemon = env.start();
+    let mut person = env.person();
+    let info = create(&mut person, &vault);
+    assert_eq!(info.state, SessionState::Idle);
+    let log = std::fs::read_to_string(env.data.join("cerbo/agents/opencode/home/fake-acp-modes.log")).unwrap_or_default();
+    assert_eq!(log.trim(), "default", "session/set_mode was sent once, to `default`");
+
+    // An agent that offers no `default` mode cannot be put there: the session does not start.
+    env.script(json!({"modes": {"currentModeId": "auto", "availableModes": [{"id": "auto"}]}}));
+    let second = create(&mut person, &vault);
+    assert_eq!(second.state, SessionState::Failed);
+}
+
+#[test]
+fn a_finished_search_of_cerbo_shows_its_result_count() {
+    let env = env();
+    env.script(json!({"turns": [[
+        {"do": "tool_call", "id": "s1", "title": "cerbo_search_text", "kind": "search", "status": "in_progress", "raw_input": {"query": "vendor"}},
+        {"do": "tool_update", "id": "s1", "status": "completed", "text": "[\n  {\"uuid\": \"a\", \"title\": \"A\"},\n  {\"uuid\": \"b\", \"title\": \"B\"}\n]"},
+        {"do": "tool_call", "id": "s2", "title": "mcp__cerbo__search_semantic", "kind": "other", "status": "in_progress"},
+        {"do": "tool_update", "id": "s2", "status": "completed", "text": "[{\"uuid\": \"a\"}]"},
+        {"do": "tool_call", "id": "s3", "title": "cerbo_search_text", "kind": "search", "status": "in_progress"},
+        {"do": "tool_update", "id": "s3", "status": "completed", "text": "[]"},
+        {"do": "tool_call", "id": "r1", "title": "cerbo_read_page", "kind": "read", "status": "in_progress"},
+        {"do": "tool_update", "id": "r1", "status": "completed", "text": "[1, 2, 3]"},
+    ]]}));
+    let (vault, _) = env.add_vault("Notes");
+    let _daemon = env.start();
+    let mut viewer = env.viewer();
+    let mut person = env.person();
+    let info = create(&mut person, &vault);
+    send(&mut person, &info.id, "go");
+    let events = collect(&mut viewer, &info.id, turn_ended);
+    let summary = |wanted: &str| {
+        events.iter().find_map(|e| match e {
+            SessionEventBody::ToolUpdate { id, output_summary, .. } if id == wanted => output_summary.clone(),
+            _ => None,
+        })
+    };
+    assert_eq!(summary("s1").as_deref(), Some("2 results"));
+    assert_eq!(summary("s2").as_deref(), Some("1 result"));
+    assert_eq!(summary("s3").as_deref(), Some("0 results"));
+    // Other tools keep their own output.
+    assert_eq!(summary("r1").as_deref(), Some("[1, 2, 3]"));
 }
 
 // ── The real sandbox ─────────────────────────────────────────────────────────

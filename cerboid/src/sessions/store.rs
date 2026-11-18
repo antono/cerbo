@@ -13,7 +13,7 @@
 use cerbo_core::rpc::{AgentKind, SessionEvent, SessionEventBody, SessionInfo, SessionState};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -64,6 +64,17 @@ pub fn valid_id(id: &str) -> bool {
     uuid::Uuid::parse_str(id).is_ok_and(|u| u.hyphenated().to_string() == id)
 }
 
+/// The most a session's feed file may hold (events written by the agent's
+/// activity stop at this size; see [`LogWriter::append`]).
+pub const FEED_CAP_BYTES: u64 = 64 * 1024 * 1024;
+/// Room above the cap kept for the events that end a session (state, error,
+/// end of turn), so a full feed can still say why it ended.
+pub const FEED_RESERVE_BYTES: u64 = 1024 * 1024;
+/// How much of the end of a feed is read to find the last `seq` and to build
+/// the transcript of a resume. An event is at most a few hundred KiB (chunks
+/// are cut per event), so this holds the last events whole.
+pub const TAIL_BYTES: u64 = 2 * 1024 * 1024;
+
 fn err(path: &Path, e: impl std::fmt::Display) -> String {
     format!("{}: {e}", path.display())
 }
@@ -78,15 +89,26 @@ fn private_dir(dir: &Path) -> Result<(), String> {
 #[derive(Debug, Clone)]
 pub struct Store {
     root: PathBuf,
+    feed_cap: u64,
 }
 
 impl Store {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self { root, feed_cap: FEED_CAP_BYTES }
+    }
+
+    /// A store whose feeds stop at `feed_cap` bytes (tests use small ones).
+    pub fn with_feed_cap(root: PathBuf, feed_cap: u64) -> Self {
+        Self { root, feed_cap }
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// The size limit of a feed, in bytes.
+    pub fn feed_cap(&self) -> u64 {
+        self.feed_cap
     }
 
     fn vault_dir(&self, vault: &str) -> PathBuf {
@@ -183,7 +205,18 @@ impl Store {
         let path = self.log_path(vault, id);
         let next_seq = last_seq(&path) + 1;
         let file = OpenOptions::new().create(true).append(true).mode(0o600).open(&path).map_err(|e| err(&path, e))?;
-        Ok(LogWriter { file, next_seq, path })
+        let size = file.metadata().map_err(|e| err(&path, e))?.len();
+        Ok(LogWriter { file, next_seq, path, size, cap: self.feed_cap })
+    }
+
+    /// The last events of a feed: those in its final `max_bytes` bytes (the
+    /// first, possibly cut, line is dropped), oldest first. A feed of any size
+    /// costs at most `max_bytes` to read.
+    pub fn read_tail_events(&self, vault: &str, id: &str, max_bytes: u64) -> Vec<SessionEvent> {
+        if !valid_id(id) || vault.contains(['/', '\\']) {
+            return Vec::new();
+        }
+        tail_events(&self.log_path(vault, id), max_bytes)
     }
 
     /// The events of a session with `seq` above `after`, at most `limit`.
@@ -202,16 +235,47 @@ impl Store {
     }
 }
 
-/// The highest `seq` in a feed; 0 for none.
+/// The events in the last `max_bytes` bytes of the file at `path`.
+fn tail_events(path: &Path, max_bytes: u64) -> Vec<SessionEvent> {
+    let Ok(mut file) = File::open(path) else { return Vec::new() };
+    let Ok(len) = file.metadata().map(|m| m.len()) else { return Vec::new() };
+    let start = len.saturating_sub(max_bytes);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return Vec::new();
+    }
+    let mut bytes = Vec::new();
+    if file.take(max_bytes).read_to_end(&mut bytes).is_err() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines = text.lines();
+    if start > 0 {
+        // Where the read began is likely the middle of a line.
+        lines.next();
+    }
+    lines.filter_map(|line| serde_json::from_str::<SessionEvent>(line).ok()).collect()
+}
+
+/// The highest `seq` in a feed; 0 for none. Only the end of the file is read.
 fn last_seq(path: &Path) -> u64 {
-    let Ok(file) = File::open(path) else { return 0 };
-    BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .filter_map(|line| serde_json::from_str::<SessionEvent>(&line).ok())
-        .map(|e| e.seq)
-        .max()
-        .unwrap_or(0)
+    tail_events(path, TAIL_BYTES).iter().map(|e| e.seq).max().unwrap_or(0)
+}
+
+/// Why an event could not be appended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppendError {
+    /// The feed reached its size limit.
+    Full,
+    Io(String),
+}
+
+impl std::fmt::Display for AppendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Full => write!(f, "the session feed reached its size limit"),
+            Self::Io(e) => write!(f, "{e}"),
+        }
+    }
 }
 
 /// Appends events to one feed, numbering them.
@@ -219,16 +283,31 @@ pub struct LogWriter {
     file: File,
     next_seq: u64,
     path: PathBuf,
+    /// Bytes in the file.
+    size: u64,
+    cap: u64,
+}
+
+/// The events that end things stay writable in the reserve above the cap.
+fn is_closing(body: &SessionEventBody) -> bool {
+    matches!(body, SessionEventBody::State { .. } | SessionEventBody::Error { .. } | SessionEventBody::TurnEnded { .. })
 }
 
 impl LogWriter {
     /// Append `body` as the next event. The line is written whole and at once,
-    /// so a reader of the file never sees half an event.
-    pub fn append(&mut self, body: SessionEventBody) -> Result<SessionEvent, String> {
+    /// so a reader of the file never sees half an event. An event that would
+    /// take the file over its cap is refused with [`AppendError::Full`], except
+    /// state, error and end-of-turn events, which may use the reserve above it.
+    pub fn append(&mut self, body: SessionEventBody) -> Result<SessionEvent, AppendError> {
         let event = SessionEvent { seq: self.next_seq, at: now(), body };
-        let mut line = serde_json::to_vec(&event).map_err(|e| e.to_string())?;
+        let mut line = serde_json::to_vec(&event).map_err(|e| AppendError::Io(e.to_string()))?;
         line.push(b'\n');
-        self.file.write_all(&line).map_err(|e| err(&self.path, e))?;
+        let limit = if is_closing(&event.body) { self.cap.saturating_add(FEED_RESERVE_BYTES) } else { self.cap };
+        if self.size.saturating_add(line.len() as u64) > limit {
+            return Err(AppendError::Full);
+        }
+        self.file.write_all(&line).map_err(|e| AppendError::Io(err(&self.path, e)))?;
+        self.size += line.len() as u64;
         self.next_seq += 1;
         Ok(event)
     }
@@ -305,6 +384,50 @@ mod tests {
         assert!(store.find(&id(2)).is_none());
         assert!(store.read_events(V, &id(2), None, 10).is_empty());
         assert_eq!(store.list(Some(V)).len(), 2);
+    }
+
+    #[test]
+    fn a_feed_stops_at_its_cap_but_keeps_room_to_say_why() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::with_feed_cap(tmp.path().join("sessions"), 1000);
+        let sid = id(1);
+        let mut log = store.open_log(V, &sid).unwrap();
+        let mut written = 0;
+        let refused = loop {
+            match log.append(SessionEventBody::AgentText { text: "x".repeat(100) }) {
+                Ok(_) => written += 1,
+                Err(e) => break e,
+            }
+        };
+        assert_eq!(refused, AppendError::Full);
+        assert!(written > 3 && written < 10, "{written}");
+        // The events that end things still fit, in the reserve above the cap.
+        log.append(SessionEventBody::Error { message: "the feed is full".into() }).unwrap();
+        log.append(SessionEventBody::State { state: SessionState::Failed, reason: Some("full".into()), stderr_tail: None }).unwrap();
+        // The size counts what an earlier writer left in the file.
+        drop(log);
+        let mut log = store.open_log(V, &sid).unwrap();
+        assert_eq!(log.append(SessionEventBody::AgentText { text: "more".into() }), Err(AppendError::Full));
+    }
+
+    #[test]
+    fn the_tail_of_a_big_feed_is_read_without_reading_all_of_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::new(tmp.path().join("sessions"));
+        let sid = id(1);
+        let mut log = store.open_log(V, &sid).unwrap();
+        for n in 0..200 {
+            log.append(SessionEventBody::AgentText { text: format!("chunk {n} {}", "y".repeat(200)) }).unwrap();
+        }
+        let tail = store.read_tail_events(V, &sid, 3000);
+        assert!(!tail.is_empty() && tail.len() < 20, "{}", tail.len());
+        assert_eq!(tail.last().unwrap().seq, 200, "the end is there");
+        assert!(tail.windows(2).all(|w| w[1].seq == w[0].seq + 1), "whole events, in order");
+        // A bound above the file's size gives everything.
+        assert_eq!(store.read_tail_events(V, &sid, u64::MAX / 2).len(), 200);
+        // Numbering continues from the end even when only the tail is looked at.
+        drop(log);
+        assert_eq!(store.open_log(V, &sid).unwrap().append(SessionEventBody::AgentText { text: "next".into() }).unwrap().seq, 201);
     }
 
     #[test]

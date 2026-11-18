@@ -660,15 +660,25 @@ fn an_agent_connection_may_have_only_so_many_requests_waiting() {
     assert!(err.message.contains('2'), "{}", err.message);
     assert_eq!(person.call(Call::ApprovalList { vault: None }).unwrap().as_array().unwrap().len(), 2);
 
-    // The limit is per connection: another agent connection still queues.
+    // The limit is the vault's, not the connection's: an agent that opens
+    // another connection gets no more places.
     let mut other = env.agent("other", &id);
-    other.send(rename("Four")).unwrap();
+    let err = other.call(rename("Four")).unwrap_err();
+    assert_eq!(err.code, CODE_TOO_MANY_PENDING, "a second connection of the same vault shares the places");
+    assert!(err.message.contains("this vault"), "{}", err.message);
+    assert_eq!(person.call(Call::ApprovalList { vault: None }).unwrap().as_array().unwrap().len(), 2);
+    // Another vault has places of its own.
+    let (second, _) = env.add_vault("second");
+    env.set(&second, AgentPermission::Approve);
+    let second_page = seed_page(&env, &second, "Other", "x\n");
+    let mut elsewhere = env.agent("elsewhere", &second);
+    elsewhere.send(Call::PageRename { vault: second.clone(), page: second_page, title: "Four".into() }).unwrap();
     wait_queue(&mut person, 3);
 
     // An answered request frees a place.
     person.call(Call::ApprovalAnswer { approval: queue[0].id, approve: false }).unwrap();
     wait_queue(&mut person, 2);
-    agent.send(rename("Five")).unwrap();
+    other.send(rename("Five")).unwrap();
     wait_queue(&mut person, 3);
 }
 

@@ -26,7 +26,10 @@ pub mod launch;
 /// 4: agent sessions (`agent_list`, `session_*`, [`Event::Session`]) and tool
 ///    approvals ([`ApprovalInfo`] gained `session`, `tool_title`, `tool_kind`);
 ///    an older daemon would answer the new calls with a parse error.
-pub const PROTOCOL_VERSION: u32 = 4;
+/// 5: [`Event::Resync`] (a client that fell behind is told to read again; an
+///    older client cannot parse an event kind it does not know) and the
+///    `ephemeral` flag of [`Call::SessionCreate`].
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Error code of a refused handshake.
 pub const CODE_PROTOCOL_MISMATCH: &str = "protocol_mismatch";
@@ -273,6 +276,10 @@ pub struct SessionInfo {
     pub warning: Option<String>,
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// One entry of a session's feed. `seq` grows by one per event within a
 /// session, from 1, and is what [`Call::SessionEvents`] pages by.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -349,6 +356,10 @@ pub enum Event {
     /// Something happened in an agent session. Sent to app and CLI
     /// connections only, never to agent connections.
     Session { vault: String, session: String, event: SessionEvent },
+    /// This connection fell behind and the daemon dropped events for it: read
+    /// the state again (`session_list`, `session_events` after the last `seq`
+    /// held, `approval_list`). Sent to app and CLI connections only.
+    Resync,
 }
 
 impl Event {
@@ -359,7 +370,7 @@ impl Event {
             | Event::ApprovalResolved { vault, .. }
             | Event::Session { vault, .. } => Some(vault),
             Event::ApprovalRequested { approval } => Some(&approval.vault),
-            Event::VaultsChanged => None,
+            Event::VaultsChanged | Event::Resync => None,
         }
     }
 }
@@ -517,13 +528,18 @@ pub enum Call {
     // Agent sessions. None of these are for agent connections.
     /// The agent CLIs and whether each can run: a list of [`AgentInfo`].
     AgentList {},
-    /// Start a session in a vault: answers a [`SessionInfo`]. With
-    /// `resume_from`, continue that earlier session of the same vault.
+    /// Start a session in a vault: answers a [`SessionInfo`] at once, in the
+    /// `starting` state; the agent's start finishes in the background and is
+    /// told by `state` events (`idle`, or `failed` with the reason). With
+    /// `resume_from`, continue that earlier session of the same vault. With
+    /// `ephemeral`, the daemon ends the session when this connection closes.
     SessionCreate {
         vault: String,
         agent: AgentKind,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resume_from: Option<String>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        ephemeral: bool,
     },
     /// Send a message to the agent; answers null once it is accepted. The
     /// turn's progress arrives as [`Event::Session`].
@@ -836,12 +852,12 @@ mod tests {
         assert_eq!(line, r#"{"id":1,"method":"agent_list","params":{}}"#);
         let line = round_trip(Request {
             id: 2,
-            call: Call::SessionCreate { vault: "v".into(), agent: AgentKind::Claude, resume_from: None },
+            call: Call::SessionCreate { vault: "v".into(), agent: AgentKind::Claude, resume_from: None, ephemeral: false },
         });
         assert_eq!(line, r#"{"id":2,"method":"session_create","params":{"vault":"v","agent":"claude"}}"#);
         round_trip(Request {
             id: 3,
-            call: Call::SessionCreate { vault: "v".into(), agent: AgentKind::Opencode, resume_from: Some("s1".into()) },
+            call: Call::SessionCreate { vault: "v".into(), agent: AgentKind::Opencode, resume_from: Some("s1".into()), ephemeral: false },
         });
         let line = round_trip(Request {
             id: 4,
@@ -884,7 +900,7 @@ mod tests {
         assert_eq!(Call::SessionList { vault: Some("v".into()) }.vault(), Some("v"));
         assert_eq!(Call::SessionList { vault: None }.vault(), None);
         assert_eq!(
-            Call::SessionCreate { vault: "v".into(), agent: AgentKind::Claude, resume_from: None }.vault(),
+            Call::SessionCreate { vault: "v".into(), agent: AgentKind::Claude, resume_from: None, ephemeral: false }.vault(),
             Some("v")
         );
         assert!(!Call::SessionSend { session: "s".into(), text: "x".into(), context: vec![] }.is_write());
@@ -1071,6 +1087,8 @@ mod tests {
             },
         });
         round_trip(ServerMessage::Event { event: Event::VaultsChanged });
+        let line = round_trip(ServerMessage::Event { event: Event::Resync });
+        assert_eq!(line, r#"{"type":"event","event":{"kind":"resync"}}"#);
         round_trip(ServerMessage::Error { error: RpcError::new(CODE_BAD_REQUEST, "x") });
     }
 

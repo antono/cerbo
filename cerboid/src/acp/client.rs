@@ -3,12 +3,12 @@
 
 use super::types::*;
 use serde_json::{json, Value};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -163,9 +163,20 @@ pub struct PermissionRequest {
     /// The request params as received.
     pub raw: Value,
     responder: oneshot::Sender<PermissionOutcome>,
+    /// Set, synchronously, by [`AcpClient::cancel`] for every request of the
+    /// session that is open then, so a request that waits in the event stream
+    /// while the turn is cancelled can be told from a live one.
+    cancelled: Arc<AtomicBool>,
 }
 
 impl PermissionRequest {
+    /// Whether the turn this request belongs to was cancelled after the agent
+    /// asked (or before it was read from the event stream). Such a request was
+    /// answered `cancelled` already: show no card for it.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
     /// Allow or reject by choosing one of the offered options. An id that was
     /// not offered answers `cancelled` (never an approval) and is an error.
     /// Also an error when the turn was cancelled meanwhile: the agent already
@@ -233,6 +244,12 @@ struct Inner {
     stderr: Arc<Ring>,
     exit: watch::Receiver<Option<Arc<ExitInfo>>>,
     cancel: broadcast::Sender<String>,
+    /// Sessions whose turn was cancelled and whose `prompt` has not returned
+    /// yet: a permission request read for one of them is answered `cancelled`
+    /// at once and never shown. Always locked before `open_requests`.
+    turn_cancelled: Mutex<HashSet<String>>,
+    /// The permission requests that wait for an answer, by session.
+    open_requests: Mutex<Vec<(String, Arc<AtomicBool>)>>,
     caps: Mutex<Option<AgentCapabilities>>,
     record: Option<Mutex<std::fs::File>>,
     /// Why the client ended the agent, if it did.
@@ -340,6 +357,8 @@ impl AcpClient {
             stderr: Arc::clone(&ring),
             exit: exit_rx,
             cancel: cancel_tx,
+            turn_cancelled: Mutex::new(HashSet::new()),
+            open_requests: Mutex::new(Vec::new()),
             caps: Mutex::new(None),
             record,
             fatal: Mutex::new(None),
@@ -510,6 +529,35 @@ impl AcpClient {
         })
     }
 
+    /// `session/set_mode`: switch the session to the agent's mode `mode_id`.
+    pub async fn set_mode(&self, session_id: &str, mode_id: &str) -> Result<(), AcpError> {
+        self.request("session/set_mode", json!({"sessionId": session_id, "modeId": mode_id}), Some(self.inner.opts.request_timeout)).await?;
+        Ok(())
+    }
+
+    /// Make `wanted` the session's mode when the agent reports a different one
+    /// in `modes` (the `modes` of `session/new` or `session/load`): an agent
+    /// can choose its start mode from files of the vault, which the vault's
+    /// owner is not the person to decide. Nothing is sent when the agent
+    /// reports no modes or is in `wanted` already. An agent that does not offer
+    /// `wanted` is an error. Returns whether the mode was changed.
+    pub async fn pin_mode(&self, session_id: &str, modes: Option<&Value>, wanted: &str) -> Result<bool, AcpError> {
+        let Some(modes) = modes else { return Ok(false) };
+        let current = modes.get("currentModeId").and_then(Value::as_str);
+        if current.is_none() || current == Some(wanted) {
+            return Ok(false);
+        }
+        let offered = modes
+            .get("availableModes")
+            .and_then(Value::as_array)
+            .is_some_and(|all| all.iter().any(|m| m.get("id").and_then(Value::as_str) == Some(wanted)));
+        if !offered {
+            return Err(AcpError::Unsupported(format!("the permission mode `{wanted}` (the agent started in `{}`)", current.unwrap_or_default())));
+        }
+        self.set_mode(session_id, wanted).await?;
+        Ok(true)
+    }
+
     /// `session/prompt`: returns the stop reason when the turn ends. Only block
     /// types the agent advertised are sent (text and resource links always).
     pub async fn prompt(&self, session_id: &str, blocks: &[ContentBlock]) -> Result<StopReason, AcpError> {
@@ -527,9 +575,15 @@ impl AcpClient {
             }
         }
         let prompt: Vec<Value> = blocks.iter().map(ContentBlock::to_value).collect();
+        // A cancel that found no turn to stop (it came after the last one
+        // ended) must not cancel this one.
+        self.inner.turn_cancelled.lock().unwrap().remove(session_id);
         let result = self
             .request("session/prompt", json!({"sessionId": session_id, "prompt": prompt}), self.inner.opts.prompt_timeout)
-            .await?;
+            .await;
+        // The turn is over, however it ended: later requests are a new turn's.
+        self.inner.turn_cancelled.lock().unwrap().remove(session_id);
+        let result = result?;
         let reason = result.get("stopReason").and_then(Value::as_str).ok_or_else(|| AcpError::Protocol("session/prompt: no stopReason".into()))?;
         Ok(StopReason::from(reason))
     }
@@ -539,6 +593,18 @@ impl AcpClient {
     /// `prompt` then ends with `StopReason::Cancelled`.
     pub fn cancel(&self, session_id: &str) {
         // First the permission answers, so no approval can race the cancel.
+        // The flag and the open requests are marked under one lock, so a
+        // request is either open (and marked here) or arrives later (and finds
+        // the flag): none slips between.
+        {
+            let mut cancelled = self.inner.turn_cancelled.lock().unwrap();
+            cancelled.insert(session_id.to_string());
+            for (session, flag) in self.inner.open_requests.lock().unwrap().iter() {
+                if session == session_id {
+                    flag.store(true, Ordering::SeqCst);
+                }
+            }
+        }
         let _ = self.inner.cancel.send(session_id.to_string());
         self.inner.send(json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}}));
     }
@@ -746,9 +812,21 @@ fn handle_request(inner: &Arc<Inner>, events: &mpsc::UnboundedSender<AcpEvent>, 
     let (tx, mut rx) = oneshot::channel::<PermissionOutcome>();
     // Subscribed before the request is shown, so a cancel cannot slip between.
     let mut cancelled = inner.cancel.subscribe();
-    let request = PermissionRequest { session_id: session_id.clone(), tool_call, options, raw: params, responder: tx };
+    let flag = Arc::new(AtomicBool::new(false));
+    {
+        let turn_cancelled = inner.turn_cancelled.lock().unwrap();
+        if turn_cancelled.contains(&session_id) {
+            // The turn was cancelled already: answer `cancelled`, show nothing.
+            drop(turn_cancelled);
+            inner.respond_ok(id, PermissionOutcome::Cancelled.to_result());
+            return;
+        }
+        inner.open_requests.lock().unwrap().push((session_id.clone(), Arc::clone(&flag)));
+    }
+    let request = PermissionRequest { session_id: session_id.clone(), tool_call, options, raw: params, responder: tx, cancelled: Arc::clone(&flag) };
     if events.send(AcpEvent::Permission(request)).is_err() {
         // Nobody listens: never approve.
+        inner.open_requests.lock().unwrap().retain(|(_, f)| !Arc::ptr_eq(f, &flag));
         inner.respond_ok(id, PermissionOutcome::Cancelled.to_result());
         return;
     }
@@ -766,6 +844,7 @@ fn handle_request(inner: &Arc<Inner>, events: &mpsc::UnboundedSender<AcpEvent>, 
         };
         // The receiver ends here: a late `select` finds the request closed.
         drop(rx);
+        inner.open_requests.lock().unwrap().retain(|(_, f)| !Arc::ptr_eq(f, &flag));
         inner.respond_ok(id, outcome.to_result());
     });
 }

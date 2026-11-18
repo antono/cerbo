@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
-use store::{LogWriter, Meta, Store};
+use store::{AppendError, LogWriter, Meta, Store};
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 
@@ -49,8 +49,17 @@ const TITLE_CHARS: usize = 80;
 /// How much of an earlier conversation is handed to an agent that cannot load
 /// its own session, in characters (the end of it is kept).
 const TRANSCRIPT_CHARS: usize = 12_000;
-/// The longest tool input or output shown in a feed row, in characters.
+/// The longest tool input or output shown in a feed row, in characters. Also
+/// the longest tool title and the longest title of an approval card.
 const SUMMARY_CHARS: usize = 400;
+/// The longest text of one `agent_text` or `agent_thought` event, in
+/// characters: what the agent sends beyond it is cut. Agents stream small
+/// chunks; this only stops one huge chunk from filling the feed.
+const CHUNK_CHARS: usize = 64 * 1024;
+/// The longest tool call id, kind or status kept in a feed event.
+const ID_CHARS: usize = 200;
+/// How many tool calls are remembered to count the results of a search.
+const TOOL_MEMORY: usize = 256;
 
 /// The parts of the environment the session manager looks at; tests give
 /// their own.
@@ -66,6 +75,8 @@ pub struct Settings {
     pub current_exe: Option<PathBuf>,
     /// The directory of the per-session socket directories.
     pub sockets_dir: PathBuf,
+    /// The most a session's feed file may hold, in bytes.
+    pub feed_cap: u64,
 }
 
 impl Settings {
@@ -76,6 +87,7 @@ impl Settings {
             cerbo_bin_env: std::env::var_os("CERBO_BIN"),
             current_exe: std::env::current_exe().ok(),
             sockets_dir: paths.dir.join("sessions"),
+            feed_cap: store::FEED_CAP_BYTES,
         }
     }
 
@@ -118,8 +130,9 @@ impl Drop for SocketGuard {
 }
 
 /// Opens the socket of a session: `(session id, vault id, socket directory)`.
-/// The daemon's server provides it; the directory is created by it.
-pub type SocketOpener<'a> = dyn Fn(&str, &str, &Path) -> Result<SocketGuard, String> + Send + Sync + 'a;
+/// The daemon's server provides it; the directory is created by it. It is
+/// shared because the start of an agent goes on after `create` has answered.
+pub type SocketOpener = Arc<dyn Fn(&str, &str, &Path) -> Result<SocketGuard, String> + Send + Sync>;
 
 // ── Sessions ─────────────────────────────────────────────────────────────────
 
@@ -138,6 +151,8 @@ struct Session {
     /// Set when the session is being ended on purpose, so the agent's exit is
     /// not reported as a failure.
     ending: AtomicBool,
+    /// Set once the feed hit its size limit and the session is being failed.
+    capped: AtomicBool,
 }
 
 impl Session {
@@ -167,6 +182,9 @@ struct Live {
     /// (resume without `session/load`).
     context: Mutex<Option<String>>,
     done: mpsc::UnboundedSender<PromptDone>,
+    /// Titles of the running search tool calls of cerbo, by call id, to turn
+    /// their result into a count.
+    searches: Mutex<HashMap<String, String>>,
 }
 
 enum PromptDone {
@@ -177,6 +195,9 @@ enum PromptDone {
 struct StartFailure {
     reason: String,
     stderr_tail: Option<String>,
+    /// The session was ended (or the daemon stopped) while it started: nothing
+    /// failed, and whoever ended it has said so.
+    aborted: bool,
 }
 
 impl StartFailure {
@@ -189,11 +210,28 @@ impl StartFailure {
             }
             other => (other.to_string(), client.map(AcpClient::stderr_tail)),
         };
-        Self { reason, stderr_tail: tail.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()) }
+        Self { reason, stderr_tail: tail.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()), aborted: false }
     }
 
     fn plain(reason: impl Into<String>) -> Self {
-        Self { reason: reason.into(), stderr_tail: None }
+        Self { reason: reason.into(), stderr_tail: None, aborted: false }
+    }
+
+    fn aborted() -> Self {
+        Self { reason: "the session ended while the agent started".to_string(), stderr_tail: None, aborted: true }
+    }
+}
+
+/// A session id held while its agent starts, so no second start of it can
+/// begin. Released when dropped.
+struct Reservation {
+    manager: Arc<Manager>,
+    id: String,
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        self.manager.reserved.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.id);
     }
 }
 
@@ -207,7 +245,12 @@ pub struct Manager {
     store: Store,
     registry: Mutex<Option<(Instant, Arc<AgentRegistry>)>>,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
+    /// Ids of the sessions whose agent is starting.
+    reserved: Mutex<HashSet<String>>,
+    /// Held while an interrupted session is settled, so it is done once.
+    settle_lock: Mutex<()>,
     stopping: AtomicBool,
+    me: Weak<Manager>,
 }
 
 fn failed(message: impl Into<String>) -> RpcError {
@@ -226,6 +269,11 @@ fn agent_title(kind: AgentKind) -> &'static str {
         AgentKind::Opencode => "OpenCode",
         AgentKind::Claude => "Claude Code",
     }
+}
+
+/// `text` cut to `max_chars` characters, without a mark.
+fn clip(text: &str, max_chars: usize) -> String {
+    text.chars().take(max_chars).collect()
 }
 
 fn truncate(text: &str, max_chars: usize) -> String {
@@ -299,17 +347,22 @@ impl Manager {
         approval_timeout: Option<Duration>,
     ) -> Arc<Self> {
         let store_root = settings.data_root().map(|d| d.join("sessions")).unwrap_or_else(|_| settings.sockets_dir.join("no-store"));
-        let manager = Arc::new(Self {
+        let manager = Arc::new_cyclic(|me| Self {
+            store: Store::with_feed_cap(store_root, settings.feed_cap),
             settings,
             ctx,
             approvals: Arc::clone(&approvals),
             events,
             approval_timeout,
-            store: Store::new(store_root),
             registry: Mutex::new(None),
             sessions: Mutex::new(HashMap::new()),
+            reserved: Mutex::new(HashSet::new()),
+            settle_lock: Mutex::new(()),
             stopping: AtomicBool::new(false),
+            me: me.clone(),
         });
+        // Sessions of an earlier daemon have no agent any more.
+        manager.settle_stored(None);
         // Approval cards of a session go into its feed from here, whoever
         // asked: the agent's tools (this module) or its vault writes (server).
         let weak: Weak<Manager> = Arc::downgrade(&manager);
@@ -354,6 +407,11 @@ impl Manager {
         }
         let event = match inner.log.append(body) {
             Ok(event) => event,
+            Err(AppendError::Full) => {
+                drop(inner);
+                self.feed_full(session);
+                return None;
+            }
             Err(e) => {
                 eprintln!("cerboid: cannot write the feed of session {}: {e}", session.id);
                 return None;
@@ -365,6 +423,33 @@ impl Manager {
         }
         let _ = self.events.send(Event::Session { vault: session.vault.clone(), session: session.id.clone(), event: event.clone() });
         Some(event)
+    }
+
+    /// The feed of a session reached its size limit: the session ends with an
+    /// error (once), and its agent stops.
+    fn feed_full(&self, session: &Session) {
+        if session.capped.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (Some(me), Some(session)) = (self.me.upgrade(), self.known(&session.id)) else { return };
+        let Ok(handle) = tokio::runtime::Handle::try_current() else { return };
+        handle.spawn(async move {
+            let reason = format!("the session feed reached its size limit ({} MiB)", me.store.feed_cap() / (1024 * 1024));
+            me.fail_session(&session, reason).await;
+        });
+    }
+
+    /// Stop a session's agent and mark the session failed with `reason`.
+    async fn fail_session(&self, session: &Arc<Session>, reason: String) {
+        session.ending.store(true, Ordering::SeqCst);
+        let live = session.live.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(live) = live {
+            self.cancel_approvals_of(session, &live, ApprovalOutcome::Rejected);
+            live.client.shutdown().await;
+            live.socket.lock().unwrap_or_else(|e| e.into_inner()).take();
+        }
+        self.emit(session, SessionEventBody::Error { message: reason.clone() });
+        self.set_state(session, SessionState::Failed, Some(reason), None);
     }
 
     fn set_state(&self, session: &Session, state: SessionState, reason: Option<String>, stderr_tail: Option<String>) {
@@ -416,22 +501,26 @@ impl Manager {
     // ── Create, resume ───────────────────────────────────────────────────────
 
     /// Start a session in `vault`, or, with `resume_from`, continue an earlier
-    /// one of the same vault. Returns once the agent is ready (or has failed:
-    /// then the session is `failed` and its feed says why). A session that
-    /// cannot be tried at all (agent missing or not signed in, no sandbox) is an
-    /// error and leaves nothing behind.
+    /// one of the same vault. Answers at once with the session in the
+    /// `starting` state: the agent starts in the background and the session
+    /// becomes `idle`, or `failed` with its feed saying why (both are state
+    /// events). A session that cannot be tried at all (agent missing or not
+    /// signed in, no sandbox, a resume of a session that runs) is an error and
+    /// leaves nothing behind.
     pub async fn create(
         self: &Arc<Self>,
         vault: VaultRef,
         agent: AgentKind,
         resume_from: Option<String>,
-        open_socket: &SocketOpener<'_>,
+        open_socket: SocketOpener,
     ) -> Result<SessionInfo, RpcError> {
         if self.stopping.load(Ordering::SeqCst) {
             return Err(RpcError::new(rpc::CODE_SHUTTING_DOWN, "the daemon is stopping"));
         }
-        // A session to continue: same vault, not running.
-        let old = match &resume_from {
+        // A session to continue: same vault, not running, not starting. The id
+        // is reserved here, before the first await, so two creates of the same
+        // session cannot both pass.
+        let (old, mut reservation) = match &resume_from {
             Some(id) => {
                 let old = self.find_meta(id).ok_or_else(|| failed(format!("no such session: {id}")))?;
                 if old.vault != vault.id {
@@ -440,12 +529,10 @@ impl Manager {
                 if old.agent != agent {
                     return Err(failed(format!("that session ran with {}; resume it with the same agent", agent_title(old.agent))));
                 }
-                if self.known(id).and_then(|s| s.live()).is_some() {
-                    return Err(failed("that session is still running"));
-                }
-                Some(old)
+                let reservation = self.reserve(&old.id)?;
+                (Some(old), Some(reservation))
             }
-            None => None,
+            None => (None, None),
         };
 
         // What must be true before anything is made.
@@ -476,6 +563,10 @@ impl Manager {
         let vault_root = std::fs::canonicalize(&vault.root).map_err(|e| failed(format!("{}: {e}", vault.root.display())))?;
 
         let id = old.as_ref().map_or_else(|| uuid::Uuid::new_v4().hyphenated().to_string(), |m| m.id.clone());
+        let reservation = match reservation.take() {
+            Some(reservation) => reservation,
+            None => self.reserve(&id)?,
+        };
         let socket_dir = self.settings.sockets_dir.join(&id);
         let spec = SessionSpec {
             kind: agent,
@@ -487,20 +578,114 @@ impl Manager {
             login_file: entry.login_file.clone().filter(|f| f.is_file()),
             real_home: self.settings.host.home.clone(),
             host_path: self.settings.host.path.clone(),
+            protected: self.protected_dirs(&registry),
         };
         let launch = sandbox::plan(&confinement, &spec, &RealFs).map_err(failed)?;
+        // The daemon may have begun to stop while this waited.
+        if self.stopping.load(Ordering::SeqCst) {
+            return Err(RpcError::new(rpc::CODE_SHUTTING_DOWN, "the daemon is stopping"));
+        }
 
         // The record. From here a failure is part of the session.
         let session = self.open_session(&vault, agent, &id, old, &launch)?;
         self.set_state(&session, SessionState::Starting, None, None);
+        let info = session.info();
         let resume = resume_from.is_some();
-        match self.start(&session, &launch, &confinement, &vault_root, &cerbo_bin, &socket_dir, open_socket, resume).await {
-            Ok(()) => {}
-            Err(failure) => {
-                self.set_state(&session, SessionState::Failed, Some(failure.reason), failure.stderr_tail);
+        let manager = Arc::clone(self);
+        tokio::spawn(async move {
+            let _reservation = reservation;
+            let result = manager.start(&session, &launch, &confinement, &vault_root, &cerbo_bin, &socket_dir, &open_socket, resume).await;
+            if let Err(failure) = result
+                && !failure.aborted
+                && !manager.start_cancelled(&session)
+            {
+                manager.set_state(&session, SessionState::Failed, Some(failure.reason), failure.stderr_tail);
+            }
+        });
+        Ok(info)
+    }
+
+    /// Hold `id` while its agent starts; fails when it runs or already starts.
+    fn reserve(self: &Arc<Self>, id: &str) -> Result<Reservation, RpcError> {
+        let mut reserved = self.reserved.lock().unwrap_or_else(|e| e.into_inner());
+        if reserved.contains(id) || self.known(id).is_some_and(|s| s.live().is_some()) {
+            return Err(failed("that session is still running or starting"));
+        }
+        reserved.insert(id.to_string());
+        Ok(Reservation { manager: Arc::clone(self), id: id.to_string() })
+    }
+
+    /// Whether the session's agent is starting (so it has no process to show yet).
+    fn starting(&self, id: &str) -> bool {
+        self.reserved.lock().unwrap_or_else(|e| e.into_inner()).contains(id)
+    }
+
+    /// Directories a sandboxed vault may not be, contain or lie inside: the
+    /// daemon's own config, data, runtime and socket directories, the agent
+    /// homes, and the directory of every agent's login file.
+    fn protected_dirs(&self, registry: &AgentRegistry) -> Vec<PathBuf> {
+        let mut dirs: Vec<PathBuf> = vec![self.ctx.config_dir.clone()];
+        if let Ok(data) = self.settings.data_root() {
+            dirs.push(data);
+        }
+        if let Ok(root) = sandbox::agents_root(&self.settings.host) {
+            dirs.push(root);
+        }
+        dirs.push(self.settings.sockets_dir.clone());
+        if let Some(runtime) = self.settings.sockets_dir.parent() {
+            dirs.push(runtime.to_path_buf());
+        }
+        for kind in [AgentKind::Opencode, AgentKind::Claude] {
+            if let Some(login) = registry.get(kind).and_then(|e| e.login_file.clone())
+                && let Some(parent) = login.parent()
+            {
+                dirs.push(parent.to_path_buf());
             }
         }
-        Ok(session.info())
+        dirs
+    }
+
+    /// Whether the session was ended, or the daemon began to stop, meanwhile.
+    fn start_cancelled(&self, session: &Session) -> bool {
+        session.ending.load(Ordering::SeqCst) || self.stopping.load(Ordering::SeqCst)
+    }
+
+    /// Sessions that no agent of this daemon runs but whose record still says
+    /// they do (the daemon that ran them stopped or crashed): each gets a final
+    /// `state ended` event, so every client agrees on how it ended.
+    fn settle_stored(&self, vault: Option<&str>) {
+        for meta in self.store.list(vault) {
+            if self.known(&meta.id).is_none() {
+                self.settle_stored_one(&meta);
+            }
+        }
+    }
+
+    fn settle_stored_one(&self, listed: &Meta) {
+        let _once = self.settle_lock.lock().unwrap_or_else(|e| e.into_inner());
+        // Look again under the lock: another caller may have settled it.
+        let Some(mut meta) = self.store.find(&listed.id) else { return };
+        if !matches!(meta.state, SessionState::Starting | SessionState::Idle | SessionState::Working)
+            || self.starting(&meta.id)
+            || self.known(&meta.id).is_some()
+        {
+            return;
+        }
+        let appended = self.store.open_log(&meta.vault, &meta.id).and_then(|mut log| {
+            log.append(SessionEventBody::State { state: SessionState::Ended, reason: Some("daemon restarted".to_string()), stderr_tail: None })
+                .map_err(|e| e.to_string())
+        });
+        match appended {
+            Ok(event) => {
+                meta.state = SessionState::Ended;
+                meta.updated_at = event.at.clone();
+                if let Err(e) = self.store.write_meta(&meta) {
+                    eprintln!("cerboid: cannot write the index of session {}: {e}", meta.id);
+                }
+                let _ = self.events.send(Event::Session { vault: meta.vault.clone(), session: meta.id.clone(), event });
+            }
+            Err(e) => eprintln!("cerboid: cannot end the interrupted session {}: {e}", meta.id),
+        }
     }
 
     /// The id of the vault a session belongs to.
@@ -550,6 +735,7 @@ impl Manager {
             inner: Mutex::new(Inner { meta, log }),
             live: Mutex::new(None),
             ending: AtomicBool::new(false),
+            capped: AtomicBool::new(false),
         });
         self.sessions.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), Arc::clone(&session));
         Ok(session)
@@ -564,7 +750,7 @@ impl Manager {
         vault_root: &Path,
         cerbo_bin: &Path,
         socket_dir: &Path,
-        open_socket: &SocketOpener<'_>,
+        open_socket: &SocketOpener,
         resume: bool,
     ) -> Result<(), StartFailure> {
         let guard = open_socket(&session.id, &session.vault, socket_dir).map_err(|e| StartFailure::plain(format!("cannot open the session socket: {e}")))?;
@@ -573,6 +759,10 @@ impl Manager {
         let client = Arc::new(client);
         let init = client.initialize().await.map_err(|e| StartFailure::of(&e, Some(&client)))?;
         let caps = init.capabilities;
+        if self.start_cancelled(session) {
+            client.kill().await;
+            return Err(StartFailure::aborted());
+        }
 
         // The MCP server entry: the cerbo binary, bound to the vault, reaching
         // the daemon through the session's socket (as seen from the agent).
@@ -592,12 +782,16 @@ impl Manager {
         let mut context = None;
         let mut how = ResumeHow::Transcript;
         let mut acp_session = None;
+        let mut modes = None;
         if resume && caps.load_session && let Some(old_id) = stored_acp {
             match client.load_session_with_meta(&old_id, vault_root, std::slice::from_ref(&mcp), meta.as_ref()).await {
-                Ok(_) => {
+                Ok(loaded) => {
+                    modes = loaded.modes;
                     // The agent replays its history as updates: it is in the
-                    // feed already.
-                    drain_updates(&mut events);
+                    // feed already. An exit among them is the end of the start.
+                    if let Some(info) = drain_updates(&mut events) {
+                        return Err(StartFailure::of(&AcpError::Exited(info), None));
+                    }
                     acp_session = Some(old_id);
                     how = ResumeHow::Load;
                 }
@@ -613,12 +807,20 @@ impl Manager {
                     .await
                     .map_err(|e| StartFailure::of(&e, Some(&client)))?;
                 if resume {
-                    let past = self.store.read_events(&session.vault, &session.id, None, usize::MAX);
+                    // Only the end of the feed: a long session costs no more
+                    // than a short one, and the transcript keeps its end anyway.
+                    let past = self.store.read_tail_events(&session.vault, &session.id, store::TAIL_BYTES);
                     context = Some(transcript_summary(&past));
                 }
+                modes = created.modes;
                 created.session_id
             }
         };
+        // An agent may pick its start mode from files of the vault (Claude's
+        // `.claude/settings.json`): the mode is ours to choose, so it is set.
+        if let Err(e) = client.pin_mode(&acp_session, modes.as_ref(), sandbox::START_MODE).await {
+            return Err(StartFailure::of(&e, Some(&client)));
+        }
 
         {
             let mut inner = session.lock();
@@ -627,15 +829,27 @@ impl Manager {
         }
         let (done_tx, done_rx) = mpsc::unbounded_channel();
         let live = Arc::new(Live {
-            client,
+            client: Arc::clone(&client),
             acp_session,
             caps,
             socket: Mutex::new(Some(guard)),
             tool_approvals: Mutex::new(HashSet::new()),
             context: Mutex::new(context),
             done: done_tx,
+            searches: Mutex::new(HashMap::new()),
         });
-        *session.live.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&live));
+        // The live part is installed under the lock that `end_session` takes
+        // it with, and only if nobody ended the session since: either this sees
+        // the end, or the end sees this.
+        {
+            let mut slot = session.live.lock().unwrap_or_else(|e| e.into_inner());
+            if self.start_cancelled(session) {
+                drop(slot);
+                client.kill().await;
+                return Err(StartFailure::aborted());
+            }
+            *slot = Some(Arc::clone(&live));
+        }
         tokio::spawn(Arc::clone(self).drive(Arc::clone(session), live, events, done_rx));
         if resume {
             self.emit(session, SessionEventBody::Resumed { how });
@@ -656,7 +870,14 @@ impl Manager {
                         return;
                     }
                     Some(event) => self.handle_event(&session, &live, event),
-                    None => return,
+                    // The stream ended without an exit event (it was taken
+                    // elsewhere): the agent's end is still told.
+                    None => {
+                        if let Some(info) = live.client.exit_info() {
+                            self.on_exit(&session, &live, &info);
+                        }
+                        return;
+                    }
                 },
                 Some(PromptDone::Finished(result)) = done.recv() => {
                     // Everything the agent said before the turn ended is in
@@ -691,27 +912,37 @@ impl Manager {
         match note.update {
             SessionUpdate::AgentMessageChunk { content, .. } => {
                 if let Some(text) = content.as_text() {
-                    self.emit(session, SessionEventBody::AgentText { text: text.to_string() });
+                    self.emit(session, SessionEventBody::AgentText { text: truncate(text, CHUNK_CHARS) });
                 }
             }
             SessionUpdate::AgentThoughtChunk { content, .. } => {
                 if let Some(text) = content.as_text() {
-                    self.emit(session, SessionEventBody::AgentThought { text: text.to_string() });
+                    self.emit(session, SessionEventBody::AgentThought { text: truncate(text, CHUNK_CHARS) });
                 }
             }
             SessionUpdate::ToolCall(call) => {
+                let id = clip(&call.tool_call_id, ID_CHARS);
+                if is_cerbo_search(&call.title) {
+                    let mut searches = live.searches.lock().unwrap_or_else(|e| e.into_inner());
+                    if searches.len() >= TOOL_MEMORY {
+                        searches.clear();
+                    }
+                    searches.insert(id.clone(), call.title.clone());
+                }
                 self.emit(
                     session,
                     SessionEventBody::ToolCall {
-                        id: call.tool_call_id,
-                        title: call.title,
-                        kind: call.kind.as_ref().map_or("other", |k| k.as_str()).to_string(),
-                        status: call.status.as_ref().map_or("pending", |s| s.as_str()).to_string(),
+                        id,
+                        title: truncate(&call.title, SUMMARY_CHARS),
+                        kind: clip(call.kind.as_ref().map_or("other", |k| k.as_str()), ID_CHARS),
+                        status: clip(call.status.as_ref().map_or("pending", |s| s.as_str()), ID_CHARS),
                         input_summary: call.raw_input.as_ref().map(summarize_value),
                     },
                 );
             }
             SessionUpdate::ToolCallUpdate(update) => {
+                let id = clip(&update.tool_call_id, ID_CHARS);
+                let status = clip(update.status.as_ref().map_or("in_progress", |s| s.as_str()), ID_CHARS);
                 let text = update
                     .content
                     .as_ref()
@@ -721,16 +952,16 @@ impl Manager {
                             _ => None,
                         })
                     })
-                    .or_else(|| update.raw_output.as_ref().map(summarize_value))
-                    .map(|t| truncate(&t, SUMMARY_CHARS));
-                self.emit(
-                    session,
-                    SessionEventBody::ToolUpdate {
-                        id: update.tool_call_id,
-                        status: update.status.as_ref().map_or("in_progress", |s| s.as_str()).to_string(),
-                        output_summary: text,
-                    },
-                );
+                    .or_else(|| update.raw_output.as_ref().map(summarize_value));
+                // A finished search of cerbo shows how many pages it found
+                // instead of the list itself.
+                let count = (status == "completed")
+                    .then(|| live.searches.lock().unwrap_or_else(|e| e.into_inner()).remove(&id))
+                    .flatten()
+                    .and_then(|_| result_count(text.as_deref(), update.raw_output.as_ref()))
+                    .map(count_summary);
+                let text = count.or_else(|| text.map(|t| truncate(&t, SUMMARY_CHARS)));
+                self.emit(session, SessionEventBody::ToolUpdate { id, status, output_summary: text });
             }
             // History replay, plans, mode and usage updates: not part of the feed.
             SessionUpdate::UserMessageChunk { .. } | SessionUpdate::Plan { .. } | SessionUpdate::Other { .. } => {}
@@ -790,7 +1021,9 @@ impl Manager {
     // ── Tool permission (D3) ─────────────────────────────────────────────────
 
     async fn on_permission(self: Arc<Self>, session: Arc<Session>, live: Arc<Live>, request: PermissionRequest) {
-        if request.session_id != live.acp_session {
+        if request.session_id != live.acp_session || request.is_cancelled() {
+            // Another session's, or of a turn that was cancelled while this
+            // waited in the queue: answered `cancelled`, no card.
             request.cancel();
             return;
         }
@@ -809,6 +1042,16 @@ impl Manager {
                 _ => None,
             })
         });
+        // An agent may ask without end: past the cap, the answer is no.
+        if live.tool_approvals.lock().unwrap_or_else(|e| e.into_inner()).len() >= rpc::MAX_PENDING_PER_AGENT {
+            match permission::option_for(ApprovalOutcome::Rejected, &request.options) {
+                Some(option) => {
+                    let _ = request.select(&option);
+                }
+                None => request.cancel(),
+            }
+            return;
+        }
         let timeout = self.approval_wait();
         let (id, rx) = self.approvals.request(
             approvals::Request {
@@ -826,6 +1069,11 @@ impl Manager {
             timeout,
         );
         live.tool_approvals.lock().unwrap_or_else(|e| e.into_inner()).insert(id);
+        // A cancel that ran between the first look and the card has not seen
+        // this card: end it here.
+        if request.is_cancelled() {
+            self.approvals.cancel(id);
+        }
         let outcome = self.approvals.wait(id, rx, timeout).await;
         live.tool_approvals.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
         match permission::option_for(outcome, &request.options) {
@@ -847,12 +1095,16 @@ impl Manager {
         read_page: &dyn Fn(&str) -> Option<String>,
     ) -> Result<(), RpcError> {
         let session = self.known(session).ok_or_else(|| self.missing(session))?;
+        if session.lock().meta.state == SessionState::Starting {
+            return Err(failed("the agent is still starting"));
+        }
         let live = session.live().ok_or_else(|| failed("the session has ended; start a new one or resume it"))?;
         {
             let mut inner = session.lock();
             match inner.meta.state {
                 SessionState::Working => return Err(failed("the agent is still working on the previous message")),
                 SessionState::Idle => inner.meta.state = SessionState::Working,
+                SessionState::Starting => return Err(failed("the agent is still starting")),
                 _ => return Err(failed("the session is not ready for a message")),
             }
         }
@@ -920,7 +1172,7 @@ impl Manager {
     /// Delete an ended or failed session and its feed.
     pub fn delete(&self, session: &str) -> Result<(), RpcError> {
         let meta = self.find_meta(session).ok_or_else(|| failed(format!("no such session: {session}")))?;
-        if self.known(session).and_then(|s| s.live()).is_some() {
+        if self.known(session).and_then(|s| s.live()).is_some() || self.starting(session) {
             return Err(failed("the session is running: end it first"));
         }
         self.sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(session);
@@ -930,12 +1182,13 @@ impl Manager {
     /// The sessions of a vault (all without), newest first. A session whose
     /// agent is not running here (the daemon restarted since) shows as ended.
     pub fn list(&self, vault: Option<&str>) -> Vec<SessionInfo> {
+        self.settle_stored(vault);
         self.store
             .list(vault)
             .into_iter()
             .map(|stored| {
                 if let Some(session) = self.known(&stored.id) {
-                    let running = session.live().is_some();
+                    let running = session.live().is_some() || self.starting(&stored.id);
                     let mut info = session.info();
                     if !running && matches!(info.state, SessionState::Starting | SessionState::Idle | SessionState::Working) {
                         info.state = SessionState::Ended;
@@ -955,6 +1208,9 @@ impl Manager {
     /// A session's stored feed after `after_seq`, at most `limit` events.
     pub fn events(&self, session: &str, after_seq: Option<u64>, limit: usize) -> Result<Vec<SessionEvent>, RpcError> {
         let meta = self.find_meta(session).ok_or_else(|| failed(format!("no such session: {session}")))?;
+        if self.known(session).is_none() {
+            self.settle_stored_one(&meta);
+        }
         Ok(self.store.read_events(&meta.vault, &meta.id, after_seq, limit))
     }
 
@@ -969,11 +1225,46 @@ impl Manager {
 }
 
 /// Discard what is waiting in the event stream (the replay of `session/load`).
-fn drain_updates(events: &mut AcpEvents) {
+/// An exit among it is returned: the agent is gone and the start has failed.
+fn drain_updates(events: &mut AcpEvents) -> Option<Arc<crate::acp::ExitInfo>> {
     while let Ok(event) = events.try_recv() {
-        // An exit ends the stream anyway; the driver sees the closed channel.
-        let _ = event;
+        if let AcpEvent::Exited(info) = event {
+            return Some(info);
+        }
     }
+    None
+}
+
+/// Whether a tool call title names one of the cerbo search tools (OpenCode
+/// `cerbo_search_text`, Claude `mcp__cerbo__search_semantic`, `cerbo/search_text`).
+fn is_cerbo_search(title: &str) -> bool {
+    let title = title.to_ascii_lowercase();
+    title.contains("cerbo") && (title.contains("search_text") || title.contains("search_semantic"))
+}
+
+/// How many results a cerbo search returned, from the text of its MCP result
+/// (a JSON list, as the tool prints it) or from the raw output.
+fn result_count(text: Option<&str>, raw: Option<&Value>) -> Option<usize> {
+    fn count_in(value: &Value) -> Option<usize> {
+        match value {
+            Value::Array(items) => Some(items.len()),
+            Value::Object(map) => {
+                if let Some(Value::Array(items)) = map.get("results") {
+                    return Some(items.len());
+                }
+                // An MCP result: {"content": [{"type": "text", "text": "[...]"}]}
+                let content = map.get("content")?.as_array()?;
+                content.iter().find_map(|c| c.get("text")?.as_str().and_then(|t| serde_json::from_str::<Value>(t).ok()).and_then(|v| count_in(&v)))
+            }
+            Value::String(text) => serde_json::from_str::<Value>(text).ok().and_then(|v| count_in(&v)),
+            _ => None,
+        }
+    }
+    text.and_then(|t| serde_json::from_str::<Value>(t).ok()).and_then(|v| count_in(&v)).or_else(|| raw.and_then(count_in))
+}
+
+fn count_summary(count: usize) -> String {
+    if count == 1 { "1 result".to_string() } else { format!("{count} results") }
 }
 
 /// The blocks of a prompt: an earlier transcript (resume), the text, and each
@@ -1007,6 +1298,7 @@ fn build_prompt(text: &str, context: &[PageRef], caps: &AgentCapabilities, trans
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn ev(seq: u64, body: SessionEventBody) -> SessionEvent {
         SessionEvent { seq, at: "t".into(), body }
@@ -1033,6 +1325,45 @@ mod tests {
         let text = transcript_summary(&events);
         assert!(text.contains("User: hi\nAgent: hello\n(the agent changed the page p1)\nUser: bye"), "{text}");
         assert!(!text.contains("secret"));
+    }
+
+    #[test]
+    fn an_exit_among_the_replay_is_not_thrown_away() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tx.send(AcpEvent::Warning("noise".into())).unwrap();
+        assert!(drain_updates(&mut rx).is_none());
+        let info = Arc::new(crate::acp::ExitInfo { code: Some(7), signal: None, success: false, stderr_tail: "boom 137".into(), reason: None });
+        tx.send(AcpEvent::Warning("more noise".into())).unwrap();
+        tx.send(AcpEvent::Exited(Arc::clone(&info))).unwrap();
+        let found = drain_updates(&mut rx).expect("the exit is reported");
+        assert_eq!(found.code, Some(7));
+        // It makes a start failure that says how the agent ended.
+        let failure = StartFailure::of(&AcpError::Exited(found), None);
+        assert!(failure.reason.contains("exited with code 7") && failure.stderr_tail.as_deref() == Some("boom 137"), "{}", failure.reason);
+    }
+
+    #[test]
+    fn search_results_are_counted_from_the_mcp_text() {
+        let list = "[\n  {\"uuid\": \"a\"},\n  {\"uuid\": \"b\"}\n]";
+        assert_eq!(result_count(Some(list), None), Some(2));
+        assert_eq!(result_count(Some("[]"), None), Some(0));
+        assert_eq!(result_count(Some("page text"), None), None);
+        // From a raw MCP result when the content has no text.
+        let raw = json!({"content": [{"type": "text", "text": "[1, 2, 3]"}]});
+        assert_eq!(result_count(None, Some(&raw)), Some(3));
+        assert_eq!(result_count(Some("nope"), Some(&json!([1]))), Some(1));
+        assert_eq!(result_count(Some("{\"results\": [1, 2]}"), None), Some(2));
+        assert_eq!(count_summary(1), "1 result");
+        assert_eq!(count_summary(12), "12 results");
+        assert!(is_cerbo_search("cerbo_search_text") && is_cerbo_search("mcp__cerbo__search_semantic") && is_cerbo_search("cerbo/search_text"));
+        assert!(!is_cerbo_search("cerbo_read_page") && !is_cerbo_search("grep search_text"));
+    }
+
+    #[test]
+    fn clipping_cuts_without_a_mark_and_truncating_with_one() {
+        assert_eq!(clip("abcdef", 3), "abc");
+        assert_eq!(truncate("abcdef", 3), "abc…");
+        assert_eq!(truncate("abc", 3), "abc");
     }
 
     #[test]

@@ -89,6 +89,7 @@ impl Env {
             cerbo_bin_env: Some(CERBO.into()),
             current_exe: None,
             sockets_dir: self.paths.dir.join("sessions"),
+            feed_cap: cerboid::sessions::store::FEED_CAP_BYTES,
         };
         cerboid::spawn(config).unwrap().expect("no other daemon runs")
     }
@@ -129,6 +130,34 @@ impl Env {
         let mut cmd = self.cmd();
         cmd.args(["agent", "run", "--vault", vault]).args(extra).arg(prompt);
         cmd.output().unwrap()
+    }
+}
+
+/// The state of session `id` once `wanted` holds for it.
+fn wait_for(client: &mut Client, id: &str, wanted: impl Fn(SessionState) -> bool) -> SessionState {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let list: Vec<SessionInfo> = serde_json::from_value(client.call(Call::SessionList { vault: None }).unwrap()).unwrap();
+        if let Some(info) = list.iter().find(|s| s.id == id)
+            && wanted(info.state)
+        {
+            return info.state;
+        }
+        assert!(Instant::now() < deadline, "the session never reached the wanted state: {list:?}");
+        std::thread::sleep(Duration::from_millis(30));
+    }
+}
+
+/// The id of the one session that exists, once it is `working`.
+fn the_working_session(client: &mut Client) -> String {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let list: Vec<SessionInfo> = serde_json::from_value(client.call(Call::SessionList { vault: None }).unwrap()).unwrap();
+        if let Some(info) = list.iter().find(|s| s.state == SessionState::Working) {
+            return info.id.clone();
+        }
+        assert!(Instant::now() < deadline, "no session ever worked: {list:?}");
+        std::thread::sleep(Duration::from_millis(30));
     }
 }
 
@@ -287,6 +316,40 @@ fn run_times_out_with_four_and_cancels_the_turn() {
 }
 
 #[test]
+fn run_ends_its_session_when_it_is_told_to_stop() {
+    let env = Env::new();
+    env.add_vault("notes");
+    env.script(json!({"turns": [[{"do": "text", "text": "working"}, {"do": "wait_cancel"}]]}));
+    let _daemon = env.start_daemon(Duration::from_secs(30));
+    let mut c = env.client();
+    for (signal, expected) in [(libc::SIGTERM, 143), (libc::SIGINT, 130)] {
+        let child = env.cmd().args(["agent", "run", "--vault", "notes", "take forever"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let id = the_working_session(&mut c);
+        // SAFETY: a signal to the child process this test started.
+        unsafe { libc::kill(child.id() as i32, signal) };
+        let o = child.wait_with_output().unwrap();
+        assert_eq!(code(&o), expected, "{} {}", out(&o), err(&o));
+        assert!(err(&o).contains("interrupted"), "{}", err(&o));
+        assert_eq!(wait_for(&mut c, &id, |s| s == SessionState::Ended), SessionState::Ended, "the session ended with the command");
+    }
+}
+
+#[test]
+fn a_killed_run_leaves_no_session_running() {
+    let env = Env::new();
+    env.add_vault("notes");
+    env.script(json!({"turns": [[{"do": "text", "text": "working"}, {"do": "wait_cancel"}]]}));
+    let _daemon = env.start_daemon(Duration::from_secs(30));
+    let mut c = env.client();
+    let mut child = env.cmd().args(["agent", "run", "--vault", "notes", "take forever"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let id = the_working_session(&mut c);
+    // No chance to clean up: the daemon notices the connection is gone.
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert_eq!(wait_for(&mut c, &id, |s| s == SessionState::Ended), SessionState::Ended);
+}
+
+#[test]
 fn run_fails_with_one_when_the_agent_crashes_or_is_missing() {
     let env = Env::new();
     env.add_vault("notes");
@@ -317,7 +380,8 @@ fn list_and_stop_show_and_end_a_running_session() {
     assert!(out(&none).contains("No running agent sessions"), "{}", out(&none));
 
     let info: SessionInfo =
-        serde_json::from_value(c.call(Call::SessionCreate { vault: id.clone(), agent: AgentKind::Opencode, resume_from: None }).unwrap()).unwrap();
+        serde_json::from_value(c.call(Call::SessionCreate { vault: id.clone(), agent: AgentKind::Opencode, resume_from: None, ephemeral: false }).unwrap()).unwrap();
+    wait_for(&mut c, &info.id, |s| s != SessionState::Starting);
     c.call(Call::SessionSend { session: info.id.clone(), text: "work".into(), context: vec![] }).unwrap();
 
     let list = env.cerbo(&["agent", "list"]);
@@ -413,13 +477,20 @@ fn real_opencode_smoke_starts_a_sandboxed_session_without_a_prompt() {
     let agents = c.call(Call::AgentList {}).unwrap();
     eprintln!("agent_list: {agents}");
     // Without a login the daemon refuses before it starts anything.
-    let refused = c.call(Call::SessionCreate { vault: id.clone(), agent: AgentKind::Opencode, resume_from: None }).unwrap_err();
+    let refused = c.call(Call::SessionCreate { vault: id.clone(), agent: AgentKind::Opencode, resume_from: None, ephemeral: false }).unwrap_err();
     eprintln!("without a login: {refused:?}");
     assert!(refused.message.contains("not signed in"), "{refused:?}");
     // A placeholder login file in the isolated data directory (never the real
     // one): the daemon binds it into the sandbox and starts the agent.
     std::fs::write(env.xdg.path().join("data/opencode/auth.json"), "{}").unwrap();
-    let created = c.call(Call::SessionCreate { vault: id, agent: AgentKind::Opencode, resume_from: None });
+    let created = c.call(Call::SessionCreate { vault: id, agent: AgentKind::Opencode, resume_from: None, ephemeral: false });
+    // Creating answers at once; the start finishes in the background.
+    if let Ok(started) = &created {
+        let started: SessionInfo = serde_json::from_value(started.clone()).unwrap();
+        let state = wait_for(&mut c, &started.id, |s| s != SessionState::Starting);
+        eprintln!("state after the start: {state:?}");
+        assert_eq!(state, SessionState::Idle, "the agent did not come up");
+    }
     let log = std::fs::read_to_string(env.xdg.path().join("data/cerbo/agents/opencode/home/opencode-stderr.log")).unwrap_or_default();
     // Only the lines about MCP, whatever else the agent logs.
     let mcp: Vec<&str> = log.lines().filter(|l| l.to_lowercase().contains("mcp") || l.contains("cerbo")).collect();

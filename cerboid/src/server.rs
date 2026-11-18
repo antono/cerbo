@@ -17,6 +17,7 @@ use cerbo_core::rpc::{
 };
 use cerbo_core::CerboContext;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
@@ -164,6 +165,9 @@ struct Shared {
     sessions: Arc<Manager>,
     approval_timeout: Option<Duration>,
     max_pending_per_agent: usize,
+    /// Approval requests of agents that wait for a person, counted per session
+    /// (agents on a session socket) or per vault (agents on the main socket).
+    pending: Arc<PendingCounts>,
     before_write: Option<Arc<dyn Fn() + Send + Sync>>,
     registry: Registry,
     events: broadcast::Sender<Event>,
@@ -251,6 +255,7 @@ async fn serve(
         sessions,
         approval_timeout: config.approval_timeout,
         max_pending_per_agent: config.max_pending_per_agent,
+        pending: Arc::new(PendingCounts::default()),
         before_write: config.before_write.clone(),
         registry,
         events,
@@ -363,26 +368,44 @@ struct Conn {
     bound: Option<String>,
     /// Becomes true when the connection ends.
     closed: watch::Receiver<bool>,
-    /// Approval requests of this connection that wait for a person.
-    pending: Arc<AtomicUsize>,
+    /// Sessions this connection made with `ephemeral`: they end with it.
+    owned: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
-/// One of a connection's waiting approval requests; released when dropped.
-struct PendingSlot(Arc<AtomicUsize>);
+/// How many approval requests wait for a person, by key. An agent can open
+/// any number of connections, so the count is not a connection's: it is the
+/// session's (agents on a session socket) or the vault's (agents on the main
+/// socket).
+#[derive(Default)]
+struct PendingCounts(std::sync::Mutex<HashMap<String, usize>>);
+
+/// One waiting approval request; released when dropped.
+struct PendingSlot {
+    counts: Arc<PendingCounts>,
+    key: String,
+}
 
 impl PendingSlot {
-    fn take(count: &Arc<AtomicUsize>, max: usize) -> Option<Self> {
-        if count.fetch_add(1, Ordering::SeqCst) >= max {
-            count.fetch_sub(1, Ordering::SeqCst);
+    fn take(counts: &Arc<PendingCounts>, key: String, max: usize) -> Option<Self> {
+        let mut map = counts.0.lock().unwrap_or_else(|e| e.into_inner());
+        let n = map.entry(key.clone()).or_insert(0);
+        if *n >= max {
             return None;
         }
-        Some(Self(Arc::clone(count)))
+        *n += 1;
+        Some(Self { counts: Arc::clone(counts), key })
     }
 }
 
 impl Drop for PendingSlot {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        let mut map = self.counts.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = map.get_mut(&self.key) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                map.remove(&self.key);
+            }
+        }
     }
 }
 
@@ -490,7 +513,7 @@ async fn connection(shared: Arc<Shared>, stream: UnixStream, mut forced: Option<
 
     let (closed_tx, closed_rx) = watch::channel(false);
     let session = forced.as_ref().map(|b| b.session.clone());
-    let conn = Conn { hello: client, session, bound, closed: closed_rx, pending: Arc::new(AtomicUsize::new(0)) };
+    let conn = Conn { hello: client, session, bound, closed: closed_rx, owned: Arc::new(std::sync::Mutex::new(Vec::new())) };
     let mut close = shared.close_connections.subscribe();
     let mut subscription: Option<tokio::task::JoinHandle<()>> = None;
 
@@ -564,6 +587,14 @@ async fn connection(shared: Arc<Shared>, stream: UnixStream, mut forced: Option<
     if let Some(task) = subscription {
         task.abort();
     }
+    // Sessions made for this connection alone end with it.
+    let owned: Vec<String> = std::mem::take(&mut *conn.owned.lock().unwrap_or_else(|e| e.into_inner()));
+    for id in owned {
+        let sessions = Arc::clone(&shared.sessions);
+        tokio::spawn(async move {
+            let _ = sessions.end(&id).await;
+        });
+    }
 }
 
 /// Start (or retarget) this connection's event stream. The receiver exists
@@ -609,7 +640,13 @@ fn subscribe(
                             writer.send(&ServerMessage::Event { event }).await;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    // Events were dropped for this connection: it cannot know
+                    // what it missed, so it is told to read the state again.
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if !page_events_only {
+                            writer.send(&ServerMessage::Event { event: Event::Resync }).await;
+                        }
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
                 () = wait_closing(&mut close) => break,
@@ -641,13 +678,26 @@ impl Shared {
                 let sessions = Arc::clone(&self.sessions);
                 Ok(Box::pin(async move { sessions.agent_list().await }))
             }
-            Call::SessionCreate { vault, agent, resume_from } => {
+            Call::SessionCreate { vault, agent, resume_from, ephemeral } => {
                 let handle = self.resolve(&vault)?;
                 let vault = VaultRef { id: handle.info.id.clone(), name: handle.info.name.clone(), root: handle.root.clone() };
                 let this = Arc::clone(self);
+                let owned = Arc::clone(&conn.owned);
+                let closed = conn.closed.clone();
                 Ok(Box::pin(async move {
-                    let opener = |session: &str, vault: &str, dir: &Path| this.open_session_socket(session, vault, dir);
-                    let info = this.sessions.create(vault, agent, resume_from, &opener).await?;
+                    let opener: sessions::SocketOpener = {
+                        let this = Arc::clone(&this);
+                        Arc::new(move |session: &str, vault: &str, dir: &Path| this.open_session_socket(session, vault, dir))
+                    };
+                    let info = this.sessions.create(vault, agent, resume_from, opener).await?;
+                    if ephemeral {
+                        // The session belongs to this connection: it ends with
+                        // it. A connection that closed meanwhile ends it now.
+                        owned.lock().unwrap_or_else(|e| e.into_inner()).push(info.id.clone());
+                        if *closed.borrow() {
+                            let _ = this.sessions.end(&info.id).await;
+                        }
+                    }
                     serde_json::to_value(info).map_err(|e| RpcError::failed(e.to_string()))
                 }))
             }
@@ -838,11 +888,17 @@ impl Shared {
                 self.queue_write(vault, call, Origin::Agent, Some(log), given, closed)
             }
             AgentPermission::Approve => {
-                let slot = PendingSlot::take(&conn.pending, self.max_pending_per_agent).ok_or_else(|| {
+                // The cap is the session's (or, on the main socket, the
+                // vault's), not the connection's: an agent can open many.
+                let (key, whose) = match &conn.session {
+                    Some(session) => (format!("session:{session}"), "this session"),
+                    None => (format!("vault:{}", vault.info.id), "this vault"),
+                };
+                let slot = PendingSlot::take(&self.pending, key, self.max_pending_per_agent).ok_or_else(|| {
                     RpcError::new(
                         rpc::CODE_TOO_MANY_PENDING,
                         format!(
-                            "this connection already has {} changes waiting for approval, the most it may have; \
+                            "{whose} already has {} changes waiting for approval, the most it may have; \
                              wait until some are answered",
                             self.max_pending_per_agent
                         ),

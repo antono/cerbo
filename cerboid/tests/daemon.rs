@@ -815,7 +815,7 @@ fn a_vault_that_was_missing_at_the_start_is_served_once_it_is_back() {
 fn session_calls(vault: &str) -> Vec<Call> {
     use cerbo_core::rpc::AgentKind;
     vec![
-        Call::SessionCreate { vault: vault.into(), agent: AgentKind::Claude, resume_from: None },
+        Call::SessionCreate { vault: vault.into(), agent: AgentKind::Claude, resume_from: None, ephemeral: false },
         Call::SessionSend { session: "s".into(), text: "hi".into(), context: vec![] },
         Call::SessionCancel { session: "s".into() },
         Call::SessionEnd { session: "s".into() },

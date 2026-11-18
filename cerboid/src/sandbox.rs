@@ -112,6 +112,11 @@ pub struct SessionSpec {
     pub real_home: Option<PathBuf>,
     /// The host's `PATH`, to find an interpreter named by a `#!/usr/bin/env` line.
     pub host_path: Option<OsString>,
+    /// Directories the vault must not be, contain or lie inside, because the
+    /// agent could then read what is private to the daemon: its config, data,
+    /// runtime and socket directories, the agent homes and the directories of
+    /// the agents' login files.
+    pub protected: Vec<PathBuf>,
 }
 
 /// How the agent is confined: a path to `bwrap`, or not at all.
@@ -223,6 +228,7 @@ pub fn bwrap_args(spec: &SessionSpec, fs: &dyn HostFs) -> Result<Vec<String>, St
     if !spec.vault.is_absolute() {
         return Err(format!("the vault path {vault} is not absolute"));
     }
+    check_vault(spec)?;
     push(&["--ro-bind", &vault, &vault]);
     // The agent's own home, writable, with the login file bound over it.
     push(&["--bind", &spec.agent_home.to_string_lossy(), SANDBOX_HOME]);
@@ -379,6 +385,49 @@ fn shebang_interpreter(file: &Path, host_path: Option<&OsString>) -> Option<Path
         return agents::which(name, host_path);
     }
     Some(PathBuf::from(first))
+}
+
+/// A path as the kernel sees it when it exists, else as given.
+fn real(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Refuse to bind a vault that would hand the agent more than the vault: one
+/// that is, or holds, the real home directory, the agent homes, the daemon's
+/// own directories (config, data, runtime, sockets) or a login file's
+/// directory, or that lies inside one of them. The vault is bound read-only,
+/// so everything under it is readable by the agent.
+pub fn check_vault(spec: &SessionSpec) -> Result<(), String> {
+    let vault = real(&spec.vault);
+    let refuse = |what: &str, path: &Path, how: &str| {
+        Err(format!(
+            "cannot sandbox the vault {}: it {how} {what} ({}), which the agent must not see.              Move the vault to a directory of its own",
+            vault.display(),
+            path.display()
+        ))
+    };
+    if let Some(home) = &spec.real_home {
+        let home = real(home);
+        // A vault inside the home is the usual case; only the home itself, or
+        // a directory above it, would expose everything in it.
+        if home.starts_with(&vault) {
+            let how = if home == vault { "is" } else { "contains" };
+            return refuse("your home directory", &home, how);
+        }
+    }
+    for protected in &spec.protected {
+        let protected = real(protected);
+        if vault == protected {
+            return refuse("a private directory of the daemon or its agents", &protected, "is");
+        }
+        if protected.starts_with(&vault) {
+            return refuse("a private directory of the daemon or its agents", &protected, "contains");
+        }
+        if vault.starts_with(&protected) {
+            return refuse("a private directory of the daemon or its agents", &protected, "lies inside");
+        }
+    }
+    Ok(())
 }
 
 /// Refuse a root that would hand the agent far more than its own program.
@@ -538,21 +587,38 @@ pub fn claude_settings() -> Value {
     })
 }
 
-/// The `_meta` for `session/new` and `session/load` with Claude: no built-in
-/// tools at all, and only the user settings (the agent home's), so a
-/// `.claude/settings.json` inside the vault is ignored. Read from the adapter
-/// source: `_meta.claudeCode.options` is spread over the SDK options.
+/// The `_meta` for `session/new` and `session/load` with Claude. Read from
+/// the adapter source (0.106.0): `_meta.claudeCode.options` is spread over the
+/// SDK options after the adapter's own defaults, so these win.
+///
+/// - `tools: []` and `disallowedTools`: no built-in tool at all.
+/// - `settingSources: ["user"]`: the Claude Code process reads only the agent
+///   home's user settings, not the vault's `.claude/settings.json`,
+///   `.claude/settings.local.json`, hooks, commands or CLAUDE.md.
+/// - `strictMcpConfig: true` (`--strict-mcp-config`): the only MCP server is
+///   the one the daemon passes in `session/new`; a vault's `.mcp.json`,
+///   plugins and settings cannot add one, nor define one named `cerbo`.
+/// - `allowDangerouslySkipPermissions: false`: the adapter's own settings
+///   reader also looks at the vault's settings for `permissions.defaultMode`
+///   (it drops escalating modes from a project file, but not every path); with
+///   this the session cannot start in, or switch to, `bypassPermissions`.
 pub fn claude_session_meta() -> Value {
     json!({
         "claudeCode": {
             "options": {
                 "tools": [],
                 "disallowedTools": CLAUDE_DENIED_TOOLS,
-                "settingSources": ["user"]
+                "settingSources": ["user"],
+                "strictMcpConfig": true,
+                "allowDangerouslySkipPermissions": false
             }
         }
     })
 }
+
+/// The mode an agent that has modes (Claude's permission modes) is put in at
+/// the start of every session, whatever the files of the vault say.
+pub const START_MODE: &str = "default";
 
 /// The `mcpServers` entry for `session/new`: the `cerbo` binary inside the
 /// sandbox, bound to the session socket and the vault.
@@ -658,6 +724,7 @@ mod tests {
             login_file: Some("/real/.local/share/opencode/auth.json".into()),
             real_home: Some("/real".into()),
             host_path: None,
+            protected: Vec::new(),
         }
     }
 
@@ -683,7 +750,10 @@ mod tests {
         assert!(pair_present(&args, "--bind", "/run/user/1000/cerbo/sessions/s137", SANDBOX_SOCKET_DIR));
         assert!(args.windows(2).any(|w| w[0] == "--chdir" && w[1] == "/srv/notes137"));
         assert!(pair_present(&args, "--setenv", "CERBO_SOCKET", "/run/cerbo/session/agent.sock"));
+        // A vault's `opencode.json` and `.opencode/` are not read (checked against
+        // the real OpenCode with `debug config`), and Claude Code's files are not either.
         assert!(pair_present(&args, "--setenv", "OPENCODE_DISABLE_PROJECT_CONFIG", "1"));
+        assert!(pair_present(&args, "--setenv", "OPENCODE_DISABLE_CLAUDE_CODE", "1"));
         assert_eq!(&args[args.len() - 3..], ["--", "/nix/store/aaa-opencode/bin/opencode", "acp"]);
         // The daemon's main socket and the real home are never named.
         assert!(!args.iter().any(|a| a.contains("cerboid.sock")));
@@ -754,6 +824,41 @@ mod tests {
     }
 
     #[test]
+    fn a_vault_that_is_or_holds_the_home_or_a_private_directory_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = std::fs::canonicalize(tmp.path()).unwrap();
+        let home = top.join("home");
+        let data = home.join(".local/share/cerbo");
+        let login_dir = home.join(".local/share/opencode");
+        let runtime = top.join("run/cerbo");
+        for dir in [&data, &login_dir, &runtime, &home.join("notes")] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let mut s = spec();
+        s.real_home = Some(home.clone());
+        s.protected = vec![data.join("agents"), data.clone(), login_dir.clone(), runtime.join("sessions"), runtime.clone()];
+
+        let with_vault = |vault: &Path| {
+            let mut s = s.clone();
+            s.vault = vault.to_path_buf();
+            bwrap_args(&s, &nixos())
+        };
+        // A vault of its own, even inside the home, is fine.
+        assert!(with_vault(&home.join("notes")).is_ok());
+        // The home itself, and what holds it.
+        let err = with_vault(&home).unwrap_err();
+        assert!(err.contains("cannot sandbox the vault") && err.contains("your home directory"), "{err}");
+        assert!(with_vault(&top).unwrap_err().contains("contains your home directory"));
+        // The daemon's own directories, from either side.
+        assert!(with_vault(&data).unwrap_err().contains("private directory"));
+        assert!(with_vault(&data.join("sessions")).unwrap_err().contains("lies inside"));
+        assert!(with_vault(&home.join(".local/share")).unwrap_err().contains("contains"));
+        assert!(with_vault(&login_dir).unwrap_err().contains("private directory"));
+        assert!(with_vault(&runtime).unwrap_err().contains("private directory"));
+        assert!(with_vault(&runtime.join("sessions/s1")).unwrap_err().contains("lies inside"));
+    }
+
+    #[test]
     fn the_probe_uses_the_same_base() {
         let args = probe_args(&nixos()).unwrap();
         assert!(pair_present(&args, "--ro-bind", "/.host-etc", "/.host-etc"));
@@ -803,6 +908,9 @@ mod tests {
         let meta = claude_session_meta();
         assert_eq!(meta["claudeCode"]["options"]["tools"], json!([]));
         assert_eq!(meta["claudeCode"]["options"]["settingSources"], json!(["user"]));
+        // A vault's `.mcp.json` and settings cannot add servers or bypass permissions.
+        assert_eq!(meta["claudeCode"]["options"]["strictMcpConfig"], json!(true));
+        assert_eq!(meta["claudeCode"]["options"]["allowDangerouslySkipPermissions"], json!(false));
     }
 
     #[test]

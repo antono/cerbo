@@ -12,6 +12,7 @@ use cerbo_core::rpc::{
 };
 use cerbo_core::CerboContext;
 use serde_json::json;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
 /// The command succeeded.
@@ -27,6 +28,66 @@ pub const EXIT_TIMED_OUT: i32 = 4;
 
 /// How long one wait for an event lasts before the deadline is checked again.
 const POLL: Duration = Duration::from_millis(250);
+/// How long the start of the agent may take before `agent run` gives up.
+const START_LIMIT: Duration = Duration::from_secs(180);
+/// How often the start looks at the session's state itself, in case an event
+/// was dropped.
+const START_LOOK: Duration = Duration::from_secs(2);
+
+/// The signal (`SIGINT` or `SIGTERM`) that asked `agent run` to stop; 0 for none.
+static SIGNALLED: AtomicI32 = AtomicI32::new(0);
+
+#[cfg(unix)]
+extern "C" fn on_signal(signal: libc::c_int) {
+    SIGNALLED.store(signal, Ordering::SeqCst);
+}
+
+/// Take `SIGINT` and `SIGTERM` as a request to stop: the command then cancels
+/// the turn, ends the session and exits with `128 + signal`, instead of dying
+/// with the session left to run in the daemon.
+#[cfg(unix)]
+fn catch_signals() {
+    // SAFETY: the handler only stores into an atomic, which is async-signal-safe.
+    unsafe {
+        libc::signal(libc::SIGINT, on_signal as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, on_signal as *const () as libc::sighandler_t);
+    }
+}
+
+#[cfg(not(unix))]
+fn catch_signals() {}
+
+fn signalled() -> Option<i32> {
+    match SIGNALLED.load(Ordering::SeqCst) {
+        0 => None,
+        signal => Some(signal),
+    }
+}
+
+/// Ends the session when dropped, on whatever path the command leaves: an
+/// error, a panic, or a signal handled by the loop. The daemon also ends an
+/// `ephemeral` session when the connection closes; this is the prompt way.
+struct EndOnExit<'a> {
+    ctx: &'a CerboContext,
+    session: Option<String>,
+}
+
+impl EndOnExit<'_> {
+    /// The session was ended already.
+    fn disarm(&mut self) {
+        self.session = None;
+    }
+}
+
+impl Drop for EndOnExit<'_> {
+    fn drop(&mut self) {
+        if let Some(session) = self.session.take()
+            && let Ok(mut client) = connect(self.ctx)
+        {
+            let _ = client.call(Call::SessionEnd { session });
+        }
+    }
+}
 
 /// What `cerbo agent run` was asked.
 pub struct RunOptions {
@@ -87,6 +148,14 @@ fn failure_reason(feed: &[SessionEvent]) -> String {
     "the agent failed".to_string()
 }
 
+/// The last state a feed names.
+fn last_state(feed: &[SessionEvent]) -> Option<SessionState> {
+    feed.iter().rev().find_map(|e| match &e.body {
+        SessionEventBody::State { state, .. } => Some(*state),
+        _ => None,
+    })
+}
+
 /// What the last turn of a feed amounts to.
 struct Outcome {
     text: String,
@@ -112,23 +181,71 @@ fn outcome_of(feed: &[SessionEvent]) -> Outcome {
     outcome
 }
 
+/// Wait until the session's agent has started. Creating a session answers at
+/// once; the agent is ready when the session says `idle`.
+fn wait_started(client: &mut cerbo_core::rpc::client::Client, id: &str) -> Result<(), String> {
+    let began = Instant::now();
+    let mut looked = Instant::now();
+    loop {
+        if let Some(signal) = signalled() {
+            return Err(format!("interrupted by signal {signal} while the agent started"));
+        }
+        if began.elapsed() >= START_LIMIT {
+            return Err(format!("the agent did not start within {} seconds", START_LIMIT.as_secs()));
+        }
+        let mut check = looked.elapsed() >= START_LOOK;
+        match client.next_event(POLL)? {
+            Some(Event::Session { session, event, .. }) if session == id => {
+                if let SessionEventBody::State { state, .. } = event.body {
+                    match state {
+                        SessionState::Idle => return Ok(()),
+                        SessionState::Failed | SessionState::Ended => check = true,
+                        _ => {}
+                    }
+                }
+            }
+            // Events were lost: look at the session itself.
+            Some(Event::Resync) => check = true,
+            _ => {}
+        }
+        if check {
+            looked = Instant::now();
+            let value = client.call(Call::SessionList { vault: None }).map_err(|e| e.message)?;
+            let sessions: Vec<SessionInfo> = serde_json::from_value(value).map_err(|e| e.to_string())?;
+            match sessions.iter().find(|s| s.id == id).map(|s| s.state) {
+                Some(SessionState::Idle | SessionState::Working) => return Ok(()),
+                Some(SessionState::Failed) => return Err(failure_reason(&feed(client, id)?)),
+                Some(SessionState::Ended) => return Err("the session ended while the agent started".to_string()),
+                _ => {}
+            }
+        }
+    }
+}
+
 /// `cerbo agent run`. Returns the exit code; `Err` is a failure to even try
-/// (exit 1 as well, with the message).
+/// (exit 1 as well, with the message). The session ends on every way out.
 pub fn run(ctx: &CerboContext, options: RunOptions) -> Result<i32, String> {
     let vault = daemon::find_vault(ctx, &options.vault)?;
     let mut client = connect(ctx)?;
+    catch_signals();
     // Listen before anything starts, so no event of the turn is missed.
     client.call(Call::Subscribe { vault: Some(vault.id.clone()) }).map_err(|e| e.message)?;
+    // `ephemeral`: the daemon ends the session when this connection closes, so
+    // even a command that is killed outright leaves no agent running.
     let value = client
-        .call(Call::SessionCreate { vault: vault.id.clone(), agent: options.agent, resume_from: None })
+        .call(Call::SessionCreate { vault: vault.id.clone(), agent: options.agent, resume_from: None, ephemeral: true })
         .map_err(|e| e.message)?;
     let info: SessionInfo = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    let mut guard = EndOnExit { ctx, session: Some(info.id.clone()) };
     if let Some(warning) = &info.warning {
         eprintln!("warning: {warning}");
     }
-    if info.state == SessionState::Failed {
-        let reason = failure_reason(&feed(&mut client, &info.id)?);
-        return Err(format!("the {} session did not start: {reason}", word(options.agent)));
+    if let Err(why) = wait_started(&mut client, &info.id) {
+        if let Some(signal) = signalled() {
+            eprintln!("Error: interrupted");
+            return Ok(128 + signal);
+        }
+        return Err(format!("the {} session did not start: {why}", word(options.agent)));
     }
     client
         .call(Call::SessionSend { session: info.id.clone(), text: options.prompt.clone(), context: Vec::new() })
@@ -137,7 +254,12 @@ pub fn run(ctx: &CerboContext, options: RunOptions) -> Result<i32, String> {
     let deadline = options.timeout.map(|t| Instant::now() + t);
     let mut timed_out = false;
     let mut ended_badly: Option<String> = None;
+    let mut interrupted: Option<i32> = None;
     'wait: loop {
+        if let Some(signal) = signalled() {
+            interrupted = Some(signal);
+            break;
+        }
         if deadline.is_some_and(|d| Instant::now() >= d) {
             timed_out = true;
             break;
@@ -155,15 +277,40 @@ pub fn run(ctx: &CerboContext, options: RunOptions) -> Result<i32, String> {
                 }
                 _ => {}
             },
+            // Events were lost: the feed says whether the turn ended meanwhile.
+            Some(Event::Resync) => {
+                let stored = feed(&mut client, &info.id)?;
+                match last_state(&stored) {
+                    Some(SessionState::Failed) => {
+                        ended_badly = Some("failed".to_string());
+                        break 'wait;
+                    }
+                    Some(SessionState::Ended) => {
+                        ended_badly = Some("ended".to_string());
+                        break 'wait;
+                    }
+                    _ => {}
+                }
+                if outcome_of(&stored).stop_reason.is_some() {
+                    break 'wait;
+                }
+            }
             _ => {}
         }
     }
-    if timed_out {
+    if timed_out || interrupted.is_some() {
         let _ = client.call(Call::SessionCancel { session: info.id.clone() });
     }
-    let stored = feed(&mut client, &info.id)?;
     // The session was this command's: it ends with it. The transcript stays.
+    if interrupted.is_some() {
+        let _ = client.call(Call::SessionEnd { session: info.id.clone() });
+        guard.disarm();
+        eprintln!("Error: interrupted; the agent's turn was cancelled and the session ended");
+        return Ok(128 + interrupted.unwrap_or(0));
+    }
+    let stored = feed(&mut client, &info.id)?;
     let _ = client.call(Call::SessionEnd { session: info.id.clone() });
+    guard.disarm();
     let outcome = outcome_of(&stored);
 
     let code = if timed_out {

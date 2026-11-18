@@ -23,6 +23,7 @@
 //!   "protocol_version": 1,
 //!   "prompt_capabilities": {"image": false, "audio": false, "embeddedContext": false},
 //!   "config_options": [],
+//!   "modes": {"currentModeId": "auto", "availableModes": [{"id": "default"}, {"id": "auto"}]},
 //!   "init_delay_ms": 0, "init_error": "text", "new_session_error": "text",
 //!   "known_sessions": ["ses-old"],
 //!   "history": [{"role": "user", "text": "hi"}, {"role": "agent", "text": "hello"}],
@@ -40,7 +41,7 @@
 //!   of `mcpServers` it was given (`server` by name, default the first), does
 //!   MCP initialize, notifications/initialized and tools/call, and reports
 //!   the call as tool_call / tool_call_update plus `mcp_result: <text>`
-//! - `permission` {id?, title?, options?, allow?, reject?, cancelled?}: sends
+//! - `permission` {id?, title?, options?, allow?, reject?, cancelled?, after_cancel?}: sends
 //!   session/request_permission, reports `permission: selected <optionId>` or
 //!   `permission: cancelled`, then runs the steps of the matching branch
 //! - `write_file` {path, contents}: a direct write (relative paths are
@@ -87,6 +88,10 @@ enum Step {
         reject: Vec<Step>,
         #[serde(default)]
         cancelled: Vec<Step>,
+        /// Wait for `session/cancel` first and ask anyway (an agent that
+        /// asks while its turn is being cancelled).
+        #[serde(default)]
+        after_cancel: bool,
     },
     WriteFile { path: String, contents: Option<String> },
     CallClient { method: String, params: Option<Value> },
@@ -114,6 +119,8 @@ struct Script {
     protocol_version: Option<u64>,
     prompt_capabilities: Option<Value>,
     config_options: Option<Value>,
+    /// `modes` of session/new and session/load: {"currentModeId", "availableModes": [{"id"}]}.
+    modes: Option<Value>,
     init_delay_ms: u64,
     init_error: Option<String>,
     new_session_error: Option<String>,
@@ -342,7 +349,32 @@ impl Agent {
                 if let Some(c) = &self.script.config_options {
                     result["configOptions"] = c.clone();
                 }
+                if let Some(m) = &self.script.modes {
+                    result["modes"] = m.clone();
+                }
                 write_out(&ok(&id, result));
+            }
+            "session/set_mode" => {
+                let wanted = params.get("modeId").and_then(Value::as_str).unwrap_or_default().to_string();
+                let offered = self
+                    .script
+                    .modes
+                    .as_ref()
+                    .and_then(|m| m.get("availableModes")?.as_array().cloned())
+                    .is_some_and(|all| all.iter().any(|m| m.get("id").and_then(Value::as_str) == Some(wanted.as_str())));
+                if !offered {
+                    write_out(&err(&id, -32602, &format!("no such mode {wanted}")));
+                    return;
+                }
+                // Written where the daemon tests (which cannot set FAKE_ACP_LOG) can read it.
+                if let Ok(home) = std::env::var("HOME") {
+                    let _ = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(std::path::Path::new(&home).join("fake-acp-modes.log"))
+                        .and_then(|mut f| writeln!(f, "{wanted}"));
+                }
+                write_out(&ok(&id, json!({})));
             }
             "session/load" if self.script.load_session => {
                 let sid = params.get("sessionId").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -357,7 +389,11 @@ impl Agent {
                     let kind = if h.role == "user" { "user_message_chunk" } else { "agent_message_chunk" };
                     self.update(&sid, json!({"sessionUpdate": kind, "content": {"type": "text", "text": h.text}}));
                 }
-                write_out(&ok(&id, json!({})));
+                let mut result = json!({});
+                if let Some(m) = &self.script.modes {
+                    result["modes"] = m.clone();
+                }
+                write_out(&ok(&id, result));
             }
             "session/prompt" => self.prompt(id, params),
             _ => write_out(&err(&id, -32601, "Method not found")),
@@ -481,7 +517,12 @@ impl Agent {
                 self.update(sid, u);
             }
             Step::McpCall { server, tool, arguments, id } => self.mcp_call(sid, server.as_deref(), tool, arguments.clone().unwrap_or(json!({})), id.clone()),
-            Step::Permission { id, title, options, allow, reject, cancelled } => {
+            Step::Permission { id, title, options, allow, reject, cancelled, after_cancel } => {
+                if *after_cancel {
+                    while !self.cancelled {
+                        self.next_message(None);
+                    }
+                }
                 let call_id = id.clone().unwrap_or_else(|| "perm-1".into());
                 let options = options.clone().unwrap_or_else(|| {
                     vec![
