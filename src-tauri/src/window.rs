@@ -58,7 +58,7 @@ pub fn save_size(app: &AppHandle) -> Result<(), String> {
     };
     let ctx = get_context(app)?;
     let current = ui_settings::load_ui_settings(&ctx)?;
-    let merged = ui_settings::merge_ui_settings(&current, None, None, None, None, None, Some(bounds), None);
+    let merged = ui_settings::merge_ui_settings(&current, None, None, None, None, None, Some(bounds), None, None);
     ui_settings::save_ui_settings(&ctx, &merged)
 }
 

@@ -22,6 +22,12 @@ pub struct UiSettings {
     /// vault. Absent in a `ui.toml` written before the console existed.
     #[serde(default)]
     pub last_sparql_query: Option<String>,
+    /// The selected sub-panel of the desktop right panel (`links`,
+    /// `attachments`, `outline`, `agent`; spec `desktop-right-panel`). Kept as
+    /// a plain string: an unknown value is the desktop's to fall back from.
+    /// Absent in a `ui.toml` written before the tabs existed.
+    #[serde(default)]
+    pub right_panel_tab: Option<String>,
     /// Folders of the desktop sidebar tree the user collapsed, per vault id
     /// (spec `desktop-page-tree`, "Folders expand and collapse"). Only
     /// collapsed folders are listed, so a new folder starts expanded. Absent
@@ -69,6 +75,7 @@ pub fn merge_ui_settings(
     left_sidebar_visible: Option<bool>,
     window_bounds: Option<WindowBounds>,
     last_sparql_query: Option<String>,
+    right_panel_tab: Option<String>,
 ) -> UiSettings {
     UiSettings {
         theme: theme.or_else(|| base.theme.clone()),
@@ -78,6 +85,7 @@ pub fn merge_ui_settings(
         left_sidebar_visible: left_sidebar_visible.or(base.left_sidebar_visible),
         window_bounds: window_bounds.or_else(|| base.window_bounds.clone()),
         last_sparql_query: last_sparql_query.or_else(|| base.last_sparql_query.clone()),
+        right_panel_tab: right_panel_tab.or_else(|| base.right_panel_tab.clone()),
         collapsed_folders: base.collapsed_folders.clone(),
     }
 }
@@ -133,6 +141,7 @@ mod tests {
             left_sidebar_visible: None,
             window_bounds: None,
             last_sparql_query: None,
+            right_panel_tab: None,
             collapsed_folders: BTreeMap::new(),
         };
         save_ui_settings(&ctx, &settings).unwrap();
@@ -166,13 +175,13 @@ mod tests {
             cache_dir: tmp.path().join("cache"),
         };
         let query = "SELECT ?p ?t WHERE {\n  ?p schema:name ?t\n} LIMIT 137";
-        let merged = merge_ui_settings(&UiSettings::default(), None, None, None, None, None, None, Some(query.into()));
+        let merged = merge_ui_settings(&UiSettings::default(), None, None, None, None, None, None, Some(query.into()), None);
         save_ui_settings(&ctx, &merged).unwrap();
 
         let loaded = load_ui_settings(&ctx).unwrap();
         assert_eq!(loaded.last_sparql_query.as_deref(), Some(query));
         // Saving other settings keeps the query.
-        let kept = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None, None);
+        let kept = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None, None, None);
         assert_eq!(kept.last_sparql_query.as_deref(), Some(query));
     }
 
@@ -198,7 +207,7 @@ mod tests {
         assert_eq!(loaded.sidebar_width, Some(137), "other settings survive");
 
         // Saving through the merge keeps the folders.
-        let merged = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None, None);
+        let merged = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None, None, None);
         save_ui_settings(&ctx, &merged).unwrap();
         let loaded = load_ui_settings(&ctx).unwrap();
         assert_eq!(loaded.theme.as_deref(), Some("light"));
@@ -230,7 +239,7 @@ mod tests {
         assert_eq!(loaded.left_sidebar_visible, None, "missing field means shown");
         assert_eq!(loaded.right_sidebar_visible, Some(false));
 
-        let hidden = merge_ui_settings(&loaded, None, None, None, None, Some(false), None, None);
+        let hidden = merge_ui_settings(&loaded, None, None, None, None, Some(false), None, None, None);
         save_ui_settings(&ctx, &hidden).unwrap();
         let loaded = load_ui_settings(&ctx).unwrap();
         assert_eq!(loaded.left_sidebar_visible, Some(false));
@@ -238,7 +247,33 @@ mod tests {
         assert!(std::fs::read_to_string(config_dir.join("ui.toml")).unwrap().contains("leftSidebarVisible = false"));
 
         // Saving other settings keeps the tree state.
-        let kept = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None, None);
+        let kept = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None, None, None);
         assert_eq!(kept.left_sidebar_visible, Some(false));
+    }
+
+    #[test]
+    fn right_panel_tab_round_trip_and_old_file_without_it() {
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("config");
+        let ctx = CerboContext {
+            config_dir: config_dir.clone(),
+            cache_dir: tmp.path().join("cache"),
+        };
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(config_dir.join("ui.toml"), "theme = \"dark\"\nsidebarWidth = 137\n").unwrap();
+
+        let loaded = load_ui_settings(&ctx).unwrap();
+        assert_eq!(loaded.right_panel_tab, None, "missing field means the default tab");
+
+        let picked = merge_ui_settings(&loaded, None, None, None, None, None, None, None, Some("outline".into()));
+        save_ui_settings(&ctx, &picked).unwrap();
+        let loaded = load_ui_settings(&ctx).unwrap();
+        assert_eq!(loaded.right_panel_tab.as_deref(), Some("outline"));
+        assert_eq!(loaded.sidebar_width, Some(137), "other settings survive");
+        assert!(std::fs::read_to_string(config_dir.join("ui.toml")).unwrap().contains("rightPanelTab = \"outline\""));
+
+        // Saving other settings keeps the tab.
+        let kept = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None, None, None);
+        assert_eq!(kept.right_panel_tab.as_deref(), Some("outline"));
     }
 }

@@ -608,6 +608,12 @@ mod tests {
                 .collect()
         }
 
+        fn outgoing(&self, uuid: &str) -> Vec<(String, String)> {
+            let mut index = SemanticIndex::open(&self.ctx, IndexOptions::default()).unwrap();
+            index.catch_up(None).unwrap();
+            index.outgoing_links(uuid).unwrap().into_iter().map(|e| (e.uuid, e.title)).collect()
+        }
+
         fn page_md(&self, uuid: &str) -> PathBuf {
             self.ctx.object_path(uuid).join("page.md")
         }
@@ -703,6 +709,25 @@ mod tests {
         fs::remove_dir_all(&dest).unwrap();
         assert_eq!(vault.titles(), ["Berlin"]);
         assert!(!ask(&vault, &format!("ASK {{ GRAPH <cerbo://graphs/{arriving}> {{ ?s ?p ?o }} }}")));
+    }
+
+    #[test]
+    fn outgoing_links_list_linked_pages_once_by_title() {
+        let vault = TestVault::new();
+        let zed = vault.page("Zed", "");
+        let alpha = vault.page("Alpha", "");
+        let missing = "00000000-0000-4000-8000-000000000137";
+        let source = vault.page(
+            "Source",
+            &format!("[Z](cerbo://{zed}) [A](cerbo://{alpha}) [Z again](cerbo://{zed}) [gone](cerbo://{missing})"),
+        );
+
+        // Two links to one page are one entry; a broken link and the order by title.
+        assert_eq!(
+            vault.outgoing(&source),
+            [(alpha.clone(), "Alpha".to_string()), (zed.clone(), "Zed".to_string())]
+        );
+        assert!(vault.outgoing(&alpha).is_empty(), "a page without links has none");
     }
 
     #[test]

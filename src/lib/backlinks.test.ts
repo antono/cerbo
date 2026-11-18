@@ -24,4 +24,13 @@ describe('backlinksFailure', () => {
     expect(backlinksFailure('No vault is open').status).toBe('error');
     expect(backlinksFailure('No vault is open').message).toContain('No vault is open');
   });
+
+  it('names the list in the messages of another panel list', () => {
+    expect(backlinksFailure({ kind: 'indexBusy' }, 'Outgoing links').message).toBe(
+      'Outgoing links are temporarily unavailable: another Cerbo process is using the index.',
+    );
+    expect(backlinksFailure({ kind: 'unavailable', message: 'x' }, 'Outgoing links').message).toBe(
+      'Outgoing links are unavailable: x',
+    );
+  });
 });

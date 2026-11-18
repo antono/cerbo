@@ -127,8 +127,17 @@ export function offsetCaretByTextareaScroll(input: CaretTarget): void {
  * positions were offset by `offsetCaretByTextareaScroll`.
  */
 export function caretTopInText(input: CaretTarget): number {
+  return textTopAtOffset(input, input.textarea.selectionStart);
+}
+
+/**
+ * The distance from the top of the text to the line holding character
+ * `offset`, measured the way `caretTopInText` measures the caret. The Outline
+ * uses it to scroll to a heading and to tell which heading is at the top.
+ */
+export function textTopAtOffset(input: CaretTarget, offset: number): number {
   const measure = textCaret.get(input) ?? input.getCursorXY;
-  return measure.call(input, input.textarea.selectionStart).top;
+  return measure.call(input, offset).top;
 }
 
 /** The part of a Carta instance the render gate replaces. */

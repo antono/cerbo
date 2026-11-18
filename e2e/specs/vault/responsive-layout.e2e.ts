@@ -214,7 +214,7 @@ describe('responsive layout', () => {
       expect(await openedTitle()).toContain(PAGE_A);
     });
 
-    it('opens the right panel from ⋯ as a sheet with tabs, closing the drawer', async () => {
+    it('opens the right panel from ⋯ as a sheet with the icon tabs, closing the drawer', async () => {
       await tb('toolbar-left-panel').click();
       await byTestId('tree-drawer').waitForDisplayed({ timeout: 5_000 });
 
@@ -227,10 +227,12 @@ describe('responsive layout', () => {
       await sheet.waitForDisplayed({ timeout: 5_000 });
       // The drawer leaves with a 160ms fly-out transition.
       await byTestId('tree-drawer').waitForExist({ reverse: true, timeout: 5_000 });
-      const tabs = await $$('[data-testid^="sheet-tab-"]').map((t) => t.getAttribute('data-testid'));
-      expect(tabs).toEqual(['sheet-tab-backlinks', 'sheet-tab-similar', 'sheet-tab-files']);
-      await byTestId('sheet-tab-files').click();
-      await expect(sheet.$('.attachments-panel')).toBeExisting();
+      // The sheet has no tab bar of its own: it uses the right panel's icon strip.
+      expect(await $$('[data-testid^="sheet-tab-"]').length).toBe(0);
+      const tabs = await sheet.$$('[data-testid^="right-tab-"][role="tab"]').map((t) => t.getAttribute('data-testid'));
+      expect(tabs).toEqual(['right-tab-attachments', 'right-tab-links', 'right-tab-outline', 'right-tab-agent']);
+      await sheet.$('[data-testid="right-tab-attachments"]').click();
+      await expect(sheet.$('.attachments-panel')).toBeDisplayed();
 
       await browser.keys('Escape');
       await sheet.waitForExist({ reverse: true, timeout: 5_000 });

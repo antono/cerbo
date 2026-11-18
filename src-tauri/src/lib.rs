@@ -82,6 +82,7 @@ fn ui_settings_save(
     leftSidebarVisible: Option<bool>,
     windowBounds: Option<cerbo_core::ui_settings::WindowBounds>,
     lastSparqlQuery: Option<String>,
+    rightPanelTab: Option<String>,
 ) -> Result<(), String> {
     let ctx = get_context(&app)?;
     let current = cerbo_core::ui_settings::load_ui_settings(&ctx)?;
@@ -94,6 +95,7 @@ fn ui_settings_save(
         leftSidebarVisible,
         windowBounds,
         lastSparqlQuery,
+        rightPanelTab,
     );
     cerbo_core::ui_settings::save_ui_settings(&ctx, &merged)
 }
@@ -130,6 +132,7 @@ fn window_bounds_save(app: tauri::AppHandle, width: f64, height: f64) -> Result<
         None,
         Some(cerbo_core::ui_settings::WindowBounds { width, height }),
         None,
+        None,
     );
     cerbo_core::ui_settings::save_ui_settings(&ctx, &merged)
 }
@@ -165,6 +168,7 @@ pub fn run() {
             vault::vault_objects_list,
             // index
             index::backlinks_get,
+            index::outgoing_links_get,
             // semantic
             semantic::similar_get,
             semantic::embeddings_refresh,

@@ -18,6 +18,7 @@ import {
   type ActionContext,
   type KeyContext,
 } from './actions';
+import { RIGHT_PANELS } from './right-panels';
 
 // Under vitest there is no browser, so the primary modifier is Ctrl.
 function key(init: Partial<KeyboardEvent>): KeyboardEvent {
@@ -41,6 +42,7 @@ function context(state: Partial<ActionContext> = {}): ActionContext {
     addVault: vi.fn(),
     toggleLeftSidebar: vi.fn(),
     toggleRightSidebar: vi.fn(),
+    useRightPanelTab: vi.fn(),
     toggleEditorMode: vi.fn(),
     setTheme: vi.fn(),
     goBack: vi.fn(),
@@ -62,6 +64,7 @@ function context(state: Partial<ActionContext> = {}): ActionContext {
     editorTab: 'preview',
     showLeftSidebar: true,
     showRightSidebar: true,
+    rightPanelTab: 'links',
     canGoBack: true,
     canGoForward: true,
     ...ops,
@@ -305,5 +308,35 @@ describe('shortcuts help', () => {
 
   it('lists a hotkey for every action it names', () => {
     for (const id of [...HELP_ACTIONS, ...HELP_NAVIGATION]) expect(actionById(id).hotkey, id).toBeDefined();
+  });
+});
+
+describe('right panel tab actions', () => {
+  it('has a "Show <tab>" action with a hotkey for every tab, listed in the help', () => {
+    for (const panel of RIGHT_PANELS) {
+      const action = actionById(`panel.right.${panel.id}`);
+      expect(actionLabel(action, context())).toBe(`Show ${panel.label}`);
+      expect(action.hotkey).toBeDefined();
+      expect(HELP_ACTIONS).toContain(action.id);
+    }
+  });
+
+  it('shows the hotkeys as Ctrl+Alt+<digit>', () => {
+    expect(hotkeyText(actionById('panel.right.attachments').hotkey!, false)).toBe('Ctrl+Alt+1');
+    expect(hotkeyText(actionById('panel.right.outline').hotkey!, true)).toBe('⌘+⌥+3');
+  });
+
+  it('runs the tab through the context from its hotkey, even in the editor', () => {
+    const ctx = context({ editorTab: 'write' });
+    const e = key({ code: 'Digit3', key: '3', ctrlKey: true, altKey: true });
+    const action = dispatchHotkey(e, editing, ctx, ACTIONS, false);
+    expect(action?.id).toBe('panel.right.outline');
+    expect(ctx.useRightPanelTab).toHaveBeenCalledWith('outline');
+  });
+
+  it('is available only with an open page', () => {
+    const ids = (ctx: ActionContext) => availableActions(ctx).map((a) => a.id);
+    expect(ids(context())).toContain('panel.right.links');
+    expect(ids(context({ currentUuid: null }))).not.toContain('panel.right.links');
   });
 });

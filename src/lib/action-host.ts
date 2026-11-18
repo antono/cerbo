@@ -28,6 +28,7 @@ import {
   triggerMove,
   triggerNewFolder,
   triggerRename,
+  useRightPanelTab,
 } from './stores.svelte';
 
 const DIALOG_FLAGS = {
@@ -60,6 +61,9 @@ export const appActions: ActionContext = {
   get showRightSidebar() {
     return isPanelShown('right');
   },
+  get rightPanelTab() {
+    return app.rightPanelTab;
+  },
   get canGoBack() {
     return app.historyIndex > 0;
   },
@@ -86,6 +90,7 @@ export const appActions: ActionContext = {
   },
   toggleLeftSidebar,
   toggleRightSidebar,
+  useRightPanelTab,
   toggleEditorMode,
   setTheme(theme) {
     app.theme = theme;

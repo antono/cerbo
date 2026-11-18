@@ -9,6 +9,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { homeDir } from '@tauri-apps/api/path';
 import { backlinksFailure, type BacklinksStatus } from './backlinks';
+import { parseRightPanel, tabShortcutOutcome, type AgentStatus, type RightPanelId } from './right-panels';
 import type { PrefixMap } from './mention-plugin';
 import type { SparqlResponse } from './sparql-console';
 import {
@@ -101,6 +102,8 @@ export interface UiSettings {
   leftSidebarVisible?: boolean | null;
   windowBounds: { width: number; height: number } | null;
   lastSparqlQuery: string | null;
+  /** Selected right panel tab; absent in old files (= Links). */
+  rightPanelTab?: string | null;
   /** Collapsed sidebar folders per vault id; only collapsed ones are listed. */
   collapsedFolders?: Record<string, string[]>;
 }
@@ -121,6 +124,20 @@ export const app = $state({
   backlinks: [] as BacklinkEntry[],
   backlinksStatus: 'ready' as BacklinksStatus,
   backlinksMessage: '',
+  // Outgoing links of the open page (Links sub-panel), loaded like backlinks.
+  outgoingLinks: [] as BacklinkEntry[],
+  outgoingStatus: 'ready' as BacklinksStatus,
+  outgoingMessage: '',
+  // The selected right panel tab, kept in ui.toml (spec `desktop-right-panel`).
+  rightPanelTab: 'links' as RightPanelId,
+  // The Agent tab's status mark; `add-agent-panel` drives it.
+  agentStatus: 'disconnected' as AgentStatus,
+  // The open page's text as typed, not yet saved; the Outline reads it. Only
+  // trusted while `pageTextUuid` is the open page.
+  pageText: '',
+  pageTextUuid: null as string | null,
+  // Index of the Outline heading holding the top of the editor, -1 for none.
+  outlineCurrent: -1,
   attachments: [] as AttachmentInfo[],
   loading: false,
   loadingMessage: '',
@@ -211,6 +228,7 @@ export async function loadUiSettings(): Promise<void> {
     if (typeof res.lastSparqlQuery === 'string') {
       app.lastSparqlQuery = res.lastSparqlQuery;
     }
+    app.rightPanelTab = parseRightPanel(res.rightPanelTab);
     app.uiCollapsedFolders = res.collapsedFolders ?? {};
     // `windowBounds` is applied by the desktop layer when the window opens
     // and saved by `app_exit`; the frontend never sends it (null keeps it).
@@ -229,6 +247,7 @@ export async function saveUiSettings(): Promise<void> {
       leftSidebarVisible: app.showLeftSidebar,
       windowBounds: null, // kept: `app_exit` saves the window size
       lastSparqlQuery: app.lastSparqlQuery,
+      rightPanelTab: app.rightPanelTab,
     });
   } catch (e) {
     console.error('Failed to save UI settings:', e);
@@ -295,6 +314,28 @@ export function toggleLeftSidebar(): void {
  */
 export function toggleRightSidebar(): void {
   applyPanelState(togglePanel('right', panelState()));
+}
+
+/** Select a right panel tab and remember it. The page does not matter: it stays across pages. */
+export function selectRightPanelTab(id: RightPanelId): void {
+  if (app.rightPanelTab === id) return;
+  app.rightPanelTab = id;
+  void saveUiSettings();
+}
+
+/**
+ * A tab's hotkey or command (spec "Tab hotkeys and commands"): show the right
+ * panel with the tab selected; select the tab in a shown panel; or hide the
+ * panel when that tab is already the selected one.
+ */
+export function useRightPanelTab(id: RightPanelId): void {
+  const outcome = tabShortcutOutcome(id, { panelShown: isPanelShown('right'), selected: app.rightPanelTab });
+  if (outcome === 'hide') {
+    toggleRightSidebar();
+    return;
+  }
+  selectRightPanelTab(id);
+  if (outcome === 'show') showPanelNow('right');
 }
 
 /** Make `panel` visible in the current layout, if it is not already. */
@@ -456,6 +497,7 @@ export async function openVault(vaultId: string): Promise<void> {
       app.currentUuid = null;
       app.currentContent = '';
       app.backlinks = [];
+      app.outgoingLinks = [];
     }
   } catch (e) {
     setError(String(e));
@@ -809,6 +851,7 @@ export async function deletePage(uuid: string): Promise<void> {
         app.currentUuid = null;
         app.currentContent = '';
         app.backlinks = [];
+        app.outgoingLinks = [];
       }
     }
   } catch (e) {
@@ -877,6 +920,31 @@ export async function loadBacklinks(uuid: string): Promise<void> {
     app.backlinks = [];
     app.backlinksStatus = failure.status;
     app.backlinksMessage = failure.message;
+  }
+}
+
+let outgoingRequest = 0;
+
+/** Load the pages that page `uuid` links to; answers for a page left behind are dropped. */
+export async function loadOutgoingLinks(uuid: string): Promise<void> {
+  if (!app.activeVaultId) return;
+  const request = ++outgoingRequest;
+  app.outgoingStatus = 'loading';
+  app.outgoingMessage = '';
+  try {
+    const entries = await invoke<BacklinkEntry[]>('outgoing_links_get', {
+      vaultId: app.activeVaultId,
+      uuid,
+    });
+    if (request !== outgoingRequest) return;
+    app.outgoingLinks = entries;
+    app.outgoingStatus = 'ready';
+  } catch (e) {
+    if (request !== outgoingRequest) return;
+    const failure = backlinksFailure(e, 'Outgoing links');
+    app.outgoingLinks = [];
+    app.outgoingStatus = failure.status;
+    app.outgoingMessage = failure.message;
   }
 }
 
