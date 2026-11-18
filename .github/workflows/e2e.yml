@@ -85,6 +85,9 @@ jobs:
           nix develop --command bash -euo pipefail <<'BASH'
           bun install --frozen-lockfile
           bun run tauri build --no-bundle
+          # The daemon the app starts and the scripted agent of the Agent tab
+          # specs (`cerbo-fake-agent`), beside the desktop binary.
+          cargo build --release -p cerbo -p cerboid --bins
           BASH
 
       - name: Run e2e tests

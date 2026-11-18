@@ -738,6 +738,9 @@ impl OldDaemon {
                 }
             }
             let _ = std::fs::remove_file(&socket);
+            // Reap the stand-in process (it is gone, or about to be).
+            let _ = child.kill();
+            let _ = child.wait();
             drop(lock);
         });
         OldDaemon { child_pid, asked_to_stop, gone }

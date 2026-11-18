@@ -371,3 +371,62 @@ fn under_bubblewrap_the_mcp_shim_changes_a_page_through_the_session_socket() {
     assert!(!root.join("direct.md").exists());
     assert_eq!(env.content(&root, &page), "through the socket\n", "{text}");
 }
+
+/// Smoke test with the real OpenCode, and no prompt: the daemon starts it in
+/// the bubblewrap sandbox with an isolated home (never the real one, no login
+/// file), and the session has to come up (`initialize` and `session/new`
+/// succeed). OpenCode runs through a wrapper that adds `--print-logs` and keeps
+/// its stderr in the agent home, where the test looks for the `cerbo` MCP
+/// server.
+///
+/// Ignored by default: it needs the real `opencode` and a usable `CERBO_BWRAP`,
+/// and it prints what happened. Run it with
+/// `CERBO_REAL_OPENCODE=$(command -v opencode) cargo test -p cerbo --test agent_cli -- --ignored --nocapture real_opencode`.
+#[test]
+#[ignore = "needs the real opencode (CERBO_REAL_OPENCODE) and bubblewrap (CERBO_BWRAP)"]
+fn real_opencode_smoke_starts_a_sandboxed_session_without_a_prompt() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(real) = std::env::var_os("CERBO_REAL_OPENCODE").map(PathBuf::from) else {
+        eprintln!("SKIPPED: CERBO_REAL_OPENCODE is not set");
+        return;
+    };
+    let Some(bwrap) = std::env::var_os("CERBO_BWRAP").filter(|v| !v.is_empty()) else {
+        eprintln!("SKIPPED: CERBO_BWRAP is not set");
+        return;
+    };
+    cerboid::sandbox::confinement(cerbo_core::agent::SandboxMode::Bwrap, Some(bwrap.clone())).expect("a usable sandbox");
+
+    let env = Env::new();
+    let real = std::fs::canonicalize(real).unwrap();
+    // In a directory of its own: the sandbox binds the install root of the agent.
+    let wrapper = env.xdg.path().join("opencode-install").join("bin").join("opencode-logged");
+    std::fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+    std::fs::write(&wrapper, format!("#!/bin/sh\nexec '{}' --print-logs \"$@\" 2>>\"$HOME/opencode-stderr.log\"\n", real.display())).unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // The sandbox is on (the default); no login file exists anywhere.
+    std::fs::write(env.ctx.config_dir.join("agents.toml"), format!("[agent]\nopencode = \"{}\"\n", wrapper.display())).unwrap();
+    std::fs::remove_file(env.xdg.path().join("data/opencode/auth.json")).unwrap();
+    let (id, _) = env.add_vault("notes");
+    let _daemon = env.start_daemon_with(Duration::from_secs(30), Some(bwrap));
+
+    let mut c = env.client();
+    let agents = c.call(Call::AgentList {}).unwrap();
+    eprintln!("agent_list: {agents}");
+    // Without a login the daemon refuses before it starts anything.
+    let refused = c.call(Call::SessionCreate { vault: id.clone(), agent: AgentKind::Opencode, resume_from: None }).unwrap_err();
+    eprintln!("without a login: {refused:?}");
+    assert!(refused.message.contains("not signed in"), "{refused:?}");
+    // A placeholder login file in the isolated data directory (never the real
+    // one): the daemon binds it into the sandbox and starts the agent.
+    std::fs::write(env.xdg.path().join("data/opencode/auth.json"), "{}").unwrap();
+    let created = c.call(Call::SessionCreate { vault: id, agent: AgentKind::Opencode, resume_from: None });
+    let log = std::fs::read_to_string(env.xdg.path().join("data/cerbo/agents/opencode/home/opencode-stderr.log")).unwrap_or_default();
+    // Only the lines about MCP, whatever else the agent logs.
+    let mcp: Vec<&str> = log.lines().filter(|l| l.to_lowercase().contains("mcp") || l.contains("cerbo")).collect();
+    eprintln!("stderr: {} lines, {} about mcp/cerbo:\n{}", log.lines().count(), mcp.len(), mcp.join("\n"));
+    let info: SessionInfo = serde_json::from_value(created.unwrap_or_else(|e| panic!("session create failed: {e:?}\nstderr:\n{log}"))).unwrap();
+    eprintln!("session: state {:?}, sandboxed {}, warning {:?}", info.state, info.sandboxed, info.warning);
+    assert!(info.sandboxed);
+    assert!(!mcp.is_empty(), "nothing about the cerbo MCP server in the agent's log:\n{log}");
+    let _ = c.call(Call::SessionEnd { session: info.id });
+}

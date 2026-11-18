@@ -6,6 +6,7 @@ target/
 build/
 dist/
 result/
+result-*
 .svelte-kit/
 
 # Man page is generated at build time from cli/man/cerbo.md via mandown

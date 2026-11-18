@@ -314,9 +314,14 @@ describe('right panel tabs', () => {
     it('marks the Agent tab with its status and names it', async () => {
       const mark = byTestId('right-tab-badge-agent');
       await expect(mark).toBeExisting();
-      expect(await mark.getAttribute('data-status')).toBe('disconnected');
+      // The harness starts a daemon of its own for each session (e2e/session.ts),
+      // so the mark settles on connected once the app has reached it.
+      await browser.waitUntil(async () => (await mark.getAttribute('data-status')) === 'connected', {
+        timeout: 15_000,
+        timeoutMsg: 'the Agent tab mark never said connected',
+      });
       expect(await mark.getAttribute('aria-hidden')).toBe('true');
-      expect(await tab('agent').getAttribute('aria-label')).toBe('Agent, Agent not connected');
+      expect(await tab('agent').getAttribute('aria-label')).toBe('Agent, Agent connected');
     });
   });
 

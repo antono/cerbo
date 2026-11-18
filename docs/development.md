@@ -65,12 +65,26 @@ WebKitWebDriver (both in the dev shell) with WebdriverIO:
 
 ```bash
 nix build .#cerbo-desktop   # the app under test, at ./result
+nix build .#cerboid -o result-cerboid   # the daemon the app starts
+cargo build -p cerbo --bins # cerbo-fake-agent, the scripted ACP agent of the Agent tab specs
 bun run test:e2e            # runs e2e/specs; uses xvfb-run when DISPLAY is unset
 ```
 
-Each spec file gets temporary XDG config and cache directories; specs under
-`e2e/specs/vault/` also get a fresh copy of `test-vault/`. Your own vaults and
-settings are never touched. Set `CERBO_DESKTOP_BIN` to test another binary.
+Each spec file gets temporary XDG config, cache, data and runtime
+directories, and its own daemon (`cerboid`) on a socket in them; specs under
+`e2e/specs/vault/` also get a fresh copy of `test-vault/`. Your own vaults,
+settings and daemon are never touched. Set `CERBO_DESKTOP_BIN` to test another
+binary, `CERBOID_BIN` and `CERBO_E2E_FAKE_AGENT` for the daemon and the fake
+agent (by default they are looked for beside the desktop binary, in
+`result-cerboid/` and in cargo's `target/`).
+
+The Agent tab specs (`agent-panel*.e2e.ts`) talk to that daemon. The fake agent
+stands in for OpenCode and does what a script written by the spec says
+(`writeAgentScript` in `e2e/session.ts`; the script format is documented in
+`cerboid/src/bin/fake-acp-agent.rs`). The daemon runs it in the real
+bubblewrap sandbox when `CERBO_BWRAP` names one that works here (the dev shell
+sets it) and without the sandbox otherwise. Spec files with `no-agent` in
+their name get a configuration in which no agent can be found.
 CI runs the suite on pushes to `main` and on pull requests
 (`.github/workflows/e2e.yml`).
 

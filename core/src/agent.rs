@@ -214,6 +214,7 @@ pub fn read_changes(ctx: &CerboContext, vault_id: &str, limit: usize) -> Result<
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // the tests write fixture files directly
 mod tests {
     use super::*;
 
