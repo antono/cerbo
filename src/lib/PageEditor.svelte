@@ -38,7 +38,7 @@
     type SavedCursorPosition,
   } from './cursor-position';
   import { focusTextareaAtOffset } from './textarea-focus';
-  import { currentHeadingIndex, headingsFor, pairRenderedHeadings, type RenderedHeading } from './outline';
+  import { createJumpHold, currentHeadingIndex, headingsFor, pairRenderedHeadings, type RenderedHeading } from './outline';
   import { setOutlineBridge } from './outline-bridge';
   import { attachEditorAttachments, type DropIndicator } from './editor-attachments';
   import { attachmentFileName } from './attachment-drop';
@@ -631,11 +631,18 @@
     return null;
   }
 
+  const jumpHold = createJumpHold();
+
   /** Scroll so heading `index` is at the top; in edit mode the cursor moves there too. */
   function jumpToHeading(index: number) {
     const headings = headingsFor(content);
     const heading = headings[index];
     if (!heading) return;
+    // The jump wins over any measurement still pending: it would be taken
+    // before the scroll settled, or on a page too short to scroll at all.
+    if (outlineTimer) clearTimeout(outlineTimer);
+    outlineTimer = null;
+    jumpHold.hold(index);
     app.outlineCurrent = index;
     if (app.editorTab === 'preview') {
       const rendered = previewHeadings();
@@ -684,7 +691,7 @@
     if (app.rightPanelTab !== 'outline' || outlineTimer) return;
     outlineTimer = setTimeout(() => {
       outlineTimer = null;
-      app.outlineCurrent = app.rightPanelTab === 'outline' ? topHeadingIndex() : -1;
+      app.outlineCurrent = app.rightPanelTab === 'outline' ? jumpHold.resolve(topHeadingIndex()) : -1;
     }, OUTLINE_CURRENT_DELAY_MS);
   }
 
@@ -694,9 +701,17 @@
     // `scroll` does not bubble; capture sees the editor's and the preview's own scrollers.
     const onScroll = () => scheduleOutlineCurrent();
     container.addEventListener('scroll', onScroll, true);
+    // The user taking over (wheel, touch, scrollbar, keys) ends a jump's hold.
+    const onUser = () => {
+      jumpHold.release();
+      scheduleOutlineCurrent();
+    };
+    const userEvents = ['wheel', 'touchmove', 'pointerdown', 'keydown'] as const;
+    for (const type of userEvents) container.addEventListener(type, onUser, { capture: true, passive: true });
     const removeBridge = setOutlineBridge({ jumpTo: jumpToHeading });
     return () => {
       container.removeEventListener('scroll', onScroll, true);
+      for (const type of userEvents) container.removeEventListener(type, onUser, true);
       removeBridge();
       if (outlineTimer) clearTimeout(outlineTimer);
       outlineTimer = null;
@@ -709,7 +724,10 @@
     app.editorTab;
     void content;
     void loadedUuid;
-    untrack(() => scheduleOutlineCurrent());
+    untrack(() => {
+      jumpHold.release();
+      scheduleOutlineCurrent();
+    });
   });
 
   onMount(() => {

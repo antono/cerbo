@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { currentHeadingIndex, extractHeadings, headingsFor, outlineDepths, pairRenderedHeadings } from './outline';
+import { createJumpHold, currentHeadingIndex, extractHeadings, headingsFor, outlineDepths, pairRenderedHeadings } from './outline';
 
 describe('pairRenderedHeadings', () => {
   const heads = (items: [number, string][]) => items.map(([level, text], i) => ({ level, text, offset: i, line: i }));
@@ -88,6 +88,35 @@ describe('extractHeadings', () => {
     expect(extractHeadings('- item\n---\n> quote\n---\n')).toEqual([]);
   });
 
+  const titles = (md: string) => extractHeadings(md).map((h) => h.text);
+
+  it('takes --- after a list item and its continuation lines for a rule', () => {
+    expect(titles('- item\n  continued\n---\n')).toEqual([]);
+    expect(titles('- item\ncontinued lazily\n---\n')).toEqual([]);
+    expect(titles('1. item\n   more\n===\n')).toEqual([]);
+    expect(titles('- item\n\n  second paragraph\n---\n')).toEqual([]);
+  });
+
+  it('takes --- after a block quote and its lazy lines for a rule', () => {
+    expect(titles('> quote\nlazy line\n---\n')).toEqual([]);
+    expect(titles('> quote\n---\n')).toEqual([]);
+  });
+
+  it('takes --- after an HTML block for a rule', () => {
+    expect(titles('<div>\ntext\n---\n')).toEqual([]);
+    expect(titles('<!-- note\nmore\n-->\ntext after\n---\n')).toEqual(['text after']);
+    expect(titles('<details>\nsummary\n===\n')).toEqual([]);
+    expect(titles('<br>\n---\n')).toEqual([]);
+  });
+
+  it('still lists a paragraph with inline HTML, and one after a list or HTML ends', () => {
+    expect(titles('<b>Bold</b> title\n---\n')).toEqual(['<b>Bold</b> title']);
+    expect(titles('- item\n\nTitle\n---\n')).toEqual(['Title']);
+    expect(titles('> quote\n\nTitle\n===\n')).toEqual(['Title']);
+    expect(titles('<div>x</div>\n\nTitle\n---\n')).toEqual(['Title']);
+    expect(titles('- item\n---\nTitle\n---\n')).toEqual(['Title']);
+  });
+
   it('skips setext look-alikes in fenced code', () => {
     expect(extractHeadings('```\nNot a title\n=====\n```\n')).toEqual([]);
   });
@@ -166,5 +195,29 @@ describe('currentHeadingIndex', () => {
   it('marks nothing above the first heading or without headings', () => {
     expect(currentHeadingIndex(2, (i) => [50, 80][i], 10)).toBe(-1);
     expect(currentHeadingIndex(0, () => 0, 10)).toBe(-1);
+  });
+});
+
+describe('createJumpHold', () => {
+  it('lets a held jump win over the measurement', () => {
+    const hold = createJumpHold();
+    expect(hold.resolve(0)).toBe(0);
+    hold.hold(2);
+    expect(hold.resolve(0)).toBe(2);
+    expect(hold.resolve(-1)).toBe(2);
+  });
+
+  it('follows the measurement again after release', () => {
+    const hold = createJumpHold();
+    hold.hold(2);
+    hold.release();
+    expect(hold.resolve(1)).toBe(1);
+  });
+
+  it('keeps only the latest jump', () => {
+    const hold = createJumpHold();
+    hold.hold(2);
+    hold.hold(1);
+    expect(hold.resolve(0)).toBe(1);
   });
 });

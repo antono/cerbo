@@ -236,6 +236,10 @@ describe('right panel tabs', () => {
       await browser.pause(1_000);
       expect(await commandCount('backlinks_get')).toBe(1);
       expect(await commandCount('outgoing_links_get')).toBe(1);
+      // SimilarNotesSection is mounted all along (hidden); its one request
+      // must come now, from `visible` turning true. Without this the hidden-tab
+      // check above would also pass if the section never loaded at all.
+      expect(await commandCount('similar_get')).toBe(1);
 
       // With Links selected, opening a page loads its lists once, not twice.
       const target = (await openedTitle()).includes(PAGE) ? OTHER : PAGE;
@@ -245,6 +249,7 @@ describe('right panel tabs', () => {
       await browser.waitUntil(async () => (await commandCount('backlinks_get')) > 0, { timeout: 10_000 });
       await browser.pause(1_000);
       expect(await commandCount('backlinks_get')).toBe(1);
+      expect(await commandCount('similar_get')).toBe(1);
     });
   });
 
