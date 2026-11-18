@@ -1,4 +1,7 @@
 import { $, $$, browser, expect } from '@wdio/globals';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Spec `desktop-right-panel` and `desktop-outline-panel` (change
 // `add-right-panel-tabs`): the icon tab strip, switching, the remembered tab,
@@ -75,6 +78,51 @@ async function hotkey(digit: string) {
 function outlineTitles(): Promise<string[]> {
   return browser.execute(() =>
     Array.from(document.querySelectorAll('[data-testid="outline-item"]')).map((b) => b.getAttribute('title') ?? ''),
+  );
+}
+
+/** Start counting the commands the page sends to the backend, by name. */
+function countCommands() {
+  return browser.execute(() => {
+    const internals = (window as unknown as {
+      __TAURI_INTERNALS__: { invoke: (c: string, ...rest: unknown[]) => Promise<unknown> };
+    }).__TAURI_INTERNALS__;
+    const w = window as unknown as { __cmdCounts?: Record<string, number>; __cmdWrapped?: boolean };
+    w.__cmdCounts = {};
+    if (w.__cmdWrapped) return;
+    w.__cmdWrapped = true;
+    const original = internals.invoke.bind(internals);
+    internals.invoke = (cmd: string, ...rest: unknown[]) => {
+      w.__cmdCounts![cmd] = (w.__cmdCounts![cmd] ?? 0) + 1;
+      return original(cmd, ...rest);
+    };
+  });
+}
+
+function commandCount(cmd: string): Promise<number> {
+  return browser.execute((c) => (window as unknown as { __cmdCounts?: Record<string, number> }).__cmdCounts?.[c] ?? 0, cmd);
+}
+
+/** The Outline panel's scroller. */
+const OUTLINE_SCROLLER = '[data-testid="outline-panel"] .panel-content';
+
+function setEditorText(text: string) {
+  return browser.execute((t) => {
+    const ta = document.querySelector('.carta-input textarea') as HTMLTextAreaElement;
+    ta.value = t;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  }, text);
+}
+
+/** `## Section 1` ... with enough body lines under each to make the page scroll. */
+function longPage(sections: number): string {
+  const body = Array.from({ length: 8 }, (_, i) => `Line ${i + 1} of the section.`).join('\n\n');
+  return Array.from({ length: sections }, (_, i) => `## Section ${i + 1}\n\n${body}\n`).join('\n');
+}
+
+function currentOutlineTitle(): Promise<string | null> {
+  return browser.execute(
+    () => document.querySelector('[data-testid="outline-item"][aria-current="true"]')?.getAttribute('title') ?? null,
   );
 }
 
@@ -159,6 +207,107 @@ describe('right panel tabs', () => {
     await $('.right-panels').waitForExist({ reverse: true, timeout: 5_000 });
   });
 
+  describe('loading', () => {
+    it('sends no links or similar notes request while another tab is selected', async () => {
+      await hotkey('3');
+      await $('.right-panels').waitForDisplayed({ timeout: 5_000 });
+      await expectSelected('outline');
+      await countCommands();
+      await clickPageRow(PAGE);
+      await browser.waitUntil(async () => (await openedTitle()).includes(PAGE), { timeout: 10_000 });
+      await browser.waitUntil(async () => (await commandCount('page_read')) > 0, { timeout: 10_000 });
+      await browser.pause(1_000);
+      expect(await commandCount('similar_get')).toBe(0);
+      expect(await commandCount('backlinks_get')).toBe(0);
+      expect(await commandCount('outgoing_links_get')).toBe(0);
+    });
+
+    it('loads backlinks once per page when Links is selected', async () => {
+      await countCommands();
+      await hotkey('2');
+      await expectSelected('links');
+      await browser.waitUntil(async () => (await commandCount('backlinks_get')) > 0, { timeout: 10_000 });
+      await browser.pause(1_000);
+      expect(await commandCount('backlinks_get')).toBe(1);
+      expect(await commandCount('outgoing_links_get')).toBe(1);
+
+      // With Links selected, opening a page loads its lists once, not twice.
+      await countCommands();
+      await clickPageRow(OTHER);
+      await browser.waitUntil(async () => (await openedTitle()).includes(OTHER), { timeout: 10_000 });
+      await browser.waitUntil(async () => (await commandCount('backlinks_get')) > 0, { timeout: 10_000 });
+      await browser.pause(1_000);
+      expect(await commandCount('backlinks_get')).toBe(1);
+    });
+  });
+
+  describe('badges', () => {
+    let fixtures: string;
+
+    before(async () => {
+      fixtures = mkdtempSync(join(tmpdir(), 'cerbo-tabs-'));
+      writeFileSync(join(fixtures, 'tabs-137.pdf'), '%PDF-1.4\n% 137\n%%EOF\n');
+      await clickPageRow(PAGE);
+      await browser.waitUntil(async () => (await openedTitle()).includes(PAGE), { timeout: 10_000 });
+      await browser.execute(() => (document.activeElement as HTMLElement | null)?.blur());
+      await browser.keys('i');
+      await $('.carta-input textarea').waitForDisplayed({ timeout: 10_000 });
+    });
+
+    after(async () => {
+      rmSync(fixtures, { recursive: true, force: true });
+      // Back to preview, so the next block enters edit mode itself.
+      await browser.execute(() => (document.activeElement as HTMLElement | null)?.blur());
+      await browser.keys(['Control', 'e']);
+      await $('.carta-input textarea').waitForDisplayed({ reverse: true, timeout: 10_000 });
+    });
+
+    it('has no count badge on a page without attachments', async () => {
+      expect(await byTestId('right-tab-badge-attachments').isExisting()).toBe(false);
+      expect(await tab('attachments').getAttribute('aria-label')).toBe('Attachments');
+    });
+
+    it('shows the attachment count on the tab while Links is selected', async () => {
+      await tab('links').click();
+      await expectSelected('links');
+      await browser.execute(async (paths) => {
+        const textarea = document.querySelector<HTMLTextAreaElement>('.carta-input textarea')!;
+        const box = textarea.getBoundingClientRect();
+        const internals = (window as unknown as { __TAURI_INTERNALS__: { invoke: (c: string, a: unknown) => Promise<unknown> } })
+          .__TAURI_INTERNALS__;
+        await internals.invoke('plugin:event|emit', {
+          event: 'tauri://drag-drop',
+          payload: { paths, position: { x: box.left + 4, y: box.top + 4 } },
+        });
+      }, [join(fixtures, 'tabs-137.pdf')]);
+      await browser.waitUntil(
+        async () => ((await byTestId('right-tab-badge-attachments').getProperty('textContent')) ?? '') === '1',
+        { timeout: 10_000, timeoutMsg: 'the Attachments tab shows no count of 1' },
+      );
+      expect(await tab('attachments').getAttribute('aria-label')).toBe('Attachments, 1 attachment');
+      // Hidden from assistive tech: the count is part of the tab's name instead.
+      expect(await byTestId('right-tab-badge-attachments').getAttribute('aria-hidden')).toBe('true');
+      await expectSelected('links');
+    });
+
+    it('drops the count on a page without attachments', async () => {
+      await clickPageRow(OTHER);
+      await browser.waitUntil(async () => (await openedTitle()).includes(OTHER), { timeout: 10_000 });
+      await byTestId('right-tab-badge-attachments').waitForExist({ reverse: true, timeout: 10_000 });
+      expect(await tab('attachments').getAttribute('aria-label')).toBe('Attachments');
+      await clickPageRow(PAGE);
+      await browser.waitUntil(async () => (await openedTitle()).includes(PAGE), { timeout: 10_000 });
+    });
+
+    it('marks the Agent tab with its status and names it', async () => {
+      const mark = byTestId('right-tab-badge-agent');
+      await expect(mark).toBeExisting();
+      expect(await mark.getAttribute('data-status')).toBe('disconnected');
+      expect(await mark.getAttribute('aria-hidden')).toBe('true');
+      expect(await tab('agent').getAttribute('aria-label')).toBe('Agent, Agent not connected');
+    });
+  });
+
   describe('outline', () => {
     before(async () => {
       await clickPageRow(PAGE);
@@ -220,6 +369,112 @@ describe('right panel tabs', () => {
         t.dispatchEvent(new Event('input', { bubbles: true }));
       });
       await $('[data-testid="outline-empty"]').waitForDisplayed({ timeout: 5_000 });
+    });
+  });
+
+  describe('outline on a long page', () => {
+    before(async () => {
+      await $('.carta-input textarea').waitForDisplayed({ timeout: 10_000 });
+      await setEditorText(longPage(60));
+      await browser.waitUntil(async () => (await outlineTitles()).length === 60, { timeout: 10_000 });
+    });
+
+    it('keeps the scroll position when switching tabs and back, with the strip in view', async () => {
+      await browser.execute((sel) => {
+        document.querySelector(sel)!.scrollTop = 300;
+      }, OUTLINE_SCROLLER);
+      const before = await browser.execute((sel) => document.querySelector(sel)!.scrollTop, OUTLINE_SCROLLER);
+      expect(before).toBeGreaterThan(100);
+
+      const stripInView = () =>
+        browser.execute(() => document.querySelector('[data-testid="right-tabs"]')!.getBoundingClientRect().top >= 0);
+      for (const other of ['links', 'attachments']) {
+        await tab(other).click();
+        await expectSelected(other);
+        expect(await byTestId('right-tabs').isDisplayed()).toBe(true);
+        expect(await stripInView()).toBe(true);
+      }
+      await tab('outline').click();
+      await expectSelected('outline');
+      expect(await browser.execute((sel) => document.querySelector(sel)!.scrollTop, OUTLINE_SCROLLER)).toBe(before);
+      expect(await stripInView()).toBe(true);
+    });
+
+    it('marks the heading the user scrolled into, and follows back to the top', async () => {
+      await browser.execute(() => {
+        const s = document.querySelector('.carta-input') as HTMLElement;
+        s.scrollTop = s.scrollHeight;
+        s.dispatchEvent(new Event('scroll'));
+      });
+      await browser.waitUntil(async () => Number((await currentOutlineTitle())?.replace('Section ', '')) > 30, {
+        timeout: 5_000,
+        timeoutMsg: 'no late section was marked after scrolling down',
+      });
+      await browser.execute(() => {
+        const s = document.querySelector('.carta-input') as HTMLElement;
+        s.scrollTop = 0;
+        s.dispatchEvent(new Event('scroll'));
+      });
+      await browser.waitUntil(async () => (await currentOutlineTitle()) === 'Section 1', {
+        timeout: 5_000,
+        timeoutMsg: 'Section 1 was not marked at the top',
+      });
+    });
+
+    it('lists setext headings', async () => {
+      await setEditorText('Setext Title\n============\n\ntext\n\nSetext Part\n-----------\n\nmore\n');
+      await browser.waitUntil(async () => (await outlineTitles()).join('|') === 'Setext Title|Setext Part', {
+        timeout: 5_000,
+        timeoutMsg: 'setext headings were not listed',
+      });
+      const levels = await $$('[data-testid="outline-item"]').map((b) => b.getAttribute('data-level'));
+      expect(levels).toEqual(['1', '2']);
+    });
+
+    it('jumps in preview mode', async () => {
+      await setEditorText(longPage(60));
+      await browser.waitUntil(async () => (await outlineTitles()).length === 60, { timeout: 10_000 });
+      await browser.execute(() => (document.activeElement as HTMLElement | null)?.blur());
+      await browser.keys(['Control', 'e']);
+      await $('.carta-renderer').waitForDisplayed({ timeout: 10_000 });
+      await browser.waitUntil(() => browser.execute(() => document.querySelectorAll('.carta-renderer h2').length === 60), {
+        timeout: 10_000,
+        timeoutMsg: 'the preview did not render the headings',
+      });
+
+      const items = await $$('[data-testid="outline-item"]');
+      await items[44].click();
+      await browser.waitUntil(
+        () =>
+          browser.execute(() => {
+            const h = Array.from(document.querySelectorAll('.carta-renderer h2')).find((e) => e.textContent === 'Section 45')!;
+            const hr = h.getBoundingClientRect();
+            for (let n = h.parentElement; n; n = n.parentElement) {
+              const oy = getComputedStyle(n).overflowY;
+              if ((oy === 'auto' || oy === 'scroll') && n.scrollHeight > n.clientHeight) {
+                const top = hr.top - n.getBoundingClientRect().top;
+                return top >= -2 && top < 60;
+              }
+            }
+            return false;
+          }),
+        { timeout: 5_000, timeoutMsg: 'the preview did not scroll to Section 45' },
+      );
+      await browser.waitUntil(async () => (await currentOutlineTitle()) === 'Section 45', {
+        timeout: 5_000,
+        timeoutMsg: 'Section 45 was not marked in preview mode',
+      });
+    });
+
+    it('marks the heading scrolled into in preview mode', async () => {
+      await browser.execute(() => {
+        const h = Array.from(document.querySelectorAll('.carta-renderer h2')).find((e) => e.textContent === 'Section 10')!;
+        h.scrollIntoView({ block: 'start' });
+      });
+      await browser.waitUntil(async () => (await currentOutlineTitle()) === 'Section 10', {
+        timeout: 5_000,
+        timeoutMsg: 'Section 10 was not marked after scrolling the preview',
+      });
     });
   });
 

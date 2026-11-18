@@ -620,7 +620,9 @@ export async function openPage(uuid: string, options?: OpenPageOptions): Promise
     const v = activeVault();
     if (v) v.lastOpenPage = uuid;
 
-    await loadBacklinks(uuid);
+    // Backlinks, outgoing links and similar notes belong to the Links tab,
+    // which loads them itself while it is visible (spec `desktop-right-panel`,
+    // design D3); loading them here too would load twice, and while hidden.
     await loadAttachments(uuid);
   } catch (e) {
     setError(String(e));
@@ -921,6 +923,22 @@ export async function loadBacklinks(uuid: string): Promise<void> {
     app.backlinksStatus = failure.status;
     app.backlinksMessage = failure.message;
   }
+}
+
+/**
+ * Load the Links tab's lists (backlinks and outgoing links) of page `uuid`,
+ * but only while the tab is visible: a hidden tab loads nothing (design D3).
+ */
+export function loadLinksWhenVisible(uuid: string | null | undefined, visible: boolean): void {
+  if (!uuid || !visible) return;
+  void loadBacklinks(uuid);
+  void loadOutgoingLinks(uuid);
+}
+
+/** `loadSimilarNotes`, but only while the Links tab is visible. */
+export function loadSimilarNotesWhenVisible(uuid: string | null | undefined, visible: boolean): void {
+  if (!uuid || !visible) return;
+  void loadSimilarNotes(uuid);
 }
 
 let outgoingRequest = 0;

@@ -38,7 +38,7 @@
     type SavedCursorPosition,
   } from './cursor-position';
   import { focusTextareaAtOffset } from './textarea-focus';
-  import { currentHeadingIndex, headingsFor } from './outline';
+  import { currentHeadingIndex, headingsFor, pairRenderedHeadings, type RenderedHeading } from './outline';
   import { setOutlineBridge } from './outline-bridge';
   import { attachEditorAttachments, type DropIndicator } from './editor-attachments';
   import { attachmentFileName } from './attachment-drop';
@@ -617,6 +617,11 @@
     return surface ? Array.from(surface.querySelectorAll<HTMLElement>('h1, h2, h3, h4, h5, h6')) : [];
   }
 
+  /** Level and text of rendered headings, for pairing them with the parsed ones. */
+  function renderedInfo(els: HTMLElement[]): RenderedHeading[] {
+    return els.map((el) => ({ level: Number(el.tagName.slice(1)), text: el.textContent ?? '' }));
+  }
+
   /** The nearest ancestor of `el` that scrolls, or null. */
   function scrollParent(el: HTMLElement): HTMLElement | null {
     for (let node = el.parentElement; node; node = node.parentElement) {
@@ -634,8 +639,9 @@
     app.outlineCurrent = index;
     if (app.editorTab === 'preview') {
       const rendered = previewHeadings();
-      // A count mismatch (raw HTML headings) means the pairing is unknown.
-      if (rendered.length === headings.length) rendered[index].scrollIntoView({ block: 'start' });
+      // Equal counts pair by position; a mismatch (raw HTML headings) pairs by level and text.
+      const pair = pairRenderedHeadings(headings, renderedInfo(rendered)).find((p) => p.heading === index);
+      if (pair) rendered[pair.rendered].scrollIntoView({ block: 'start' });
       return;
     }
     const input = carta.input;
@@ -652,10 +658,16 @@
     if (headings.length === 0) return -1;
     if (app.editorTab === 'preview') {
       const rendered = previewHeadings();
-      if (rendered.length !== headings.length) return -1;
-      const scroller = scrollParent(rendered[0]);
+      const pairs = pairRenderedHeadings(headings, renderedInfo(rendered));
+      if (pairs.length === 0) return -1;
+      const scroller = scrollParent(rendered[pairs[0].rendered]);
       const edge = scroller ? scroller.getBoundingClientRect().top : 0;
-      return currentHeadingIndex(rendered.length, (i) => rendered[i].getBoundingClientRect().top - edge, 8);
+      const found = currentHeadingIndex(
+        pairs.length,
+        (i) => rendered[pairs[i].rendered].getBoundingClientRect().top - edge,
+        8,
+      );
+      return found < 0 ? -1 : pairs[found].heading;
     }
     const input = carta.input;
     const scroller = editorScroller();
