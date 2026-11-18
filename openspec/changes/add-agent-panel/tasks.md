@@ -45,4 +45,4 @@
 
 - [x] 5.1 e2e with a scripted fake ACP agent: chat, tool rows, approve and reject, close and reopen the window mid-session (`e2e/specs/vault/agent-panel.e2e.ts`, `agent-panel-no-agent.e2e.ts`)
 - [x] 5.2 Headless e2e: `cerbo agent run` on read, auto and approve vaults, including the approval timeout (`cli/tests/agent_cli.rs`)
-- [ ] 5.3 Run cargo tests, vitest and `nix build .#cerbo .#cerbo-desktop`
+- [x] 5.3 Run cargo tests, vitest and `nix build .#cerbo .#cerbo-desktop`
