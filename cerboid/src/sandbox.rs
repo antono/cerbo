@@ -203,10 +203,10 @@ pub fn bwrap_args(spec: &SessionSpec, fs: &dyn HostFs) -> Result<Vec<String>, St
     roots.extend(runtime_roots(&spec.cerbo_bin, spec.host_path.as_ref(), fs));
     let mut path_dirs: Vec<PathBuf> = Vec::new();
     for (root, bin_dir) in roots {
-        if let Some(dir) = bin_dir {
-            if !path_dirs.contains(&dir) {
-                path_dirs.push(dir);
-            }
+        if let Some(dir) = bin_dir
+            && !path_dirs.contains(&dir)
+        {
+            path_dirs.push(dir);
         }
         if let Some(root) = root {
             check_root(&root, spec)?;
@@ -411,10 +411,10 @@ fn cache() -> &'static ProbeCache {
 /// shell in one. A success is remembered for the life of the daemon, a failure
 /// for a few seconds, so a fix needs no restart.
 pub fn probe(bwrap: &Path) -> Result<(), String> {
-    if let Some((at, result)) = cache().lock().unwrap_or_else(|e| e.into_inner()).get(bwrap) {
-        if result.is_ok() || at.elapsed() < FAILED_PROBE_TTL {
-            return result.clone();
-        }
+    if let Some((at, result)) = cache().lock().unwrap_or_else(|e| e.into_inner()).get(bwrap)
+        && (result.is_ok() || at.elapsed() < FAILED_PROBE_TTL)
+    {
+        return result.clone();
     }
     let result = run_probe(bwrap);
     cache().lock().unwrap_or_else(|e| e.into_inner()).insert(bwrap.to_path_buf(), (Instant::now(), result.clone()));
