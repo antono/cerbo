@@ -8,19 +8,26 @@
 #   scripts/screenshot.sh -c 150,140           # click there before the shot
 #                                              # (150,140 opens the first page)
 #
-# The binary is result/bin/cerbo-desktop (`nix build .#cerbo-desktop`; new
-# files must be `git add -N`'d first or the build leaves them out), or
-# CERBO_DESKTOP_BIN. The app is forced onto X11: under a Wayland session it
-# would otherwise open on the real desktop and the shot comes out blank.
+# Or build everything in one go: `nix run .#screenshot -- -s 800x600` (run it
+# from the repo; it uses ./test-vault). From the repo the binary is
+# result/bin/cerbo-desktop (`nix build .#cerbo-desktop`; new files must be
+# `git add -N`'d first or the build leaves them out), or CERBO_DESKTOP_BIN.
+# Xvfb runs at 96 DPI so a WxH shot is WxH CSS pixels (its default 100 DPI
+# scales the page by 1.04). The app is forced onto X11: under a Wayland
+# session it would otherwise open on the real desktop and the shot comes out
+# blank.
 set -euo pipefail
 
+# From the Nix store (nix run .#screenshot) the repo is the current directory.
 repo=$(cd "$(dirname "$0")/.." && pwd)
+[ -d "$repo/test-vault" ] || repo=$PWD
+[ -d "$repo/test-vault" ] || { echo "no test-vault/ in $repo; run from the cerbo repo" >&2; exit 1; }
 out="$repo/target/screenshots/cerbo.png"
 size=1200x760
 click=""
 settle=4
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 while getopts "o:s:c:w:h" opt; do
   case $opt in
     o) out=$(realpath -m "$OPTARG") ;;
@@ -76,8 +83,11 @@ import -window root -crop "${W}x${H}+0+0" +repage "$OUT"
 EOF
 chmod +x "$work/shoot.sh"
 
+# The flake package puts the tools on PATH; from the repo, fetch them.
+tools=()
+command -v xvfb-run xdotool import > /dev/null ||
+  tools=(nix shell nixpkgs#xvfb-run nixpkgs#xdotool nixpkgs#imagemagick -c)
 WORK=$work BIN=$bin OUT=$out W=$width H=$height CLICK=$click SETTLE=$settle \
-  nix shell nixpkgs#xvfb-run nixpkgs#xdotool nixpkgs#imagemagick -c \
-  xvfb-run -a -s "-screen 0 ${width}x${height}x24" "$work/shoot.sh"
+  "${tools[@]}" xvfb-run -a -s "-screen 0 ${width}x${height}x24 -dpi 96" "$work/shoot.sh"
 
 echo "$out"

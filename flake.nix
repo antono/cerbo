@@ -37,12 +37,25 @@
             actionlint ${src}/.github/workflows/release.yml
           '';
         };
+
+        # scripts/screenshot.sh with its tools and the desktop app built in:
+        # `nix run .#screenshot -- -s 390x844` from the repo root.
+        screenshot = pkgs.runCommand "cerbo-screenshot" {
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          meta.mainProgram = "cerbo-screenshot";
+        } ''
+          install -Dm755 ${./scripts/screenshot.sh} $out/bin/cerbo-screenshot
+          wrapProgram $out/bin/cerbo-screenshot \
+            --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.xvfb-run pkgs.xdotool pkgs.imagemagick ]} \
+            --set-default CERBO_DESKTOP_BIN ${cerbo-desktop}/bin/cerbo-desktop
+        '';
       in
       {
         packages = {
           default = cerbo;
           inherit cerbo cerbo-frontend cerbo-desktop tauri-driver;
           release-workflow-check = releaseWorkflowCheck;
+          inherit screenshot;
         };
 
         checks.release-workflow = pkgs.runCommand "release-workflow-check" {
@@ -59,6 +72,11 @@
           python3 ${src}/scripts/check-atomic-writes.py ${src}/core/src
           touch $out
         '';
+
+        apps.screenshot = {
+          type = "app";
+          program = "${screenshot}/bin/cerbo-screenshot";
+        };
 
         apps.release-workflow-check = {
           type = "app";
