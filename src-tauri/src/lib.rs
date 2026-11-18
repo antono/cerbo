@@ -1,3 +1,4 @@
+mod agent;
 mod index;
 mod page;
 mod paths;
@@ -151,6 +152,7 @@ pub fn run() {
                 .inspect_err(|e| eprintln!("Warning: could not take the app lock: {e}"))
                 .ok();
             app.manage(AppPresence(presence));
+            agent::start(app.handle());
             // A missing or unreadable size only means the default one.
             if let Err(e) = window::restore_size(app.handle()) {
                 eprintln!("Warning: could not restore the window size: {e}");
@@ -158,6 +160,21 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // agent sessions (daemon link)
+            agent::agent_list,
+            agent::session_create,
+            agent::session_send,
+            agent::session_cancel,
+            agent::session_end,
+            agent::session_list,
+            agent::session_delete,
+            agent::session_events,
+            agent::approval_list,
+            agent::approval_answer,
+            agent::vault_agent_permission_get,
+            agent::vault_agent_permission_set,
+            agent::daemon_status,
+            agent::daemon_retry,
             // vault
             vault::vault_add,
             vault::vault_remove,
