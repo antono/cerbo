@@ -256,12 +256,9 @@ async fn poll_registry(shared: Arc<Shared>, every: Duration) {
         tokio::time::sleep(every).await;
         let this = Arc::clone(&shared);
         let refreshed = tokio::task::spawn_blocking(move || this.registry.refresh()).await;
-        match refreshed.unwrap_or_else(|_| Err("the vault list check crashed".to_string())) {
-            Ok(true) => {
-                let _ = shared.events.send(Event::VaultsChanged);
-            }
-            Ok(false) => {}
-            Err(e) => eprintln!("cerboid: cannot read the vault list: {e}"),
+        // The registry announces a change itself.
+        if let Err(e) = refreshed.unwrap_or_else(|_| Err("the vault list check crashed".to_string())) {
+            eprintln!("cerboid: cannot read the vault list: {e}");
         }
     }
 }
@@ -515,6 +512,7 @@ impl Shared {
             protocol: PROTOCOL_VERSION,
             pid: std::process::id(),
             uptime_secs: self.started.elapsed().as_secs(),
+            memory_kb: resident_memory_kb(),
             vaults: self.vault_infos(),
         };
         serde_json::to_value(info).map_err(|e| RpcError::failed(e.to_string()))
@@ -627,6 +625,13 @@ impl Shared {
             .map_err(|_| RpcError::new(rpc::CODE_SHUTTING_DOWN, "the daemon is stopping and takes no more writes"))?;
         Ok(Box::pin(async move { done.await.unwrap_or_else(|_| Err(RpcError::failed("the write crashed"))) }))
     }
+}
+
+/// The daemon's resident set size from `/proc` (Linux); none elsewhere.
+fn resident_memory_kb() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
+    line.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// Who an applied write is recorded for.

@@ -402,6 +402,9 @@ pub struct StatusInfo {
     pub protocol: u32,
     pub pid: u32,
     pub uptime_secs: u64,
+    /// Resident memory of the daemon in KiB, where the system tells.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_kb: Option<u64>,
     pub vaults: Vec<VaultInfo>,
 }
 

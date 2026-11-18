@@ -52,6 +52,7 @@ Usage: `cerbo vault <SUBCOMMAND>`
 - `cerbo vault remove <ID> [--json]` - Remove a vault from the registry by its ID (works on both manually and auto-registered vaults); the vault's files are left alone
 - `cerbo vault active <ID> [--json]` - Set the active vault, used when no vault is found around the current directory (see VAULT AUTO-DISCOVERY)
 - `cerbo vault approve <ID> [--json]` - Promote an auto-registered vault to the manual registry. Moves the entry from `vaults.auto.toml` to `vaults.toml`. Errors if the ID is not in the auto registry or the path is already manually registered.
+- `cerbo vault agent <VAULT> [read|auto|approve] [--json]` - Show or set what agents may do in a vault (see AGENT PERMISSIONS). `VAULT` is a vault ID or name from `cerbo vault list`, or its path. With a level, it is stored and takes effect at once, also for agents that are connected; without one, the current level is printed (`read` for a vault never configured). With `--json`, `{"vault": <id>, "name": ..., "agent": <level>}`. Only you can set the level: no agent tool reads or changes it.
 
 ## page
 
@@ -326,6 +327,59 @@ Options:
 
 **Exit status:** non-zero if any object or vault could not be migrated, or the desktop app is running.
 
+## daemon
+
+Start, stop and inspect `cerboid`, the daemon that owns every registered vault of the user. The desktop app, `cerbo` and agents are its clients; it gives them one write queue, one semantic index and one place that asks for permission (see AGENT PERMISSIONS). It listens on `$XDG_RUNTIME_DIR/cerbo/cerboid.sock` (without that variable, `run/` under the cache directory), a socket in a directory only you can enter. One daemon runs per user; a second one exits at once. It picks up `cerbo vault add` and `remove` while running, and holds the desktop app lock for as long as it runs, so automatic vault rewrites stay skipped.
+
+Usage: `cerbo daemon <SUBCOMMAND>`
+
+### Subcommands:
+
+- `cerbo daemon start [--json]` - Start `cerboid` in the background and wait until it accepts connections. Nothing happens when it already runs. `cerboid` is taken from `$CERBOID_BIN`, else from the directory of `cerbo`, else from `PATH`. With `--json`, `{"running", "started", "pid", "socket"}`.
+- `cerbo daemon stop [--json]` - Ask the daemon to stop. It finishes the writes it has queued, ends approval requests that nobody answered, and exits. Not running is not an error.
+- `cerbo daemon status [--json]` - Print whether the daemon runs: version, process id, uptime, memory use, the socket and every vault it serves with its agent level, and how many approval requests wait. Exits 1 when it does not run. With `--json`, `{"running", "version", "protocol", "pid", "uptime_secs", "memory_kb", "socket", "pending_approvals", "vaults"}`.
+
+A client and a daemon of different protocol versions refuse each other; after upgrading, run `cerbo daemon stop` and start it again. Vault files are never in a daemon-only format, so everything keeps working without it.
+
+**Daemon-first commands.** `cerbo page list|create|read|write|delete|move|backlinks`, `cerbo search`, `cerbo similar` and `cerbo sparql --json` use the daemon when it runs and work on the vault files directly when it does not, so scripts run the same on a machine without the service. The daemon serves only registered vaults; a command for any other vault works on its files. Set `CERBO_NO_DAEMON=1` to skip the daemon.
+
+## mcp
+
+Run an MCP (Model Context Protocol) server on standard input and output, so an agent CLI such as OpenCode or Claude Code can work with one vault. The server holds no vault itself: it forwards each tool call to the daemon, starts the daemon when it is not running (or says why it cannot), and exposes exactly one vault; a page of another vault is reported as not found.
+
+Usage: `cerbo mcp --vault <NAME|ID|PATH> [--name <NAME>]`
+
+Options:
+- `--vault <NAME|ID|PATH>` - The vault to expose: a registered vault's name or ID, or its path. An unregistered vault is refused at once.
+- `--name <NAME>` - The agent's name in the change log and in approval requests. Default: the name the MCP client gives itself.
+
+Tools, always offered: `list_pages`, `read_page`, `search_text`, `search_semantic`, `backlinks`, `outgoing_links`, `list_attachments`, `sparql_query`. A page is named by its UUID; an unknown one is an error result naming the UUID.
+
+Tools that change the vault, offered only when the vault's agent level is `auto` or `approve`: `create_page`, `edit_page`, `rename_page`, `move_page`, `delete_page`, `link_pages`. `delete_page` moves the page to the vault trash, from where it is recovered. At `approve` a call waits until a person answers (see `cerbo approvals`). The tool list follows a change of the level while the server runs.
+
+Register it with an agent CLI like any stdio MCP server, for example in OpenCode's `opencode.json` and with Claude Code:
+
+```
+{ "mcp": { "cerbo": { "type": "local", "command": ["cerbo", "mcp", "--vault", "Notes"] } } }
+
+claude mcp add cerbo -- cerbo mcp --vault Notes
+```
+
+## approvals
+
+Answer the changes agents wait to make in vaults set to `approve`, and read what agents changed. The queue lives in the daemon, so a request stays until someone answers it, also when no app was open when it was asked; the desktop app and these commands see the same queue. A request nobody answers within 10 minutes (set `approval_timeout_secs` in `agents.toml` in the config directory to change it) counts as rejected and the agent is told it timed out.
+
+Usage: `cerbo approvals <SUBCOMMAND>`
+
+### Subcommands:
+
+- `cerbo approvals list [--vault <VAULT>] [--json]` - List the pending requests: number, agent, what it wants to do and where, when it expires, a one-line summary and, for an edit or a new page, the difference as a unified diff.
+- `cerbo approvals approve <ID> [--json]` - Apply the change; the agent is told it succeeded.
+- `cerbo approvals reject <ID> [--json]` - Leave the vault unchanged; the agent is told the request was rejected.
+- `cerbo approvals log <VAULT> [--limit <N>] [--json]` - The last N (default 50) changes agents applied to the vault, newest last: time, agent, action and page. With `--json`, an array of `{time, vault, page, agent, action, approved}`.
+
+These commands need a running daemon, except `log`.
+
 ## symlink
 
 Build (or rebuild) a human-readable symlink tree at `<repo-root>/cerbo/`. Each page (Product or Source object) with a `cerbo:slug` value is exposed as a relative symlink named `<slug>.md` pointing directly to the page file inside the object store. Pages that declare a `cerbo:virtualPath` are nested inside corresponding subdirectories. The tree is rebuilt atomically: a new staging directory is written and then swapped into place so readers always see a consistent state.
@@ -351,6 +405,16 @@ Options:
 - After `cerbo init` to create the initial symlink tree
 - After creating or renaming pages (to refresh the tree)
 - After moving the vault to a new location (symlinks are relative, so re-running fixes any stale links)
+
+# AGENT PERMISSIONS
+
+What an agent connected through `cerbo mcp` may do is set per vault, with `cerbo vault agent <VAULT> [read|auto|approve]`, and judged by the daemon on every write, so a change applies to connected agents at once and a client cannot get around it. The setting lives in `agents.toml` beside `vaults.toml`.
+
+- `read` - the default for every vault never configured. The agent can only read. Its write tools are not listed, and a write request that arrives anyway is refused with a message saying the vault is read-only; the vault stays unchanged.
+- `auto` - the agent's changes apply at once. Each one is appended to the agent change log (time, page, agent name, action) in `agent-changes.jsonl` beside `agents.toml`, readable with `cerbo approvals log`.
+- `approve` - each change waits as a pending request showing what will change (for an edit, the difference). It applies only after a person approves it with `cerbo approvals approve` or in the desktop app. A rejection leaves the vault unchanged and tells the agent; so does a timeout.
+
+An agent deleting a page moves it to the vault trash at every level, so even `auto` cannot destroy a page. Lowering the level while a request waits refuses it when it is approved. Changes you make yourself through the app or `cerbo` are never agent changes and are not limited by the level. No tool reads or changes the level: an agent cannot raise its own access.
 
 # SEMANTIC INDEX
 

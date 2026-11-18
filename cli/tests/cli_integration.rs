@@ -972,8 +972,11 @@ fn extract_uuid(stdout: &[u8]) -> String {
 /// Run the cerbo binary with isolated XDG dirs so tests don't touch the real user config.
 fn cerbo_cmd(bin: &std::path::Path, xdg_home: &std::path::Path) -> Command {
     let mut cmd = Command::new(bin);
+    // The runtime dir is isolated too: a daemon of the real user must not
+    // answer these commands.
     cmd.env("XDG_CONFIG_HOME", xdg_home.join("config"))
-        .env("XDG_CACHE_HOME", xdg_home.join("cache"));
+        .env("XDG_CACHE_HOME", xdg_home.join("cache"))
+        .env("XDG_RUNTIME_DIR", xdg_home.join("run"));
     cmd
 }
 

@@ -17,24 +17,24 @@
 
 ## 3. Permissions
 
-- [ ] 3.1 Store `read | auto | approve` per vault, default `read`; apply changes to connected agents at once
-- [ ] 3.2 Enforce on every agent write; refuse at `read` with a clear message
-- [ ] 3.3 Approval queue: diff, deadline (default 10 min, configurable), answer from any client, rejection and timeout results
-- [ ] 3.4 Change log of applied agent writes (time, page, agent name)
-- [ ] 3.5 `cerbo vault agent <vault> [read|auto|approve]`
+- [x] 3.1 Store `read | auto | approve` per vault, default `read`; apply changes to connected agents at once
+- [x] 3.2 Enforce on every agent write; refuse at `read` with a clear message
+- [x] 3.3 Approval queue: diff, deadline (default 10 min, configurable), answer from any client, rejection and timeout results
+- [x] 3.4 Change log of applied agent writes (time, page, agent name)
+- [x] 3.5 `cerbo vault agent <vault> [read|auto|approve]`
 
 ## 4. MCP shim
 
-- [ ] 4.1 `cerbo mcp --vault` stdio server forwarding to the daemon; start the daemon if it is down
-- [ ] 4.2 Read tools and their error results
-- [ ] 4.3 Write tools, hidden at `read`; deletes go to trash
-- [ ] 4.4 Integration test driving the server with a scripted MCP client against a temporary vault
+- [x] 4.1 `cerbo mcp --vault` stdio server forwarding to the daemon; start the daemon if it is down
+- [x] 4.2 Read tools and their error results
+- [x] 4.3 Write tools, hidden at `read`; deletes go to trash
+- [x] 4.4 Integration test driving the server with a scripted MCP client against a temporary vault
 
 ## 5. CLI
 
-- [ ] 5.1 `cerbo daemon start|stop|status [--json]`
-- [ ] 5.2 Daemon-first path for existing commands with direct fallback when no daemon runs
-- [ ] 5.3 Update `cli/man/cerbo.md` for `daemon`, `mcp`, `vault agent` and the permission levels
+- [x] 5.1 `cerbo daemon start|stop|status [--json]`
+- [x] 5.2 Daemon-first path for existing commands with direct fallback when no daemon runs
+- [x] 5.3 Update `cli/man/cerbo.md` for `daemon`, `mcp`, `vault agent` and the permission levels
 
 ## 6. Nix and systemd
 

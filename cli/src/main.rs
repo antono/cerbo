@@ -1,5 +1,9 @@
+mod daemon;
+mod mcp;
+
 use cerbo_core::CerboContext;
 use cerbo_core::context::CoreContext;
+use cerbo_core::rpc::Call;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
@@ -126,6 +130,25 @@ enum Commands {
     Page {
         #[command(subcommand)]
         action: PageCommands,
+    },
+    /// Start, stop and inspect the daemon (cerboid) that owns the vaults
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonCommands,
+    },
+    /// Run an MCP server on stdin and stdout so an agent CLI can work with one vault
+    Mcp {
+        /// The vault to expose: a name or ID from `cerbo vault list`, or a vault path
+        #[arg(long)]
+        vault: String,
+        /// Name shown in the change log and approval prompts (default: the MCP client's own name)
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Answer the changes agents wait to make (vaults set to `approve`) and read the agent change log
+    Approvals {
+        #[command(subcommand)]
+        action: ApprovalCommands,
     },
     /// Resolve an object UUID to its local filesystem path
     Resolve {
@@ -317,6 +340,78 @@ enum VaultCommands {
         /// Vault ID, as shown by `cerbo vault list`
         id: String,
         /// Output the result as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show or set what agents may do in a vault: read (default), auto or approve
+    Agent {
+        /// The vault: an ID or name from `cerbo vault list`, or its path
+        vault: String,
+        /// read: agents only read. auto: their changes apply at once. approve: each change waits for you. Omit to print the current level
+        level: Option<cerbo_core::agent::AgentPermission>,
+        /// Output the result as JSON ({"vault", "name", "agent"})
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum DaemonCommands {
+    /// Start cerboid in the background (nothing happens if it already runs)
+    Start {
+        /// Output the result as JSON ({"running", "started", "pid", "socket"})
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop cerboid after it finishes the writes it has queued
+    Stop {
+        /// Output the result as JSON ({"running", "stopped"})
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show whether cerboid runs, its process, memory and the vaults it serves; exits 1 when it does not run
+    Status {
+        /// Output the result as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ApprovalCommands {
+    /// List the pending requests with what each would change
+    List {
+        /// Only this vault (ID, name or path)
+        #[arg(long)]
+        vault: Option<String>,
+        /// Output a JSON array
+        #[arg(long)]
+        json: bool,
+    },
+    /// Approve a pending request; the agent's change is applied
+    Approve {
+        /// Request number, as shown by `cerbo approvals list`
+        id: u64,
+        /// Output the result as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reject a pending request; the vault stays unchanged and the agent is told
+    Reject {
+        /// Request number, as shown by `cerbo approvals list`
+        id: u64,
+        /// Output the result as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the changes agents made to a vault, newest last
+    Log {
+        /// The vault: an ID or name from `cerbo vault list`, or its path
+        vault: String,
+        /// Show at most this many entries
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// Output a JSON array of {time, vault, page, agent, action, approved}
         #[arg(long)]
         json: bool,
     },
@@ -764,6 +859,7 @@ fn finish_interrupted_import(vault: &cerbo_core::VaultContext) {
 fn run_search(
     filters: SearchArgs,
     cwd_vault_root: Option<&std::path::Path>,
+    daemon_call: impl FnOnce(String, &SearchArgs) -> Call,
     find: impl FnOnce(
         &cerbo_core::VaultContext,
         &cerbo_core::semantic::SearchOptions,
@@ -771,7 +867,26 @@ fn run_search(
         cerbo_core::semantic::IndexOptions<'_>,
     ) -> Result<Vec<cerbo_core::semantic::SearchHit>, cerbo_core::semantic::SemanticError>,
 ) -> Result<(), String> {
-    let vault_ctx = path_vault_ctx(filters.vault, cwd_vault_root)?;
+    let vault_ctx = path_vault_ctx(filters.vault.clone(), cwd_vault_root)?;
+    // The daemon, when one runs, holds the index and the model.
+    if let Some(answer) =
+        daemon::vault_call(&vault_ctx.global, &vault_ctx.vault_path, |vault| daemon_call(vault, &filters))
+    {
+        let hits = answer?;
+        if filters.json {
+            print_json(&hits);
+        } else {
+            for hit in hits.as_array().into_iter().flatten() {
+                println!(
+                    "{:.3}  {}: {}",
+                    hit["score"].as_f64().unwrap_or_default(),
+                    hit["uuid"].as_str().unwrap_or_default(),
+                    hit["title"].as_str().unwrap_or_default()
+                );
+            }
+        }
+        return Ok(());
+    }
     check_old_vocabulary(&vault_ctx.global, &vault_ctx.vault_path);
     let search = cerbo_core::semantic::SearchOptions {
         limit: usize::try_from(filters.limit).unwrap_or(usize::MAX),
@@ -1189,7 +1304,15 @@ async fn main() -> Result<(), String> {
     // effect nobody asked for, and the migration would then rewrite it.
     // `cerbo import-vault` picks its target from --vault, --new or the prompt,
     // never from the current directory, and a refused import writes nothing.
-    let registers_cwd_vault = !matches!(cli.command, Commands::Migrate { .. } | Commands::ImportVault { .. });
+    // The daemon, MCP and approval commands never look at the current directory.
+    let registers_cwd_vault = !matches!(
+        cli.command,
+        Commands::Migrate { .. }
+            | Commands::ImportVault { .. }
+            | Commands::Daemon { .. }
+            | Commands::Mcp { .. }
+            | Commands::Approvals { .. }
+    );
     if let (true, Some(root), None) = (registers_cwd_vault, cwd_vault_root.as_ref(), cwd_vault_id.as_ref()) {
         let _ = cerbo_core::vault::auto_vault_register(&ctx, root);
         cwd_vault_id = cerbo_core::vault::vault_id_from_path(&ctx, root);
@@ -1292,6 +1415,19 @@ async fn main() -> Result<(), String> {
                     println!("Approved vault: {} ({})", vault.name, vault.id);
                 }
             }
+            VaultCommands::Agent { vault, level, json } => daemon::vault_agent(&ctx, &vault, level, json)?,
+        },
+        Commands::Daemon { action } => match action {
+            DaemonCommands::Start { json } => daemon::start(&ctx, json)?,
+            DaemonCommands::Stop { json } => daemon::stop(&ctx, json)?,
+            DaemonCommands::Status { json } => daemon::status(&ctx, json)?,
+        },
+        Commands::Mcp { vault, name } => mcp::run(&ctx, vault, name).await?,
+        Commands::Approvals { action } => match action {
+            ApprovalCommands::List { vault, json } => daemon::approvals_list(&ctx, vault, json)?,
+            ApprovalCommands::Approve { id, json } => daemon::approvals_answer(&ctx, id, true, json)?,
+            ApprovalCommands::Reject { id, json } => daemon::approvals_answer(&ctx, id, false, json)?,
+            ApprovalCommands::Log { vault, limit, json } => daemon::changes_log(&ctx, &vault, limit, json)?,
         },
         Commands::Page { action } => match action {
             PageCommands::List { json, vault } => {
@@ -1301,6 +1437,26 @@ async fn main() -> Result<(), String> {
                     cwd_vault_id.as_deref(),
                     cwd_vault_root.as_deref(),
                 )?;
+                // The daemon, when one runs, owns the vault; otherwise read it directly.
+                if let Some(answer) = daemon::vault_call(&ctx, vault_root_of(&eff_ctx), |v| Call::PageList { vault: v }) {
+                    let pages = answer?;
+                    if json {
+                        print_json(&pages);
+                    } else {
+                        let pages: Vec<cerbo_core::page::PageMeta> = pages
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|p| cerbo_core::page::PageMeta {
+                                uuid: p["uuid"].as_str().unwrap_or_default().to_string(),
+                                title: p["title"].as_str().unwrap_or_default().to_string(),
+                                virtual_path: p["virtualPath"].as_str().map(str::to_string),
+                            })
+                            .collect();
+                        print_pages_template(&ctx, &eff_ctx, &pages)?;
+                    }
+                    return Ok(());
+                }
                 check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
                 let pages = cerbo_core::page::page_list(&eff_ctx)?;
 
@@ -1317,6 +1473,20 @@ async fn main() -> Result<(), String> {
                     cwd_vault_id.as_deref(),
                     cwd_vault_root.as_deref(),
                 )?;
+                if let Some(answer) = daemon::vault_call(&ctx, vault_root_of(&eff_ctx), |v| Call::PageCreate {
+                    vault: v,
+                    title: title.clone(),
+                    content: None,
+                    path: None,
+                }) {
+                    let uuid = answer?["uuid"].as_str().unwrap_or_default().to_string();
+                    if json {
+                        print_json(&serde_json::json!({"uuid": uuid}));
+                    } else {
+                        println!("Created page with UUID: {}", uuid);
+                    }
+                    return Ok(());
+                }
                 check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
                 let uuid = cerbo_core::object::object_create(&eff_ctx, None, cerbo_core::object::ObjectType::Product, title)?;
                 if json {
@@ -1332,6 +1502,18 @@ async fn main() -> Result<(), String> {
                     cwd_vault_id.as_deref(),
                     cwd_vault_root.as_deref(),
                 )?;
+                if let Some(answer) = daemon::vault_call(&ctx, vault_root_of(&eff_ctx), |v| Call::PageRead {
+                    vault: v,
+                    page: uuid.clone(),
+                }) {
+                    let content = answer?["content"].as_str().unwrap_or_default().to_string();
+                    if json {
+                        print_json(&serde_json::json!({"content": content}));
+                    } else {
+                        println!("{}", content);
+                    }
+                    return Ok(());
+                }
                 check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
                 let content = cerbo_core::page::page_read(&eff_ctx, uuid)?;
                 if json {
@@ -1347,6 +1529,19 @@ async fn main() -> Result<(), String> {
                     cwd_vault_id.as_deref(),
                     cwd_vault_root.as_deref(),
                 )?;
+                if let Some(answer) = daemon::vault_call(&ctx, vault_root_of(&eff_ctx), |v| Call::PageEdit {
+                    vault: v,
+                    page: uuid.clone(),
+                    content: content.clone(),
+                }) {
+                    answer?;
+                    if json {
+                        print_json_success("Page updated");
+                    } else {
+                        println!("Updated page");
+                    }
+                    return Ok(());
+                }
                 check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
                 let _ = cerbo_core::page::page_write(&eff_ctx, uuid, content)?;
                 if json {
@@ -1362,6 +1557,18 @@ async fn main() -> Result<(), String> {
                     cwd_vault_id.as_deref(),
                     cwd_vault_root.as_deref(),
                 )?;
+                if let Some(answer) = daemon::vault_call(&ctx, vault_root_of(&eff_ctx), |v| Call::PageTrash {
+                    vault: v,
+                    page: uuid.clone(),
+                }) {
+                    answer?;
+                    if json {
+                        print_json_success("Page deleted");
+                    } else {
+                        println!("Deleted page");
+                    }
+                    return Ok(());
+                }
                 check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
                 cerbo_core::page::page_delete(&eff_ctx, uuid)?;
                 if json {
@@ -1377,9 +1584,21 @@ async fn main() -> Result<(), String> {
                     cwd_vault_id.as_deref(),
                     cwd_vault_root.as_deref(),
                 )?;
-                check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
                 let target = if root { None } else { path }.filter(|p| !p.is_empty());
-                cerbo_core::page::page_update_virtual_path(&eff_ctx, uuid.clone(), target.clone())?;
+                let moved = daemon::vault_call(&ctx, vault_root_of(&eff_ctx), |v| Call::PageMove {
+                    vault: v,
+                    page: uuid.clone(),
+                    path: target.clone(),
+                });
+                match moved {
+                    Some(answer) => {
+                        answer?;
+                    }
+                    None => {
+                        check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
+                        cerbo_core::page::page_update_virtual_path(&eff_ctx, uuid.clone(), target.clone())?;
+                    }
+                }
                 if json {
                     print_json(&serde_json::json!({"uuid": uuid, "virtualPath": target}));
                 } else {
@@ -1393,19 +1612,35 @@ async fn main() -> Result<(), String> {
                     cwd_vault_id.as_deref(),
                     cwd_vault_root.as_deref(),
                 )?;
-                check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
-                let vault_ctx = index_vault_ctx(&ctx, &eff_ctx);
-                let options = cerbo_core::semantic::IndexOptions {
-                    progress: Some(&print_build_progress),
-                    ..Default::default()
+                let via_daemon = daemon::vault_call(&ctx, vault_root_of(&eff_ctx), |v| Call::Backlinks {
+                    vault: v,
+                    page: uuid.clone(),
+                });
+                let entries: Vec<PageJson> = match via_daemon {
+                    Some(answer) => answer?
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|e| PageJson {
+                            uuid: e["uuid"].as_str().unwrap_or_default().to_string(),
+                            title: e["title"].as_str().unwrap_or_default().to_string(),
+                        })
+                        .collect(),
+                    None => {
+                        check_old_vocabulary(&ctx, vault_root_of(&eff_ctx));
+                        let vault_ctx = index_vault_ctx(&ctx, &eff_ctx);
+                        let options = cerbo_core::semantic::IndexOptions {
+                            progress: Some(&print_build_progress),
+                            ..Default::default()
+                        };
+                        cerbo_core::semantic::backlinks(&vault_ctx, &uuid, options)?
+                            .into_iter()
+                            .map(|e| PageJson { uuid: e.uuid, title: e.title })
+                            .collect()
+                    }
                 };
-                let entries = cerbo_core::semantic::backlinks(&vault_ctx, &uuid, options)?;
                 if json {
-                    let entries_json: Vec<PageJson> = entries.into_iter().map(|e| PageJson {
-                        uuid: e.uuid,
-                        title: e.title,
-                    }).collect();
-                    print_json(&entries_json);
+                    print_json(&entries);
                 } else {
                     for e in entries {
                         println!("{}: {}", e.uuid, e.title);
@@ -1585,14 +1820,36 @@ async fn main() -> Result<(), String> {
             }
         },
         Commands::Search { text, filters } => {
-            run_search(filters, cwd_vault_root.as_deref(), |vault_ctx, search, embedder, options| {
-                cerbo_core::semantic::search(vault_ctx, &text, search, embedder, options)
-            })?;
+            run_search(
+                filters,
+                cwd_vault_root.as_deref(),
+                |vault, f| Call::SearchSemantic {
+                    vault,
+                    query: text.clone(),
+                    limit: usize::try_from(f.limit).unwrap_or(usize::MAX),
+                    types: f.types.clone(),
+                    annotated: f.annotated.clone(),
+                },
+                |vault_ctx, search, embedder, options| {
+                    cerbo_core::semantic::search(vault_ctx, &text, search, embedder, options)
+                },
+            )?;
         },
         Commands::Similar { uuid, filters } => {
-            run_search(filters, cwd_vault_root.as_deref(), |vault_ctx, search, embedder, options| {
-                cerbo_core::semantic::similar(vault_ctx, &uuid, search, embedder, options)
-            })?;
+            run_search(
+                filters,
+                cwd_vault_root.as_deref(),
+                |vault, f| Call::Similar {
+                    vault,
+                    page: uuid.clone(),
+                    limit: usize::try_from(f.limit).unwrap_or(usize::MAX),
+                    types: f.types.clone(),
+                    annotated: f.annotated.clone(),
+                },
+                |vault_ctx, search, embedder, options| {
+                    cerbo_core::semantic::similar(vault_ctx, &uuid, search, embedder, options)
+                },
+            )?;
         },
         Commands::Sparql { query, file, vault, json } => {
             use std::io::Read;
@@ -1614,6 +1871,23 @@ async fn main() -> Result<(), String> {
                 (Some(q), None) => q.to_string(),
                 (None, None) => unreachable!("clap requires a query or --file"),
             };
+
+            // The daemon answers the JSON form; the text table is made here.
+            if json
+                && let Some(answer) = daemon::vault_call(&ctx, &vault_ctx.vault_path, |v| Call::Sparql {
+                    vault: v,
+                    query: sparql.clone(),
+                })
+            {
+                match answer {
+                    Ok(value) => print!("{value}"),
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                return Ok(());
+            }
 
             let options = cerbo_core::semantic::IndexOptions {
                 progress: Some(&print_build_progress),

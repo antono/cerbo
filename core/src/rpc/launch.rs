@@ -37,13 +37,16 @@ pub fn start_daemon(paths: &DaemonPaths, kind: ClientKind, name: Option<&str>) -
     let bin = find_daemon_binary().ok_or_else(|| {
         format!("cannot start the daemon: no `cerboid` next to this program or in PATH (set {DAEMON_BIN_ENV})")
     })?;
-    let mut child = Command::new(&bin)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
-        .map_err(|e| format!("cannot start {}: {e}", bin.display()))?;
+    let spawn = || {
+        Command::new(&bin)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .map_err(|e| format!("cannot start {}: {e}", bin.display()))
+    };
+    let mut child = spawn()?;
 
     let deadline = Instant::now() + START_TIMEOUT;
     loop {
@@ -52,12 +55,18 @@ pub fn start_daemon(paths: &DaemonPaths, kind: ClientKind, name: Option<&str>) -
             Err(ConnectError::Unavailable(_)) => {}
             Err(other) => return Err(other.to_string()),
         }
-        // A start that failed ends the process; one that lost the race to
-        // another daemon exits cleanly while that daemon answers us.
-        if let Ok(Some(status)) = child.try_wait()
-            && !status.success()
-        {
-            return Err(format!("{} stopped at start-up ({status}); run it in a terminal to see why", bin.display()));
+        // A start that failed ends the process. One that exited cleanly lost
+        // the race to a daemon that was still shutting down (it held the
+        // instance lock a moment longer than its socket): start again.
+        if let Ok(Some(status)) = child.try_wait() {
+            if !status.success() {
+                return Err(format!(
+                    "{} stopped at start-up ({status}); run it in a terminal to see why",
+                    bin.display()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+            child = spawn()?;
         }
         if Instant::now() >= deadline {
             return Err(format!("the daemon did not accept connections within {}s", START_TIMEOUT.as_secs()));

@@ -38,6 +38,7 @@ impl Env {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_cerbo"));
         cmd.env("XDG_CONFIG_HOME", self.xdg.path().join("config"))
             .env("XDG_CACHE_HOME", self.xdg.path().join("cache"))
+            .env("XDG_RUNTIME_DIR", self.xdg.path().join("run"))
             .current_dir(self.work.path())
             .stdin(Stdio::null());
         // `--new` bundles Schema.org and FOAF over the network; a dead proxy

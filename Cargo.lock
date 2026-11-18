@@ -558,6 +558,7 @@ name = "cerbo"
 version = "0.1.0"
 dependencies = [
  "cerbo-core",
+ "cerboid",
  "clap",
  "libc",
  "rmcp",

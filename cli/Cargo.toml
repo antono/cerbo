@@ -16,6 +16,8 @@ schemars = "1"
 
 [dev-dependencies]
 cerbo-core = { path = "../core", features = ["test-utils"] }
+# A daemon running inside the test process, for the daemon and MCP tests.
+cerboid = { path = "../cerboid" }
 tempfile = "3"
 
 [target.'cfg(unix)'.dev-dependencies]
