@@ -1,6 +1,7 @@
 <script lang="ts">
   /** A small context menu for a sidebar row (design D8). */
   import type { Pencil } from 'lucide-svelte';
+  import { app } from './stores.svelte';
 
   export interface RowMenuItem {
     label: string;
@@ -9,10 +10,20 @@
     danger?: boolean;
     /** Shown but not selectable, e.g. "Move up" on the first row. */
     disabled?: boolean;
+    /** Hotkey shown at the right edge, e.g. `Ctrl+T`. */
+    hint?: string;
+    /** Stable id for tests (`data-action`), e.g. the registry action id. */
+    id?: string;
     onSelect: () => void;
   }
 
-  let { x, y, items, onClose }: { x: number; y: number; items: RowMenuItem[]; onClose: () => void } = $props();
+  let {
+    x,
+    y,
+    items,
+    onClose,
+    label,
+  }: { x: number; y: number; items: RowMenuItem[]; onClose: () => void; label?: string } = $props();
 
   let menuEl = $state<HTMLDivElement | null>(null);
   let left = $state(0);
@@ -41,10 +52,14 @@
         e.stopPropagation();
         onClose();
       } else if (e.key === 'ArrowDown' || e.key === 'j') {
+        // The menu owns these keys: stop them before the tree or the preview
+        // behind the menu moves too.
         e.preventDefault();
+        e.stopPropagation();
         step(1);
       } else if (e.key === 'ArrowUp' || e.key === 'k') {
         e.preventDefault();
+        e.stopPropagation();
         step(-1);
       }
     }
@@ -77,7 +92,9 @@
   }
 </script>
 
-<div class="row-menu" bind:this={menuEl} style="left: {left}px; top: {top}px; visibility: {positioned ? 'visible' : 'hidden'};" role="menu">
+<!-- Narrow layout: menu targets are at least 32px tall (spec
+     `desktop-responsive-layout`, "Narrow layout"). -->
+<div class="row-menu" class:touch={app.widthClass === 'narrow'} bind:this={menuEl} style="left: {left}px; top: {top}px; visibility: {positioned ? 'visible' : 'hidden'};" role="menu" aria-label={label}>
   {#each items as item, i (item.label)}
     <button
       type="button"
@@ -85,13 +102,17 @@
       class:danger={item.danger}
       role="menuitem"
       disabled={item.disabled}
+      data-action={item.id}
       onclick={() => select(item)}
       onfocus={() => (highlighted = i)}
     >
       {#if item.icon}
         <item.icon size={14} />
       {/if}
-      <span>{item.label}</span>
+      <span class="menu-label">{item.label}</span>
+      {#if item.hint}
+        <kbd class="menu-hint">{item.hint}</kbd>
+      {/if}
     </button>
   {/each}
 </div>
@@ -123,6 +144,18 @@
     text-align: left;
     cursor: pointer;
     outline: none;
+  }
+  .row-menu.touch .menu-item {
+    min-height: 32px;
+  }
+  .menu-label {
+    flex: 1;
+  }
+  .menu-hint {
+    margin-left: 1.5rem;
+    font-family: inherit;
+    font-size: 0.75rem;
+    color: var(--muted-foreground);
   }
   .menu-item:hover,
   .menu-item:focus {

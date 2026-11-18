@@ -116,7 +116,6 @@ html.window-maximized body {
   background-color: var(--sidebar-bg) !important;
   border-bottom: 1px solid var(--border) !important;
   padding: 0 !important;
-  height: var(--header-height) !important;
   display: flex !important;
   align-items: stretch !important;
 }
@@ -168,7 +167,7 @@ html.window-maximized body {
   resize: none !important;
 }
 
-/* Tabbed mode styling - Hidden because we use a single toggle button */
+/* Carta's Write/Preview tabs: hidden, the window toolbar has the mode toggle */
 .carta-toolbar-left {
   display: none !important;
 }

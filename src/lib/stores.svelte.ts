@@ -25,7 +25,20 @@ import {
   type SimilarNotesResponse,
   type SimilarState,
 } from './similar-notes';
-import { serialQueue } from './write-queue';import {
+import { serialQueue } from './write-queue';
+import {
+  changeWidthClass,
+  dockedWidths,
+  panelShown,
+  showPanel,
+  togglePanel,
+  widthClassFor,
+  type Overlay,
+  type Panel,
+  type PanelState,
+  type WidthClass,
+} from './layout';
+import {
   ancestorFolders,
   buildPageTree,
   carryCollapsed,
@@ -84,6 +97,8 @@ export interface UiSettings {
   fontSize: number | null;
   sidebarWidth: number | null;
   rightSidebarVisible: boolean | null;
+  /** Page tree docked in the wide layout; absent in old files (= shown). */
+  leftSidebarVisible?: boolean | null;
   windowBounds: { width: number; height: number } | null;
   lastSparqlQuery: string | null;
   /** Collapsed sidebar folders per vault id; only collapsed ones are listed. */
@@ -119,15 +134,39 @@ export const app = $state({
   sidebarWidth: 260,
   backlinksWidth: 280,
   showRightSidebar: true,
+  // Page tree docked (spec `desktop-window-toolbar`, "Panel toggles").
+  showLeftSidebar: true,
+  // Layout for the current window width (spec `desktop-responsive-layout`),
+  // set from a ResizeObserver in +layout.svelte.
+  widthClass: 'wide' as WidthClass,
+  // Window width in px from the layout's ResizeObserver; 0 until measured.
+  // Docked panel widths are clamped against it (`dockedWidths`).
+  windowWidth: 0,
+  // The panel floating over the editor (medium right panel, narrow drawer or
+  // sheet). Never persisted; the docked flags above stay as they were.
+  overlay: null as Overlay,
+  // Folder picked from a toolbar path segment; the tree selects and focuses it.
+  revealedFolder: null as string | null,
+  // The open page has unsaved edits or a save is running (toolbar dot).
+  pageUnsaved: false,
 
   // UI state
   theme: 'light' as ThemeMode,
   editorTab: 'preview' as 'write' | 'preview',
   showSearch: false,
+  // Text page search opens with; `>` opens it in command mode
+  // (spec `command-palette`). Read when search opens.
+  searchPrefill: '',
+  // Counts openSearch calls. Search that is already showing (command mode
+  // running "Search pages") takes the new prefill when this changes.
+  searchOpens: 0,
   showExitPrompt: false,
   showNewPageForm: false,
   showVaultSelector: false,
   showHelp: false,
+  // Open toolbar menu (page ▾ or ⋯). Shared so `closeAllDialogs` closes it and
+  // global hotkeys treat it as a transient element (spec `application-lifecycle`).
+  toolbarMenu: null as 'page' | 'more' | 'path' | null,
   renameUuid: null as string | null,
   renameTitle: '',
   confirmDeleteUuid: null as string | null,
@@ -166,6 +205,9 @@ export async function loadUiSettings(): Promise<void> {
     if (typeof res.rightSidebarVisible === 'boolean') {
       app.showRightSidebar = res.rightSidebarVisible;
     }
+    if (typeof res.leftSidebarVisible === 'boolean') {
+      app.showLeftSidebar = res.leftSidebarVisible;
+    }
     if (typeof res.lastSparqlQuery === 'string') {
       app.lastSparqlQuery = res.lastSparqlQuery;
     }
@@ -184,6 +226,7 @@ export async function saveUiSettings(): Promise<void> {
       fontSize: null,
       sidebarWidth: app.sidebarWidth,
       rightSidebarVisible: app.showRightSidebar,
+      leftSidebarVisible: app.showLeftSidebar,
       windowBounds: null, // kept: `app_exit` saves the window size
       lastSparqlQuery: app.lastSparqlQuery,
     });
@@ -198,10 +241,12 @@ export async function saveUiSettings(): Promise<void> {
  */
 export function closeAllDialogs() {
   app.showSearch = false;
+  app.searchPrefill = '';
   app.showExitPrompt = false;
   app.showNewPageForm = false;
   app.showVaultSelector = false;
   app.showHelp = false;
+  app.toolbarMenu = null;
   app.renameUuid = null;
   app.renameTitle = '';
   app.confirmDeleteUuid = null;
@@ -211,6 +256,102 @@ export function closeAllDialogs() {
   app.newPagePath = '';
   app.showNewFolder = false;
   app.newFolderPath = '';
+}
+
+// ── Panels and editor mode ────────────────────────────────────────────────────
+
+function panelState(): PanelState {
+  return {
+    widthClass: app.widthClass,
+    showLeft: app.showLeftSidebar,
+    showRight: app.showRightSidebar,
+    overlay: app.overlay,
+  };
+}
+
+function applyPanelState(next: { state: PanelState; persist: boolean }): void {
+  app.showLeftSidebar = next.state.showLeft;
+  app.showRightSidebar = next.state.showRight;
+  app.overlay = next.state.overlay;
+  if (next.persist) void saveUiSettings();
+}
+
+/** Whether `panel` is on screen in the current layout, docked or floating. */
+export function isPanelShown(panel: Panel): boolean {
+  return panelShown(panel, panelState());
+}
+
+/**
+ * Use the page tree's toggle: a docked tree shows or hides and is remembered
+ * across restarts; in the narrow layout the drawer opens or closes instead.
+ */
+export function toggleLeftSidebar(): void {
+  applyPanelState(togglePanel('tree', panelState()));
+}
+
+/**
+ * Use the right panel's toggle: docked in the wide layout (remembered), an
+ * overlay in the medium and narrow layouts (not remembered).
+ */
+export function toggleRightSidebar(): void {
+  applyPanelState(togglePanel('right', panelState()));
+}
+
+/** Make `panel` visible in the current layout, if it is not already. */
+export function showPanelNow(panel: Panel): void {
+  applyPanelState(showPanel(panel, panelState()));
+}
+
+/** Close the floating panel, if one is open (`Esc`, outside click). */
+export function closeOverlay(): void {
+  app.overlay = null;
+}
+
+/** Follow the window width; crossing a boundary closes any overlay. */
+/**
+ * The widths the docked tree and right panel are drawn at: the stored widths,
+ * clamped so the editor keeps 360px in the current window (spec "Editor keeps
+ * its width"). 0 for a panel that is not docked. Stored widths are untouched.
+ */
+export function dockedPanelWidths(): { tree: number; right: number } {
+  const tree = app.showLeftSidebar && app.widthClass !== 'narrow' ? app.sidebarWidth : 0;
+  const right = app.showRightSidebar && app.widthClass === 'wide' && app.currentUuid ? app.backlinksWidth : 0;
+  return dockedWidths(app.windowWidth, tree, right);
+}
+
+export function setWindowWidth(width: number): void {
+  app.windowWidth = width;
+  const next = changeWidthClass(widthClassFor(width), panelState());
+  if (next.widthClass !== app.widthClass) {
+    app.widthClass = next.widthClass;
+    app.overlay = next.overlay;
+  }
+}
+
+// The page editor registers how it switches mode, so it can store the caret
+// before the write view goes away. Without an editor the tab flips directly.
+let editorModeToggle: (() => void) | null = null;
+
+export function onEditorModeToggle(toggle: () => void): () => void {
+  editorModeToggle = toggle;
+  return () => {
+    if (editorModeToggle === toggle) editorModeToggle = null;
+  };
+}
+
+/** Switch the open page between edit and preview (`Ctrl+E`, toolbar toggle). */
+export function toggleEditorMode(): void {
+  if (!app.currentUuid) return;
+  if (editorModeToggle) editorModeToggle();
+  else app.editorTab = app.editorTab === 'write' ? 'preview' : 'write';
+}
+
+/** Open page search, optionally with text already typed (`>` = commands). */
+export function openSearch(prefill = ''): void {
+  closeAllDialogs();
+  app.searchPrefill = prefill;
+  app.searchOpens += 1;
+  app.showSearch = true;
 }
 
 // ── Computed helpers ──────────────────────────────────────────────────────────
@@ -505,6 +646,20 @@ export function revealPage(uuid: string): void {
   if (!page) return;
   const next = revealPath(app.collapsedFolders, page.virtualPath);
   if (next.length !== app.collapsedFolders.length) setCollapsedFolders(next);
+}
+
+/**
+ * Show the page tree and select the folder `path`, expanding its parents
+ * (spec `desktop-window-toolbar`, "Folder segment reveals the folder").
+ */
+export function revealFolder(path: string): void {
+  showPanelNow('tree');
+  const parent = ancestorFolders(path).slice(0, -1).at(-1) ?? null;
+  const next = revealPath(app.collapsedFolders, parent);
+  if (next.length !== app.collapsedFolders.length) setCollapsedFolders(next);
+  // Reassign through null so picking the same folder again refocuses it.
+  app.revealedFolder = null;
+  app.revealedFolder = path;
 }
 
 export interface FolderRenameReport {

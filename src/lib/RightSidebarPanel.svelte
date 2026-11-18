@@ -1,10 +1,21 @@
 <script lang="ts">
   import { listen } from '@tauri-apps/api/event';
-  import { app, loadBacklinks, openPage, saveUiSettings } from './stores.svelte';
+  import { app, loadBacklinks, openPage } from './stores.svelte';
   import { INDEX_READY_EVENT } from './backlinks';
   import SimilarNotesSection from './SimilarNotesSection.svelte';
 
-  let { uuid }: { uuid: string } = $props();
+  /**
+   * `stack` (docked and floating panel) shows Backlinks then Similar notes.
+   * `tabs` (narrow bottom sheet, design D8) shows only the section `tab`; the
+   * sheet's tab bar names it, so the section title is left out.
+   */
+  let {
+    uuid,
+    variant = 'stack',
+    tab = 'backlinks',
+  }: { uuid: string; variant?: 'stack' | 'tabs'; tab?: 'backlinks' | 'similar' } = $props();
+  let showBacklinks = $derived(variant === 'stack' || tab === 'backlinks');
+  let showSimilar = $derived(variant === 'stack' || tab === 'similar');
 
   // Reload backlinks when uuid changes
   $effect(() => {
@@ -26,24 +37,14 @@
   });
 </script>
 
-<aside class="right-sidebar-panel">
-  <div class="panel-header">
-    <h3 class="panel-title">Backlinks</h3>
-    <button
-      class="close-btn"
-      onclick={async () => {
-        app.showRightSidebar = false;
-        await saveUiSettings();
-      }}
-      title="Hide right sidebar"
-    >
-      ✕
-    </button>
-  </div>
-
+<aside class="right-sidebar-panel" data-variant={variant}>
+  <!-- No header bar and no close button: the toolbar's right panel toggle
+       hides the panel (specs `desktop-window-toolbar`, `desktop-window-chrome`).
+       Each section titles itself and scrolls with its content. -->
   <div class="panel-content">
-    <!-- Sections: Backlinks (titled by the panel header), then Similar notes. -->
-    <section aria-label="Backlinks">
+    {#if showBacklinks}
+    <section aria-labelledby={variant === 'stack' ? 'backlinks-title' : undefined} aria-label={variant === 'tabs' ? 'Backlinks' : undefined}>
+    {#if variant === 'stack'}<h3 id="backlinks-title" class="panel-title">Backlinks</h3>{/if}
     {#if app.backlinksStatus === 'loading'}
       <p class="empty" aria-busy="true">Loading backlinks…</p>
     {:else if app.backlinksStatus !== 'ready'}
@@ -66,8 +67,11 @@
       </ul>
     {/if}
     </section>
+    {/if}
 
-    <SimilarNotesSection {uuid} />
+    {#if showSimilar}
+      <SimilarNotesSection {uuid} />
+    {/if}
   </div>
 </aside>
 
@@ -80,16 +84,8 @@
     overflow: hidden;
   }
 
-  .panel-header {
-    height: var(--header-height);
-    display: flex;
-    align-items: center;
-    padding: 0 1rem;
-    flex-shrink: 0;
-  }
-
   .panel-title {
-    margin: 0;
+    margin: 0 0 0.5rem;
     font-size: 0.7rem;
     font-weight: 700;
     letter-spacing: 0.05em;
@@ -98,24 +94,9 @@
     flex: 1;
   }
 
-  .close-btn {
-    background: none;
-    border: none;
-    color: var(--muted-foreground);
-    cursor: pointer;
-    font-size: 0.75rem;
-    padding: 0.25rem;
-    border-radius: var(--radius);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.15s, color 0.15s;
-  }
 
-  .close-btn:hover {
-    background: var(--accent-hover);
-    color: var(--fg);
-  }
+
+
 
   .panel-content {
     flex: 1;

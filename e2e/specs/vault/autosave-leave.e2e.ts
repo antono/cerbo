@@ -87,7 +87,7 @@ describe('edits survive leaving the page before the autosave delay', () => {
   });
 
   it('keeps an edit when another vault is opened at once', async () => {
-    await $('.vault-name-btn').click();
+    await $('[data-testid="toolbar-vault"]').click();
     const rows = $$('.vault-selector-modal .vault-item');
     await rows[1].waitForExist({ timeout: 10_000 });
     // session.ts registers the second vault as a bare folder; make it a vault
@@ -106,7 +106,7 @@ describe('edits survive leaving the page before the autosave delay', () => {
       timeoutMsg: 'the other vault did not open',
     });
 
-    await $('.vault-name-btn').click();
+    await $('[data-testid="toolbar-vault"]').click();
     await rows[1].waitForExist({ timeout: 10_000 });
     await $('.vault-selector-modal .vault-item:not(.selected)').click();
     await $('.vault-selector-modal').waitForExist({ reverse: true, timeout: 10_000 });

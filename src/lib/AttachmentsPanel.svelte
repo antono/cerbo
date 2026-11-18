@@ -6,7 +6,7 @@
   import ConfirmationDialog from './ConfirmationDialog.svelte';
 
   /** The open page. Every action below works on an attachment's own UUID, never on this one. */
-  let { uuid }: { uuid: string } = $props();
+  let { uuid, variant = 'stack' }: { uuid: string; variant?: 'stack' | 'tabs' } = $props();
   let loading = $state(false);
   let confirmDelete = $state<AttachmentInfo | null>(null);
   let deleting = $state(false);
@@ -51,12 +51,12 @@
   });
 </script>
 
-<div class="attachments-panel">
-  <div class="panel-header">
-    <h3 class="panel-title">Attachments</h3>
-  </div>
-
+<div class="attachments-panel" data-variant={variant}>
+  <!-- No header bar (spec `desktop-window-toolbar`): the title scrolls with
+       the list. -->
   <div class="panel-content">
+    <!-- In the narrow sheet the "Files" tab names the list (design D8). -->
+    {#if variant === 'stack'}<h3 class="panel-title">Attachments</h3>{/if}
     {#if loading}
       <p class="status">Loading...</p>
     {:else if app.attachments.length === 0}
@@ -117,16 +117,8 @@
     overflow: hidden;
   }
 
-  .panel-header {
-    height: var(--header-height);
-    display: flex;
-    align-items: center;
-    padding: 0 1rem;
-    flex-shrink: 0;
-  }
-
   .panel-title {
-    margin: 0;
+    margin: 0 0 0.5rem;
     font-size: 0.7rem;
     font-weight: 700;
     letter-spacing: 0.05em;

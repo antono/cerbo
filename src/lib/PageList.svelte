@@ -11,10 +11,8 @@
     FolderOpen,
     ChevronRight,
     ChevronDown,
-    Plus,
     Pencil,
     Trash2,
-    Search,
     FolderInput,
     FilePlus,
     FolderPlus,
@@ -22,12 +20,10 @@
     ArrowUp,
     ArrowDown,
   } from 'lucide-svelte';
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import {
     app,
     openPage,
-    deletePage,
-    closeAllDialogs,
     triggerRename,
     triggerDelete,
     triggerMove,
@@ -42,6 +38,7 @@
     deleteFolder,
   } from './stores.svelte';
   import { isInputFocused } from './hotkeys';
+  import { revealedAfterFocus } from './toolbar';
   import {
     canMoveBy,
     flattenVisible,
@@ -54,13 +51,11 @@
     type TreeRow,
   } from './page-tree';
   import { dropPlacement, dropZone, passedThreshold, rootPlacement, type DropZone } from './tree-drag';
-  import ConfirmationDialog from './ConfirmationDialog.svelte';
   import RowMenu, { type RowMenuItem } from './RowMenu.svelte';
 
   const tree = $derived(pageTree());
   const rows = $derived(flattenVisible(tree, new Set(app.collapsedFolders)));
 
-  let deleting = $state(false);
   let itemsList = $state<HTMLUListElement | null>(null);
 
   function rowKey(row: TreeRow): string {
@@ -381,60 +376,46 @@
     return t.zone === 'before' ? 'drop-before' : t.zone === 'after' ? 'drop-after' : 'drop-inside';
   }
 
-  // ── UI Actions ────────────────────────────────────────────────────────────────
+  // ── Folder revealed from the toolbar path ───────────────────────────────────
 
-  function toggleSearch() {
-    const nextState = !app.showSearch;
-    closeAllDialogs();
-    app.showSearch = nextState;
+  // A toolbar path segment selects its folder (spec `desktop-window-toolbar`):
+  // the store expands the parents, the tree focuses and scrolls to the row.
+  $effect(() => {
+    const path = app.revealedFolder;
+    if (path === null) return;
+    void tick().then(() => {
+      const key = `f:${path}`;
+      const li = itemsList?.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`);
+      li?.scrollIntoView({ block: 'nearest' });
+      focusRow(key);
+    });
+  });
+
+  // Focus moving to another row (j/k, a click) moves the selection with it,
+  // so the revealed folder does not stay highlighted next to the page row.
+  function onTreeFocusIn(e: FocusEvent) {
+    const key = (e.target as HTMLElement | null)?.closest<HTMLElement>('[data-key]')?.dataset.key ?? null;
+    const next = revealedAfterFocus(app.revealedFolder, key);
+    if (next !== app.revealedFolder) app.revealedFolder = next;
   }
 
-  function toggleNewPage() {
-    const nextState = !app.showNewPageForm;
-    closeAllDialogs();
-    app.showNewPageForm = nextState;
-  }
-
-  async function handleDelete() {
-    if (!app.confirmDeleteUuid) return;
-    deleting = true;
-    try {
-      await deletePage(app.confirmDeleteUuid);
-      app.confirmDeleteUuid = null;
-    } catch (_) {
-      // error set in store
-    } finally {
-      deleting = false;
-    }
-  }
+  // Opening another page moves the selection back to its row. Not on mount:
+  // a reveal shows the tree and must keep its folder selected.
+  let selectedUuid = untrack(() => app.currentUuid);
+  $effect(() => {
+    const uuid = app.currentUuid;
+    if (uuid === selectedUuid) return;
+    selectedUuid = uuid;
+    app.revealedFolder = null;
+  });
 </script>
 
 <aside class="page-list">
-  <!-- Header -->
-  <div class="list-header">
-    <span class="list-title">Pages</span>
-    <div class="header-actions">
-      <button class="icon-btn" title="Search pages (Ctrl+P)" onclick={toggleSearch} disabled={app.showExitPrompt}>
-        <Search size={14} />
-      </button>
-      <button class="icon-btn" title="New folder" onclick={() => triggerNewFolder('')} disabled={app.showExitPrompt}>
-        <FolderPlus size={14} />
-      </button>
-      <button
-        class="icon-btn"
-        title="New page (Ctrl+N)"
-        onclick={toggleNewPage}
-        disabled={app.showSearch || app.showExitPrompt}
-      >
-        <Plus size={16} />
-      </button>
-    </div>
-  </div>
-
   <!-- Tree rows -->
   <div
     class="items-wrap"
     onkeydown={handleListKeydown}
+    onfocusin={onTreeFocusIn}
     oncontextmenu={openAddMenu}
     role="tree"
     tabindex="0"
@@ -448,7 +429,8 @@
             class:dragging={drag?.key === rowKey(row)}
             style="--indent: {0.5 + row.depth * 0.875}rem"
             role="treeitem"
-            aria-selected={false}
+            aria-selected={app.revealedFolder === row.path}
+            class:revealed={app.revealedFolder === row.path}
             aria-expanded={row.expanded}
             aria-level={row.depth + 1}
             data-kind="folder"
@@ -556,19 +538,6 @@
   <RowMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => (menu = null)} />
 {/if}
 
-<!-- Delete confirmation overlay -->
-{#if app.confirmDeleteUuid}
-  {@const page = app.pages.find(p => p.uuid === app.confirmDeleteUuid)}
-  <ConfirmationDialog
-    title="Delete page?"
-    message={`This will permanently delete "${page?.title ?? app.confirmDeleteUuid}" and all its assets.`}
-    confirmLabel={deleting ? 'Deleting…' : 'Delete'}
-    confirmDisabled={deleting}
-    onClose={() => { app.confirmDeleteUuid = null; }}
-    onConfirm={handleDelete}
-  />
-{/if}
-
 <style>
   .page-list {
     display: flex;
@@ -577,15 +546,6 @@
     overflow: hidden;
     font-size: 0.875rem;
   }
-  .list-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid var(--border);
-  }
-  .list-title { font-weight: 600; font-size: 0.8125rem; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; }
-  .header-actions { display: flex; gap: 0.125rem; }
   .icon-btn {
     display: flex; align-items: center; justify-content: center;
     width: 1.5rem; height: 1.5rem;
@@ -619,7 +579,8 @@
     margin-bottom: 0.0625rem;
   }
   .item:hover .icon-btn.small { opacity: 1; }
-  .item.active { background: var(--accent); }
+  .item.active,
+  .item.revealed { background: var(--accent); }
   .item.dragging { opacity: 0.5; }
   .item.drop-inside { background: var(--accent-hover); box-shadow: inset 0 0 0 1px var(--primary); }
   .item.drop-before::before,

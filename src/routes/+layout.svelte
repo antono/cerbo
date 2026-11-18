@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { fade } from 'svelte/transition';
   import { ModeWatcher, mode, setMode } from 'mode-watcher';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { ChevronDown, HelpCircle, Moon, Plus, Sun } from 'lucide-svelte';
+  import { Plus } from 'lucide-svelte';
   import cerboIcon from '../favicon.svg';
-  import { app, loadVaults, loadUiSettings, saveUiSettings, openVault, quickAddVault, quitApp, closeAllDialogs, openNextPage, openPrevPage, triggerRename, triggerDelete, triggerMove, goBack, goForward } from '#lib/stores.svelte.js';
+  import { app, loadVaults, loadUiSettings, saveUiSettings, openVault, quickAddVault, closeAllDialogs, closeOverlay, setWindowWidth, dockedPanelWidths } from '#lib/stores.svelte.js';
   import PageList from '#lib/PageList.svelte';
   import GlobalSearch from '#lib/GlobalSearch.svelte';
   import NewPageDialog from '#lib/NewPageDialog.svelte';
@@ -16,9 +16,14 @@
   import KeyboardHelp from '#lib/KeyboardHelp.svelte';
   import SparqlConsole from '#lib/SparqlConsole.svelte';
   import ExitConfirmation from '#lib/ExitConfirmation.svelte';
-  import TitleBar from '#lib/TitleBar.svelte';
+  import DeletePageDialog from '#lib/DeletePageDialog.svelte';
+  import WindowToolbar from '#lib/WindowToolbar.svelte';
+  import PanelOverlay from '#lib/PanelOverlay.svelte';
+  import { maxPanelWidth } from '#lib/layout.js';
   import { splitVaultPath } from '#lib/vault-path.js';
-  import { isModKey, isInputFocused, isSparqlConsoleKey, confirmationOpen } from '#lib/hotkeys.js';
+  import { isInputFocused, confirmationOpen, anyDialogOpen as transientOpen } from '#lib/hotkeys.js';
+  import { dispatchHotkey, pressedKey } from '#lib/actions.js';
+  import { appActions } from '#lib/action-host.js';
   import '../app.css';
 
   let { children } = $props();
@@ -29,7 +34,52 @@
   let vaultSelectorEl = $state<HTMLElement | null>(null);
   let selectedVaultIndex = $state(0);
 
-  const modKeyLabel = typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl';
+  /** Any dialog, search, the vault selector or a toolbar menu is open (confirmations included). */
+  function anyDialogOpen(): boolean {
+    return transientOpen(app);
+  }
+
+  // Width class from one ResizeObserver (design D4): the layout follows the
+  // window while it is being resized, without a reload.
+  // It watches <html>, not <body>: the body draws a 1px window border, so a
+  // 1000px window would measure 998px and fall into the medium class.
+  onMount(() => {
+    setWindowWidth(document.documentElement.clientWidth || window.innerWidth);
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width) setWindowWidth(width);
+    });
+    observer.observe(document.documentElement);
+    return () => observer.disconnect();
+  });
+
+  // Overlays close on Esc (spec `desktop-responsive-layout`, "Overlays close
+  // predictably"). Captured before the editor sees it, so Esc closes the
+  // drawer or panel and does not also leave edit mode.
+  $effect(() => {
+    function closeOverlayOnEscape(e: KeyboardEvent) {
+      if (e.key !== 'Escape' || app.overlay === null || anyDialogOpen()) return;
+      // Esc closes the innermost element first: a tree row menu or a tree
+      // drag inside the drawer handles it (its own capture listener) and the
+      // drawer stays open.
+      if (document.querySelector('.row-menu') || document.body.classList.contains('tree-dragging')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeOverlay();
+    }
+    window.addEventListener('keydown', closeOverlayOnEscape, true);
+    return () => window.removeEventListener('keydown', closeOverlayOnEscape, true);
+  });
+
+  // Picking a page in the narrow tree drawer closes the drawer.
+  let lastUuid: string | null = null;
+  $effect(() => {
+    const uuid = app.currentUuid;
+    untrack(() => {
+      if (uuid !== lastUuid && app.overlay === 'tree') closeOverlay();
+      lastUuid = uuid;
+    });
+  });
 
   onMount(async () => {
     await loadUiSettings();
@@ -40,7 +90,8 @@
     }
   });
 
-  // Global keydown listener
+  // Global keydown listener. App hotkeys come from the action registry
+  // (`actions.ts`); only Escape and preview scrolling are handled here.
   $effect(() => {
     function handleKeydown(e: KeyboardEvent) {
       // 1. Escape: Close active dialogs/forms
@@ -54,138 +105,27 @@
       // Confirmation dialogs own their own keyboard handling.
       if (confirmationOpen(app)) return;
 
-      // SPARQL console (Ctrl+Shift+E), also from the editor; toggles itself.
-      if (isSparqlConsoleKey(e)) {
-        e.preventDefault();
-        const nextState = !app.showSparqlConsole;
-        closeAllDialogs();
-        app.showSparqlConsole = nextState;
-        return;
-      }
+      const inputFocused = isInputFocused();
+      if (dispatchHotkey(e, { dialogOpen: anyDialogOpen(), inputFocused, editorTab: app.editorTab }, appActions)) return;
 
-      // 2. New Page (Ctrl+N) - Handle first so it can toggle itself
-      if (isModKey(e, 'n')) {
-        e.preventDefault();
-        const nextState = !app.showNewPageForm;
-        closeAllDialogs();
-        app.showNewPageForm = nextState;
-        return;
-      }
+      if (anyDialogOpen()) return;
 
-      // 3. Theme Toggle (Ctrl+T)
-      if (isModKey(e, 't')) {
-        e.preventDefault();
-        const nextMode = mode.current === 'light' ? 'dark' : 'light';
-        app.theme = nextMode;
-        setMode(nextMode);
-        saveUiSettings();
-        return;
-      }
-
-      // 4. Help (F1)
-      if (e.key === 'F1') {
-        e.preventDefault();
-        const nextState = !app.showHelp;
-        closeAllDialogs();
-        app.showHelp = nextState;
-        return;
-      }
-
-      // Ignore other global shortcuts if any modal is open
-      if (app.showSearch || app.showExitPrompt || app.showNewPageForm || app.showVaultSelector || app.showHelp || app.renameUuid || app.confirmDeleteUuid || app.showSparqlConsole || app.moveUuid || app.renameFolderPath !== null || app.showNewFolder) return;
-
-      // 5. Go Back (Alt+Left) - only when not in input
-      if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'Left') && !isInputFocused()) {
-        e.preventDefault();
-        goBack();
-        return;
-      }
-
-      // 6. Go Forward (Alt+Right) - only when not in input
-      if (e.altKey && (e.key === 'ArrowRight' || e.key === 'Right') && !isInputFocused()) {
-        e.preventDefault();
-        goForward();
-        return;
-      }
-
-      // ── Preview Mode Shortcuts ──────────────────────────────────
-      if (app.editorTab === 'preview' && !isInputFocused()) {
-        // Default: j/ArrowDown = scroll down, k/ArrowUp = scroll up (vim-style)
-        if (e.key === 'j' || e.key === 'ArrowDown') {
+      // Preview scrolling, vim-style: j/ArrowDown down, k/ArrowUp up.
+      // `pressedKey` reads the physical key on a Cyrillic layout (`о` -> j).
+      if (app.editorTab === 'preview' && !inputFocused && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const k = pressedKey(e);
+        if ((k === 'j' && !e.shiftKey) || e.key === 'ArrowDown') {
           e.preventDefault();
           const renderer = document.querySelector('.carta-renderer') as HTMLElement;
           if (renderer) renderer.scrollBy({ top: 100, behavior: 'smooth' });
           return;
         }
-        if (e.key === 'k' || e.key === 'ArrowUp') {
+        if ((k === 'k' && !e.shiftKey) || e.key === 'ArrowUp') {
           e.preventDefault();
           const renderer = document.querySelector('.carta-renderer') as HTMLElement;
           if (renderer) renderer.scrollBy({ top: -100, behavior: 'smooth' });
           return;
         }
-        // J/K (uppercase) = navigate pages in sidebar
-        if (e.key === 'J') {
-          e.preventDefault();
-          openNextPage();
-          return;
-        }
-        if (e.key === 'K') {
-          e.preventDefault();
-          openPrevPage();
-          return;
-        }
-        // Rename current page
-        if (e.key === 'r') {
-          e.preventDefault();
-          triggerRename();
-          return;
-        }
-        // Move current page to another folder
-        if (e.key === 'm') {
-          e.preventDefault();
-          triggerMove();
-          return;
-        }
-        // Delete current page
-        if (e.key === 'Delete' || e.key === 'Backspace') {
-          e.preventDefault();
-          triggerDelete();
-          return;
-        }
-      }
-
-      // 5. Global Search (Ctrl+P)
-      if (isModKey(e, 'p')) {
-        e.preventDefault();
-        const nextState = !app.showSearch;
-        closeAllDialogs();
-        app.showSearch = nextState;
-        return;
-      }
-
-      // 6. Vault Selector (Ctrl+O)
-      if (isModKey(e, 'o') && !e.shiftKey) {
-        e.preventDefault();
-        const nextState = !app.showVaultSelector;
-        closeAllDialogs();
-        app.showVaultSelector = nextState;
-        return;
-      }
-
-      // 7. Add Vault (Ctrl+Shift+O)
-      if (isModKey(e, 'o') && e.shiftKey) {
-        e.preventDefault();
-        closeAllDialogs();
-        void quickAddVault();
-        return;
-      }
-
-      // 7. Quit App (Ctrl+Q)
-      if (isModKey(e, 'q')) {
-        e.preventDefault();
-        closeAllDialogs();
-        app.showExitPrompt = true;
-        return;
       }
     }
 
@@ -205,6 +145,8 @@
   });
 
   let vault = $derived(app.vaults.find((v) => v.id === app.activeVaultId));
+  // Drawn width of the docked tree: re-clamped whenever the window resizes.
+  let treeWidth = $derived(dockedPanelWidths().tree);
 
   $effect(() => {
     if (!app.showVaultSelector) return;
@@ -225,7 +167,9 @@
   function handleSidebarResize(e: MouseEvent) {
     if (!isResizingSidebar) return;
     // Enforce min/max constraints
-    app.sidebarWidth = Math.max(200, Math.min(600, e.clientX));
+    // The editor keeps at least 360px (spec "Editor keeps its width").
+    const right = dockedPanelWidths().right;
+    app.sidebarWidth = Math.max(200, Math.min(maxPanelWidth(window.innerWidth, right, 200, 600), e.clientX));
   }
 
   function stopResizing() {
@@ -233,18 +177,6 @@
     window.removeEventListener('mousemove', handleSidebarResize);
     window.removeEventListener('mouseup', stopResizing);
     saveUiSettings();
-  }
-
-  function toggleVaultSelector() {
-    const nextState = !app.showVaultSelector;
-    closeAllDialogs();
-    app.showVaultSelector = nextState;
-  }
-
-  function toggleHelp() {
-    const nextState = !app.showHelp;
-    closeAllDialogs();
-    app.showHelp = nextState;
   }
 
   function handleVaultSelectorKeydown(e: KeyboardEvent) {
@@ -309,31 +241,18 @@
 
 <ModeWatcher />
 
-<TitleBar />
+<WindowToolbar />
 
 <div class="app-shell" class:is-resizing={isResizingSidebar}>
-  <!-- Sidebar -->
+  <!-- Sidebar: hidden with Ctrl+\ (spec `keyboard-shortcuts`). Docked in the
+       wide and medium layouts; a drawer (PanelOverlay) in the narrow one. -->
+  {#if app.showLeftSidebar && app.widthClass !== 'narrow'}
   <aside 
     class="sidebar" 
-    style="width: {app.sidebarWidth}px;"
+    style="width: {treeWidth}px;"
     bind:this={sidebarEl}
     tabindex="-1"
   >
-    <!-- Vault header -->
-    <div class="vault-header">
-      <button
-        class="vault-name-btn"
-        onclick={toggleVaultSelector}
-        title={`Switch vault (${modKeyLabel}+O)`}
-        disabled={app.showNewPageForm}
-      >
-        <img src={cerboIcon} alt="" width="18" height="18" class="vault-icon" />
-        <span class="vault-label">{vault?.name ?? 'No vault'}</span>
-        <span class="vault-chevron"><ChevronDown size={12} /></span>
-      </button>
-
-    </div>
-
     <!-- Page list -->
     <div class="page-list-wrap">
       {#if vault}
@@ -341,29 +260,11 @@
       {:else}
         <div class="no-vault">
           <p>Add a vault to get started.</p>
-          <button class="primary-btn" onclick={toggleVaultSelector}>Add Vault</button>
+          <button class="primary-btn" onclick={() => void quickAddVault()}>Add Vault</button>
         </div>
       {/if}
     </div>
 
-    <!-- Bottom actions area -->
-    <div class="sidebar-footer">
-        <button class="theme-icon-btn" onclick={toggleHelp} title="Keyboard shortcuts" aria-label="Keyboard shortcuts">
-         <HelpCircle size={16} />
-       </button>
-       <button class="theme-toggle" onclick={() => {
-         const nextMode = mode.current === 'light' ? 'dark' : 'light';
-         app.theme = nextMode;
-         setMode(nextMode);
-         saveUiSettings();
-       }} title="Toggle theme" aria-label="Toggle theme">
-         {#if app.theme === 'dark'}
-           <Moon size={18} />
-         {:else}
-           <Sun size={18} />
-         {/if}
-       </button>
-    </div>
   </aside>
 
   <!-- Resize Handle -->
@@ -374,6 +275,7 @@
     role="separator"
     aria-orientation="vertical"
   ></div>
+  {/if}
 
   <!-- Main content -->
   <main 
@@ -390,6 +292,8 @@
       {@render children()}
     {/if}
   </main>
+
+  <PanelOverlay />
 </div>
 
 <!-- ── Modals ──────────────────────────────────────────────────────────────── -->
@@ -404,6 +308,12 @@
 
 {#if app.renameUuid}
   <RenamePageDialog onClose={() => app.renameUuid = null} />
+{/if}
+
+<!-- Rendered here, not in the tree, so it shows whatever the layout or tree
+     visibility (narrow page menu, Del hotkey with the tree hidden). -->
+{#if app.confirmDeleteUuid}
+  <DeletePageDialog />
 {/if}
 
 {#if app.moveUuid}
@@ -431,7 +341,7 @@
     <div bind:this={vaultSelectorEl} class="vault-selector-modal" onkeydown={handleVaultSelectorKeydown} onclick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" tabindex="-1" transition:fade={{ duration: 150 }}>
       <header class="modal-header">
         <h2>Switch Vault</h2>
-        <button class="close-btn" onclick={() => (app.showVaultSelector = false)} title="Close (Esc)">✕</button>
+        <button class="close-btn" onclick={() => (app.showVaultSelector = false)} title="Close (Esc)" aria-label="Close"><kbd class="close-kbd">Esc</kbd></button>
       </header>
 
       <div class="vault-selector-body">
@@ -472,12 +382,13 @@
 {#if app.error}
   <div class="error-toast" role="alert">
     <span>{app.error}</span>
-    <button class="toast-close" onclick={() => (app.error = null)}>✕</button>
+    <button class="toast-close" onclick={() => (app.error = null)}>Dismiss</button>
   </div>
 {/if}
 
 <style>
   .app-shell {
+    position: relative;
     display: flex;
     flex: 1;
     min-height: 0;
@@ -521,71 +432,6 @@
   .is-resizing {
     cursor: col-resize;
     user-select: none;
-  }
-
-  .vault-header {
-    position: relative;
-    padding: 0 0.75rem;
-    height: var(--header-height);
-    display: flex;
-    align-items: center;
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-  }
-
-  .vault-name-btn {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    width: 100%;
-    background: none;
-    border: none;
-    cursor: pointer;
-    padding: 0.35rem 0.5rem;
-    border-radius: var(--radius);
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: var(--fg);
-    transition: background 0.15s;
-  }
-
-  .theme-icon-btn,
-  .theme-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    background: none;
-    border: none;
-    cursor: pointer;
-    border-radius: var(--radius);
-    color: var(--muted-foreground);
-    transition: background 0.15s, color 0.15s;
-  }
-
-  .theme-icon-btn:hover,
-  .theme-toggle:hover {
-    background: var(--accent-hover);
-    color: var(--fg);
-  }
-
-  .vault-name-btn:hover {
-    background: var(--accent-hover);
-  }
-
-  .vault-label {
-    flex: 1;
-    text-align: left;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .vault-chevron {
-    font-size: 0.65rem;
-    color: var(--muted-foreground);
   }
 
   .modal-backdrop {
@@ -638,6 +484,16 @@
   .close-btn:hover {
     background: var(--accent-hover);
     color: var(--fg);
+  }
+
+  /* "Esc" instead of a ✕: the toolbar's quit button is the only ✕ in the
+     window (spec `desktop-window-chrome`, "Close button inside the app"). */
+  .close-kbd {
+    font-family: inherit;
+    font-size: 0.7rem;
+    padding: 0.1rem 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: 0.25rem;
   }
 
   .vault-selector-body {
@@ -757,33 +613,6 @@
     min-height: 0;
   }
 
-  .sidebar-footer {
-    padding: 0.5rem;
-    border-top: 1px solid var(--border);
-    display: flex;
-    justify-content: flex-start;
-  }
-
-  .theme-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    background: none;
-    border: none;
-    cursor: pointer;
-    border-radius: var(--radius);
-    color: var(--muted-foreground);
-    transition: background 0.15s, color 0.15s;
-  }
-
-  .theme-toggle:hover {
-    background: var(--accent-hover);
-    color: var(--fg);
-  }
-
   .no-vault {
     padding: 1.5rem 1rem;
     text-align: center;
@@ -870,9 +699,10 @@
     border: none;
     color: #fff;
     cursor: pointer;
-    font-size: 1rem;
+    font-size: 0.75rem;
     line-height: 1;
     padding: 0;
     flex-shrink: 0;
+    text-decoration: underline;
   }
 </style>

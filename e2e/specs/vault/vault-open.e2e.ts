@@ -3,9 +3,9 @@ import { FIXTURE_VAULT_NAME, LONG_PATH_VAULT_DIR } from '../../session.ts';
 
 describe('launch with the fixture vault', () => {
   it('opens the seeded vault', async () => {
-    // WebKitWebDriver reports no rendered text for the sidebar header, so
-    // check the DOM text instead.
-    const label = $('.vault-label');
+    // The vault name is shown once, in the window toolbar's vault menu.
+    // WebKitWebDriver reports no rendered text there, so check the DOM text.
+    const label = $('[data-testid="toolbar-vault"] .vault-name');
     await label.waitForExist({ timeout: 30_000 });
     await expect(label).toHaveElementProperty('textContent', FIXTURE_VAULT_NAME);
   });
@@ -22,7 +22,7 @@ describe('launch with the fixture vault', () => {
     // Spec `vault-selector`: each row shows the absolute path beside the
     // name, with the full path as the row tooltip. session.ts copies the
     // fixture vault to `<tmp>/vault`.
-    await $('.vault-name-btn').click();
+    await $('[data-testid="toolbar-vault"]').click();
     const row = $$('.vault-selector-modal .vault-item')[0];
     await row.waitForExist({ timeout: 10_000 });
     await expect(row.$('.vault-item-name')).toHaveElementProperty('textContent', FIXTURE_VAULT_NAME);
@@ -38,7 +38,7 @@ describe('launch with the fixture vault', () => {
   it('tells same-named vaults apart and truncates a long path in the middle', async () => {
     // session.ts registers a second vault named like the fixture vault, at a
     // path far wider than its row.
-    await $('.vault-name-btn').click();
+    await $('[data-testid="toolbar-vault"]').click();
     const rows = $$('.vault-selector-modal .vault-item');
     await rows[1].waitForExist({ timeout: 10_000 });
     await expect(rows).toBeElementsArrayOfSize(2);

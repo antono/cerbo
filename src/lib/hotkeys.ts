@@ -25,6 +25,44 @@ export function confirmationOpen(state: { showExitPrompt: boolean; confirmDelete
   return state.showExitPrompt || state.confirmDeleteUuid !== null;
 }
 
+/** The transient-element flags `anyDialogOpen` reads. */
+export interface TransientState {
+  showSearch: boolean;
+  showExitPrompt: boolean;
+  showNewPageForm: boolean;
+  showVaultSelector: boolean;
+  showHelp: boolean;
+  toolbarMenu: string | null;
+  renameUuid: string | null;
+  confirmDeleteUuid: string | null;
+  showSparqlConsole: boolean;
+  moveUuid: string | null;
+  renameFolderPath: string | null;
+  showNewFolder: boolean;
+}
+
+/**
+ * Any dialog, search, the vault selector or a toolbar menu is open
+ * (confirmations included). While true, only `overDialogs` hotkeys run, and
+ * they close it before opening their own element (one transient element).
+ */
+export function anyDialogOpen(s: TransientState): boolean {
+  return (
+    s.showSearch ||
+    s.showExitPrompt ||
+    s.showNewPageForm ||
+    s.showVaultSelector ||
+    s.showHelp ||
+    s.toolbarMenu !== null ||
+    s.renameUuid !== null ||
+    s.confirmDeleteUuid !== null ||
+    s.showSparqlConsole ||
+    s.moveUuid !== null ||
+    s.renameFolderPath !== null ||
+    s.showNewFolder
+  );
+}
+
 /**
  * Checks if the event target is an input-like element (input, textarea, select, contenteditable).
  */

@@ -43,7 +43,7 @@ async function openPage(uuid: string) {
 
 async function enterWriteMode() {
   if (!(await $('.page-editor.write-mode').isExisting())) {
-    await $('.mode-toggle-btn').click();
+    await $('[data-testid="toolbar-mode"]').click();
   }
   await $('.page-editor.write-mode .carta-input textarea').waitForExist({ timeout: 10_000 });
 }
@@ -119,7 +119,7 @@ async function reportLatency(label: string) {
 }
 
 async function setPreviewMode() {
-  if (await $('.page-editor.write-mode').isExisting()) await $('.mode-toggle-btn').click();
+  if (await $('.page-editor.write-mode').isExisting()) await $('[data-testid="toolbar-mode"]').click();
   await $('.carta-renderer').waitForExist({ timeout: 10_000 });
 }
 
@@ -255,7 +255,7 @@ describe('typing latency', () => {
     expect(hiddenPreview.trim()).toBe('');
 
     // Switching to preview renders the typed text.
-    await $('.mode-toggle-btn').click();
+    await $('[data-testid="toolbar-mode"]').click();
     await browser.waitUntil(
       async () =>
         (await browser.execute(() => document.querySelector('.carta-renderer')?.textContent ?? '')).includes(

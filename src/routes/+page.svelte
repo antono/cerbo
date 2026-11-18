@@ -1,18 +1,33 @@
 <script lang="ts">
-  import { List, Pencil } from 'lucide-svelte';
-  import { app, activeVault, quickAddVault, saveUiSettings } from '#lib/stores.svelte.js';
+  import { app, activeVault, quickAddVault, dockedPanelWidths } from '#lib/stores.svelte.js';
   import PageEditor from '#lib/PageEditor.svelte';
   import RightSidebarPanel from '#lib/RightSidebarPanel.svelte';
   import AttachmentsPanel from '#lib/AttachmentsPanel.svelte';
+  import { actionAvailable, actionById, actionIcon, actionLabel } from '#lib/actions.js';
+  import { appActions } from '#lib/action-host.js';
+  import { maxPanelWidth } from '#lib/layout.js';
+  import { controlTitle } from '#lib/toolbar.js';
+
+  // The edit/preview toggle floats over the editor in the narrow layout
+  // (spec `desktop-responsive-layout`, "Narrow layout").
+  const modeAction = actionById('page.mode');
+  let modeLabel = $derived(actionLabel(modeAction, appActions));
+  let ModeIcon = $derived(actionIcon(modeAction, appActions));
+
+  function toggleMode() {
+    if (actionAvailable(modeAction, appActions)) modeAction.run(appActions);
+  }
 
   // ── State ─────────────────────────────────────────────────────────────────────
 
-  let isSaving = $state(false);
   let isResizingBacklinks = $state(false);
 
   // ── Derived ───────────────────────────────────────────────────────────────────
 
   let vault = $derived(activeVault());
+  // Drawn width of the docked right panel: re-clamped whenever the window
+  // resizes, so the editor keeps 360px (spec "Editor keeps its width").
+  let rightWidth = $derived(dockedPanelWidths().right);
 
   // ── Resizing Logic ──────────────────────────────────────────────────────────
 
@@ -24,7 +39,9 @@
 
   function handleBacklinksResize(e: MouseEvent) {
     if (!isResizingBacklinks) return;
-    app.backlinksWidth = Math.max(250, Math.min(600, window.innerWidth - e.clientX));
+    // The editor keeps at least 360px (spec "Editor keeps its width").
+    const left = dockedPanelWidths().tree;
+    app.backlinksWidth = Math.max(250, Math.min(maxPanelWidth(window.innerWidth, left, 250, 600), window.innerWidth - e.clientX));
   }
 
   function stopResizing() {
@@ -36,34 +53,27 @@
 
 {#if app.currentUuid}
   <div class="editor-area" class:is-resizing={isResizingBacklinks}>
-    <!-- Save indicator (floating or subtle) -->
-    {#if isSaving}
-      <div class="save-indicator">Saving…</div>
-    {/if}
-
+    <!-- Save state is the dot after the title in the window toolbar. -->
     <!-- Editor -->
     <div class="editor-wrap">
-      <PageEditor
-        uuid={app.currentUuid}
-        onSaving={(s) => isSaving = s}
-      />
-      
-        {#if !app.showRightSidebar}
-          <button 
-            class="show-backlinks-btn" 
-            onclick={() => {
-            app.showRightSidebar = true;
-            saveUiSettings();
-          }}
-          title="Show panels"
+      <PageEditor uuid={app.currentUuid} />
+      {#if app.widthClass === 'narrow'}
+        <button
+          class="floating-mode"
+          data-testid="floating-mode"
+          data-mode={app.editorTab}
+          title={controlTitle(modeLabel, modeAction.hotkey)}
+          aria-label={modeLabel}
+          onclick={toggleMode}
         >
-          <List size={16} />
+          <ModeIcon size={18} />
         </button>
       {/if}
     </div>
 
-    <!-- Right Resize Handle -->
-    {#if app.showRightSidebar}
+    <!-- Right Resize Handle. Docked only in the wide layout; below it the
+         panel floats over the editor (PanelOverlay). -->
+    {#if app.showRightSidebar && app.widthClass === 'wide'}
       <div 
         class="resize-handle" 
         onmousedown={startBacklinksResize}
@@ -74,7 +84,7 @@
       <!-- Side Panels -->
       <aside 
         class="right-panels" 
-        style="width: {app.backlinksWidth}px;"
+        style="width: {rightWidth}px;"
         tabindex="-1"
       >
         <div class="panel-section">
@@ -109,21 +119,6 @@
     overflow: hidden;
   }
 
-  .save-indicator {
-    position: absolute;
-    top: 0.75rem;
-    right: 1.5rem;
-    z-index: 50;
-    font-size: 0.75rem;
-    color: var(--muted-foreground);
-    font-style: italic;
-    background: var(--bg);
-    padding: 2px 8px;
-    border-radius: var(--radius);
-    border: 1px solid var(--border);
-    pointer-events: none;
-  }
-
   .editor-wrap {
     flex: 1;
     min-width: 0;
@@ -131,28 +126,28 @@
     position: relative;
   }
 
-  .show-backlinks-btn {
+  .floating-mode {
     position: absolute;
-    top: calc(var(--header-height) + 1rem);
-    right: 1.5rem;
+    right: 1rem;
+    bottom: 1rem;
     z-index: 30;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    color: var(--muted-foreground);
-    padding: 0.5rem;
-    border-radius: var(--radius);
-    cursor: pointer;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-    transition: all 0.15s;
     display: flex;
     align-items: center;
     justify-content: center;
+    width: 44px;
+    height: 44px;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--bg);
+    color: var(--fg);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    cursor: pointer;
   }
 
-  .show-backlinks-btn:hover {
-    color: var(--primary);
-    border-color: var(--primary);
-    background: var(--accent);
+  .floating-mode:hover,
+  .floating-mode:focus-visible {
+    background: var(--accent-hover);
+    outline: none;
   }
 
   .resize-handle {

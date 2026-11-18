@@ -85,8 +85,8 @@ describe('drop and paste into the editor', () => {
     await row.click();
     await browser.waitUntil(async () => !!(await currentUuid()), { timeout: 10_000 });
     page = (await currentUuid())!;
-    // The attachments panel lives in the right sidebar.
-    const showPanels = $('.show-backlinks-btn');
+    // The attachments panel lives in the right panel; the toolbar toggle shows it.
+    const showPanels = $('[data-testid="toolbar-right-panel"][aria-pressed="false"]');
     if (await showPanels.isExisting()) await showPanels.click();
     await $('.attachments-panel').waitForDisplayed({ timeout: 10_000 });
     await browser.execute(() => (document.activeElement as HTMLElement | null)?.blur());
@@ -154,7 +154,7 @@ describe('drop and paste into the editor', () => {
     await expectSavedAndListed(page, `![fixture.png](cerbo://objects/${ref.uuid})`, ref.uuid);
 
     // The preview shows the image from the object's file under `.cerbo/`.
-    await $('.mode-toggle-btn').click();
+    await $('[data-testid="toolbar-mode"]').click();
     await browser.waitUntil(
       async () =>
         (await browser.execute((u) => {
@@ -163,7 +163,7 @@ describe('drop and paste into the editor', () => {
         }, ref.uuid)) === true,
       { timeout: 10_000, timeoutMsg: 'the preview did not load the pasted image' },
     );
-    await $('.mode-toggle-btn').click();
+    await $('[data-testid="toolbar-mode"]').click();
     await $('.carta-input textarea').waitForDisplayed({ timeout: 10_000 });
   });
 

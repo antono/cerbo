@@ -7,7 +7,6 @@
   import { anchor } from '@cartamd/plugin-anchor';
   import { invoke } from '@tauri-apps/api/core';
   import { mode } from 'mode-watcher';
-  import { Eye, Edit3 } from 'lucide-svelte';
   import { onMount, tick, untrack } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import ExternalChangeDialog from './ExternalChangeDialog.svelte';
@@ -53,6 +52,7 @@
     loadVaultObjects,
     extractTitle,
     onEditorLeave,
+    onEditorModeToggle,
   } from './stores.svelte';
   import { toggleTaskListItemAtIndex } from './task-list';
   import { createAutosave } from './autosave';
@@ -97,6 +97,15 @@
   });
 
   let isDirty = $derived(content !== baselineContent);
+
+  // The toolbar shows a dot after the title while edits are unsaved or a save
+  // runs (spec `desktop-window-toolbar`, "Save state in the toolbar").
+  $effect(() => {
+    app.pageUnsaved = isDirty || saving;
+  });
+  $effect(() => () => {
+    app.pageUnsaved = false;
+  });
 
   let loadedUuid = $state<string | null>(null);
   // Vault of `loadedUuid`, recorded when the page loads: on a vault switch the
@@ -654,6 +663,10 @@
     app.editorTab = app.editorTab === 'write' ? 'preview' : 'write';
   }
 
+  // `Ctrl+E` and the toolbar toggle switch mode through the store; route them
+  // here so the caret is stored before the write view goes away.
+  $effect(() => onEditorModeToggle(toggleMode));
+
   async function loadCurrentPageFromDisk() {
     const vault = activeVault();
     if (!vault || !app.currentUuid) return;
@@ -700,18 +713,6 @@
   data-caret-restored={restoredUuid ?? ''}
   bind:this={editorContainer}
 >
-  <button 
-    class="mode-toggle-btn" 
-    onclick={toggleMode}
-    title={app.editorTab === 'write' ? 'Switch to Preview (Esc)' : 'Switch to Edit (i)'}
-    aria-label="Toggle mode"
-  >
-    {#if app.editorTab === 'write'}
-      <Eye size={16} />
-    {:else}
-      <Edit3 size={16} />
-    {/if}
-  </button>
 
   {#key editorKey}
     {#if app.editorTab === 'write' && plainInput}
@@ -771,6 +772,14 @@
     background: var(--bg);
   }
 
+  /* No bar of the editor's own above the page (spec `desktop-window-toolbar`,
+     "No stacked bars"): in preview Carta's toolbar would be an empty strip, so
+     it is hidden. In write mode it holds only the formatting buttons (Bold,
+     Italic, ...), which stay; see design.md D2. */
+  .page-editor:not(.write-mode) :global(.carta-toolbar) {
+    display: none !important;
+  }
+
   .page-editor.write-mode::before {
     content: '';
     position: absolute;
@@ -790,23 +799,7 @@
     z-index: 1;
   }
 
-  .mode-toggle-btn {
-    position: absolute;
-    top: 0;
-    left: 0.5rem;
-    height: var(--header-height);
-    width: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    color: var(--muted-foreground);
-    transition: all 0.15s;
-    border-radius: var(--radius);
-  }
+
 
   /* Drop feedback: the editor outlined, a caret where the reference goes. */
   .page-editor > .drop-target {
@@ -827,10 +820,7 @@
     z-index: 51;
   }
 
-  .mode-toggle-btn:hover {
-    background: var(--accent-hover);
-    color: var(--fg);
-  }
+
 
   .page-editor :global(.carta-editor) {
     height: 100%;

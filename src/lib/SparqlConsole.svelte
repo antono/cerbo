@@ -78,7 +78,7 @@
   >
     <header class="modal-header">
       <h2 id="sparql-console-title">SPARQL Console</h2>
-      <button class="close-btn" onclick={onClose} title="Close (Esc)" aria-label="Close">✕</button>
+      <button class="close-btn" onclick={onClose} title="Close (Esc)" aria-label="Close"><kbd class="close-kbd">Esc</kbd></button>
     </header>
 
     <div class="query-wrap">
@@ -211,6 +211,16 @@
   .close-btn:hover {
     background: var(--accent-hover);
     color: var(--fg);
+  }
+
+  /* "Esc" instead of a ✕: the toolbar's quit button is the only ✕ in the
+     window (spec `desktop-window-chrome`, "Close button inside the app"). */
+  .close-kbd {
+    font-family: inherit;
+    font-size: 0.7rem;
+    padding: 0.1rem 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: 0.25rem;
   }
 
   .query-wrap {

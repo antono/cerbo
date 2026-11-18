@@ -12,6 +12,11 @@ pub struct UiSettings {
     pub font_size: Option<u8>,
     pub sidebar_width: Option<u16>,
     pub right_sidebar_visible: Option<bool>,
+    /// Whether the page tree is docked in the wide layout (spec
+    /// `desktop-window-toolbar`, "Panel toggles"). Absent in a `ui.toml`
+    /// written before the toolbar existed, which means "shown".
+    #[serde(default)]
+    pub left_sidebar_visible: Option<bool>,
     pub window_bounds: Option<WindowBounds>,
     /// The last query run in the desktop SPARQL console; one per app, not per
     /// vault. Absent in a `ui.toml` written before the console existed.
@@ -54,12 +59,14 @@ pub fn save_ui_settings(ctx: &CerboContext, settings: &UiSettings) -> Result<(),
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn merge_ui_settings(
     base: &UiSettings,
     theme: Option<String>,
     font_size: Option<u8>,
     sidebar_width: Option<u16>,
     right_sidebar_visible: Option<bool>,
+    left_sidebar_visible: Option<bool>,
     window_bounds: Option<WindowBounds>,
     last_sparql_query: Option<String>,
 ) -> UiSettings {
@@ -68,6 +75,7 @@ pub fn merge_ui_settings(
         font_size: font_size.or(base.font_size),
         sidebar_width: sidebar_width.or(base.sidebar_width),
         right_sidebar_visible: right_sidebar_visible.or(base.right_sidebar_visible),
+        left_sidebar_visible: left_sidebar_visible.or(base.left_sidebar_visible),
         window_bounds: window_bounds.or_else(|| base.window_bounds.clone()),
         last_sparql_query: last_sparql_query.or_else(|| base.last_sparql_query.clone()),
         collapsed_folders: base.collapsed_folders.clone(),
@@ -122,6 +130,7 @@ mod tests {
             font_size: Some(16),
             sidebar_width: Some(320),
             right_sidebar_visible: Some(false),
+            left_sidebar_visible: None,
             window_bounds: None,
             last_sparql_query: None,
             collapsed_folders: BTreeMap::new(),
@@ -157,13 +166,13 @@ mod tests {
             cache_dir: tmp.path().join("cache"),
         };
         let query = "SELECT ?p ?t WHERE {\n  ?p schema:name ?t\n} LIMIT 137";
-        let merged = merge_ui_settings(&UiSettings::default(), None, None, None, None, None, Some(query.into()));
+        let merged = merge_ui_settings(&UiSettings::default(), None, None, None, None, None, None, Some(query.into()));
         save_ui_settings(&ctx, &merged).unwrap();
 
         let loaded = load_ui_settings(&ctx).unwrap();
         assert_eq!(loaded.last_sparql_query.as_deref(), Some(query));
         // Saving other settings keeps the query.
-        let kept = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None);
+        let kept = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None, None);
         assert_eq!(kept.last_sparql_query.as_deref(), Some(query));
     }
 
@@ -189,7 +198,7 @@ mod tests {
         assert_eq!(loaded.sidebar_width, Some(137), "other settings survive");
 
         // Saving through the merge keeps the folders.
-        let merged = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None);
+        let merged = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None, None);
         save_ui_settings(&ctx, &merged).unwrap();
         let loaded = load_ui_settings(&ctx).unwrap();
         assert_eq!(loaded.theme.as_deref(), Some("light"));
@@ -200,5 +209,36 @@ mod tests {
         let loaded = load_ui_settings(&ctx).unwrap();
         assert!(!loaded.collapsed_folders.contains_key("vault-a"));
         assert!(!std::fs::read_to_string(config_dir.join("ui.toml")).unwrap().contains("vault-a"));
+    }
+    #[test]
+    fn left_sidebar_visible_round_trip_and_old_file_without_it() {
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("config");
+        let ctx = CerboContext {
+            config_dir: config_dir.clone(),
+            cache_dir: tmp.path().join("cache"),
+        };
+        std::fs::create_dir_all(&config_dir).unwrap();
+        // A file written before the toolbar existed: no `leftSidebarVisible`.
+        std::fs::write(
+            config_dir.join("ui.toml"),
+            "theme = \"dark\"\nsidebarWidth = 137\nrightSidebarVisible = false\n",
+        )
+        .unwrap();
+
+        let loaded = load_ui_settings(&ctx).unwrap();
+        assert_eq!(loaded.left_sidebar_visible, None, "missing field means shown");
+        assert_eq!(loaded.right_sidebar_visible, Some(false));
+
+        let hidden = merge_ui_settings(&loaded, None, None, None, None, Some(false), None, None);
+        save_ui_settings(&ctx, &hidden).unwrap();
+        let loaded = load_ui_settings(&ctx).unwrap();
+        assert_eq!(loaded.left_sidebar_visible, Some(false));
+        assert_eq!(loaded.sidebar_width, Some(137), "other settings survive");
+        assert!(std::fs::read_to_string(config_dir.join("ui.toml")).unwrap().contains("leftSidebarVisible = false"));
+
+        // Saving other settings keeps the tree state.
+        let kept = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None, None);
+        assert_eq!(kept.left_sidebar_visible, Some(false));
     }
 }

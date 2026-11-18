@@ -72,13 +72,14 @@ fn ui_settings_load(app: tauri::AppHandle) -> Result<cerbo_core::ui_settings::Ui
 }
 
 #[tauri::command]
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 fn ui_settings_save(
     app: tauri::AppHandle,
     theme: Option<String>,
     fontSize: Option<u8>,
     sidebarWidth: Option<u16>,
     rightSidebarVisible: Option<bool>,
+    leftSidebarVisible: Option<bool>,
     windowBounds: Option<cerbo_core::ui_settings::WindowBounds>,
     lastSparqlQuery: Option<String>,
 ) -> Result<(), String> {
@@ -90,6 +91,7 @@ fn ui_settings_save(
         fontSize,
         sidebarWidth,
         rightSidebarVisible,
+        leftSidebarVisible,
         windowBounds,
         lastSparqlQuery,
     );
@@ -121,6 +123,7 @@ fn window_bounds_save(app: tauri::AppHandle, width: f64, height: f64) -> Result<
     let current = cerbo_core::ui_settings::load_ui_settings(&ctx)?;
     let merged = cerbo_core::ui_settings::merge_ui_settings(
         &current,
+        None,
         None,
         None,
         None,

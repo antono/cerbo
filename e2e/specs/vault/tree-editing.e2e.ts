@@ -58,6 +58,14 @@ async function createPage(title: string, path = '') {
   await input.waitForDisplayed({ reverse: true, timeout: 10_000 });
 }
 
+/** New folder lives in the toolbar's ⋯ menu (spec `desktop-window-toolbar`). */
+async function openNewFolderFromMenu() {
+  await $('[data-testid="toolbar-more"]').click();
+  const item = $('.row-menu .menu-item[data-action="folder.new"]');
+  await item.waitForDisplayed({ timeout: 5_000 });
+  await item.click();
+}
+
 type Row = Awaited<ReturnType<typeof folderRow>>;
 
 // WebKitWebDriver maps action coordinates onto this frameless window with a
@@ -203,7 +211,7 @@ describe('sidebar tree editing', () => {
     await expect(menuItem('Delete folder')).not.toExist();
     await browser.keys('Escape');
 
-    await $('.page-list button[title="New folder"]').click();
+    await openNewFolderFromMenu();
     const input = $('#new-folder-path');
     await input.waitForDisplayed({ timeout: 10_000 });
     await input.setValue('inbox');
@@ -218,7 +226,7 @@ describe('sidebar tree editing', () => {
   });
 
   it('refuses a folder that already exists in the New Folder dialog', async () => {
-    await $('.page-list button[title="New folder"]').click();
+    await openNewFolderFromMenu();
     const input = $('#new-folder-path');
     await input.waitForDisplayed({ timeout: 10_000 });
     await input.setValue('archive');

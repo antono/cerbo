@@ -73,11 +73,26 @@ flowchart LR
   P --> S[Search field] --> A[New page / Mode / Right panel / ⋯] --> Q[Close]
 ```
 
+**Carta's own toolbar.** In preview it would be an empty strip above the page,
+so `PageEditor` hides it there. In write mode it keeps only Carta's formatting
+buttons (Bold, Italic, ...); its Write/Preview tabs stay hidden. These buttons
+edit the text, they are not a header bar, and the e2e typing check clicks Bold.
+They show only while editing.
+
+**Panel titles.** The right panel's "Backlinks" and "Attachments" titles are
+section headings that scroll with their content, not fixed header bars.
+
 ### D3. Menus use the existing `RowMenu` pattern
 
 The tree's `RowMenu.svelte` already does a keyboard-navigable popup. The vault,
 page and ⋯ menus reuse it. The vault menu keeps today's modal selector, which
 has rich rows with paths and needs room. The other menus are popups.
+
+Which toolbar menu is open is kept in `app.toolbarMenu`, not in the toolbar
+component. `closeAllDialogs()` clears it and `anyDialogOpen()` counts it, so a
+hotkey that opens a dialog closes the menu first, and plain-key hotkeys (`r`,
+`m`, `Del`, preview `j`/`k`) do not run behind it. `RowMenu` stops the
+propagation of every key it handles.
 
 ### D4. Width class from one `ResizeObserver`
 

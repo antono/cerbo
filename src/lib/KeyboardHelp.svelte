@@ -1,34 +1,38 @@
 <script lang="ts">
   import { fade, fly } from 'svelte/transition';
-  import { app, closeAllDialogs } from './stores.svelte';
   import { isMac } from './hotkeys';
+  import { HELP_ACTIONS, HELP_NAVIGATION, actionById, hotkeyKeys } from './actions';
 
   let { onClose }: { onClose: () => void } = $props();
 
-  const mod = isMac ? '⌘' : 'Ctrl';
+  interface Shortcut {
+    keys: string[];
+    desc: string;
+    sep?: string;
+  }
 
-   const shortcutGroups = [
+  /** Help rows for registry actions, so the help lists what the hotkeys do. */
+  function fromRegistry(ids: readonly string[]): Shortcut[] {
+    return ids.map((id) => {
+      const action = actionById(id);
+      if (!action.hotkey) throw new Error(`Action ${id} has no hotkey`);
+      const desc = action.helpLabel ?? (typeof action.label === 'string' ? action.label : id);
+      return { keys: hotkeyKeys(action.hotkey, isMac), desc };
+    });
+  }
+
+  const shortcutGroups: { title: string; shortcuts: Shortcut[] }[] = [
     {
       title: 'App actions',
       shortcuts: [
-        { keys: [mod, 'P'], desc: 'Open page search' },
-        { keys: [mod, 'N'], desc: 'Create new page' },
-        { keys: [mod, 'T'], desc: 'Toggle light/dark theme' },
-        { keys: [mod, 'O'], desc: 'Open vault selector' },
-        { keys: [mod, 'Shift', 'O'], desc: 'Add vault' },
-        { keys: [mod, 'Shift', 'E'], desc: 'SPARQL console' },
-        { keys: [mod, 'Q'], desc: 'Quit application' },
-        { keys: ['F1'], desc: 'Show this help' },
+        ...fromRegistry(HELP_ACTIONS),
         { keys: ['Esc'], desc: 'Close active dialog or modal' },
       ],
     },
     {
       title: 'Navigation',
       shortcuts: [
-        { keys: ['Alt', '←'], desc: 'Go back in history' },
-        { keys: ['Alt', '→'], desc: 'Go forward in history' },
-        { keys: ['J'], desc: 'Next page (Vim-style)' },
-        { keys: ['K'], desc: 'Previous page (Vim-style)' },
+        ...fromRegistry(HELP_NAVIGATION),
         { keys: ['Tab'], desc: 'Cycle pages in sidebar' },
       ],
     },
@@ -52,9 +56,7 @@
       shortcuts: [
         { keys: ['j', '↓'], sep: 'or', desc: 'Scroll down' },
         { keys: ['k', '↑'], sep: 'or', desc: 'Scroll up' },
-        { keys: ['r'], desc: 'Rename current page' },
-        { keys: ['m'], desc: 'Move current page to a folder' },
-        { keys: ['Del'], desc: 'Delete current page' },
+        ...fromRegistry(['page.rename', 'page.move', 'page.delete']),
       ],
     },
   ];
@@ -76,7 +78,7 @@
   >
     <header class="modal-header">
       <h2>Keyboard Shortcuts</h2>
-      <button class="close-btn" onclick={onClose} title="Close (Esc)">✕</button>
+      <button class="close-btn" onclick={onClose} title="Close (Esc)" aria-label="Close"><kbd class="close-kbd">Esc</kbd></button>
     </header>
 
     <div class="shortcuts-layout">
@@ -159,6 +161,16 @@
   .close-btn:hover {
     background: var(--accent-hover);
     color: var(--fg);
+  }
+
+  /* "Esc" instead of a ✕: the toolbar's quit button is the only ✕ in the
+     window (spec `desktop-window-chrome`, "Close button inside the app"). */
+  .close-kbd {
+    font-family: inherit;
+    font-size: 0.7rem;
+    padding: 0.1rem 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: 0.25rem;
   }
 
   .shortcuts-layout {

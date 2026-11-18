@@ -34,6 +34,11 @@ export function createSession(specs: string[]): Session {
   const root = mkdtempSync(join(tmpdir(), 'cerbo-e2e-'));
   const configDir = join(root, 'config');
   mkdirSync(join(configDir, 'cerbo'), { recursive: true });
+  // Open every session in the wide layout (spec `desktop-responsive-layout`,
+  // 1000px and up), where the specs expect docked panels and the full toolbar.
+  // The desktop restores this size at start; specs for the medium and narrow
+  // layouts resize the window themselves.
+  writeFileSync(join(configDir, 'cerbo', 'ui.toml'), '[windowBounds]\nwidth = 1200.0\nheight = 760.0\n');
 
   const inDir = (dir: string) => specs.some((s) => s.includes(`${sep}specs${sep}${dir}${sep}`));
   if (inDir('vault') || inDir('editor')) {
