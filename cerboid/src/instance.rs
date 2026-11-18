@@ -323,7 +323,20 @@ mod tests {
         assert!(matches!(acquire(&paths).unwrap(), Acquired::AlreadyRunning));
 
         drop(first);
-        assert!(matches!(acquire(&paths).unwrap(), Acquired::Instance(_)));
+        // Other tests in this binary spawn processes. A child forked at that
+        // moment holds a copy of the lock descriptor until its exec closes it
+        // (close-on-exec), so the lock can stay taken for an instant after the
+        // drop. A real restart is a new process and never sees this.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match acquire(&paths).unwrap() {
+                Acquired::Instance(_) => break,
+                Acquired::AlreadyRunning if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Acquired::AlreadyRunning => panic!("the lock stayed taken after the instance was dropped"),
+            }
+        }
     }
 
     #[test]

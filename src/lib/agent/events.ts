@@ -44,8 +44,6 @@ export function applyApprovalEvent(pending: readonly ApprovalInfo[], event: Agen
       }
       return pending.slice();
     }
-    case 'resync':
-      return pending.slice();
   }
 }
 
