@@ -30,6 +30,10 @@ The server SHALL offer tools to list pages, read a page, search pages by text, s
 - **WHEN** the agent asks for a UUID that does not exist
 - **THEN** the tool SHALL return an error result naming the UUID, not crash
 
+#### Scenario: Read returns the page version
+- **WHEN** the agent reads a page
+- **THEN** the result SHALL include a `version` that identifies the exact text it read, and the tool descriptions SHALL tell agents to pass it to the edit tool as `base_version`
+
 ### Requirement: Write tools
 
 The server SHALL offer tools to create, edit, rename, move and delete a page, and to link pages. Deleting SHALL move the page to the vault's trash, never remove it for good. Write tools SHALL be subject to the vault's agent permission.
@@ -37,6 +41,22 @@ The server SHALL offer tools to create, edit, rename, move and delete a page, an
 #### Scenario: Delete goes to trash
 - **WHEN** the agent deletes a page and permission allows it
 - **THEN** the page SHALL be in the trash and recoverable
+
+#### Scenario: Edit based on a stale read
+- **WHEN** the agent edits a page with a `base_version` and the page's text is no longer the one that version identifies
+- **THEN** the daemon SHALL refuse the edit with a conflict, in `auto` and in `approve` mode alike, SHALL leave the page as it is, and the agent SHALL be told to read the page again; the check SHALL run inside the vault's write queue, right before the write, and for `approve` after the approval
+
+#### Scenario: Edit without a base version
+- **WHEN** the agent edits a page without `base_version` at `approve`
+- **THEN** the daemon SHALL use the page's version at the time of the request as the base; at `auto` the edit SHALL replace whatever the page holds
+
+#### Scenario: Agent gone before its write applies
+- **WHEN** an agent's connection ends while its write waits in the write queue
+- **THEN** the daemon SHALL NOT apply it, checking again right before writing
+
+#### Scenario: Client timeout
+- **WHEN** the shim gives up waiting for the daemon's answer
+- **THEN** it SHALL close the connection and tell the agent that the outcome of a change being applied at that moment is unknown and the page must be read again before retrying; it SHALL NOT claim the change was not applied
 
 ### Requirement: Tools hidden by permission
 

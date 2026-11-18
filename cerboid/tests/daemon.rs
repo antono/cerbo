@@ -81,7 +81,7 @@ fn read(client: &mut Client, vault: &str, page: &str) -> Value {
 
 fn edit(client: &mut Client, vault: &str, page: &str, content: &str) {
     client
-        .call(Call::PageEdit { vault: vault.into(), page: page.into(), content: content.into() })
+        .call(Call::PageEdit { vault: vault.into(), page: page.into(), content: content.into(), base_version: None })
         .unwrap();
 }
 
@@ -160,6 +160,24 @@ fn a_protocol_mismatch_is_refused_and_nothing_else_is_served() {
 
     // The daemon is fine afterwards.
     assert_eq!(env.connect(ClientKind::Cli).call(Call::Ping).unwrap(), json!("pong"));
+}
+
+#[test]
+fn an_admin_line_is_answered_without_a_handshake_and_stop_stops() {
+    let env = env();
+    let daemon = env.start();
+    assert_eq!(env.paths.lock_pid(), Some(std::process::id()), "the daemon writes its pid into its lock file");
+
+    // No hello, no protocol version: what a client of another version sends.
+    let info = cerbo_core::rpc::client::admin(&env.paths.socket, cerbo_core::rpc::AdminAction::Status).unwrap();
+    assert_eq!(info.protocol, PROTOCOL_VERSION);
+    assert_eq!(info.pid, std::process::id());
+    assert!(env.paths.daemon_alive(), "a status line does not stop it");
+    env.connect(ClientKind::Cli).call(Call::Ping).unwrap();
+
+    cerbo_core::rpc::client::admin(&env.paths.socket, cerbo_core::rpc::AdminAction::Stop).unwrap();
+    daemon.join().unwrap();
+    assert!(!env.paths.daemon_alive());
 }
 
 #[test]
@@ -533,7 +551,7 @@ fn write_endpoints_change_the_vault() {
         .call(Call::PageCreate { vault: id.clone(), title: "  ".into(), content: None, path: None })
         .is_err());
     assert!(client
-        .call(Call::PageEdit { vault: id.clone(), page: other, content: "x".into() })
+        .call(Call::PageEdit { vault: id.clone(), page: other, content: "x".into(), base_version: None })
         .is_err());
 }
 
@@ -586,7 +604,7 @@ fn pipelined_writes_on_one_page_apply_in_the_order_sent() {
     let ids: Vec<u64> = (0..40)
         .map(|n| {
             client
-                .send(Call::PageEdit { vault: id.clone(), page: page.clone(), content: format!("# Counter\n\n{n}\n") })
+                .send(Call::PageEdit { vault: id.clone(), page: page.clone(), content: format!("# Counter\n\n{n}\n"), base_version: None })
                 .unwrap()
         })
         .collect();
@@ -724,7 +742,7 @@ fn stop_finishes_queued_writes_before_the_daemon_exits() {
     let writes: Vec<u64> = (0..60)
         .map(|n| {
             client
-                .send(Call::PageEdit { vault: id.clone(), page: page.clone(), content: format!("# Log\n\nentry {n}\n") })
+                .send(Call::PageEdit { vault: id.clone(), page: page.clone(), content: format!("# Log\n\nentry {n}\n"), base_version: None })
                 .unwrap()
         })
         .collect();

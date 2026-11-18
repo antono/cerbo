@@ -4,7 +4,7 @@
 //! desktop app wraps the same protocol in its own async client.
 
 use super::{
-    check_protocol, Call, ClientHello, ClientKind, Event, Hello, Request, RpcError, ServerMessage, CODE_CLIENT_TIMEOUT,
+    check_protocol, AdminAction, AdminInfo, AdminReply, AdminRequest, Call, ClientHello, ClientKind, Event, Hello, Request, RpcError, ServerMessage, CODE_CLIENT_TIMEOUT,
     PROTOCOL_VERSION,
 };
 use serde_json::Value;
@@ -56,6 +56,52 @@ pub struct Welcome {
     pub pid: u32,
 }
 
+/// Why an administration line got no answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AdminError {
+    /// Nobody listens on the socket.
+    Unavailable(String),
+    /// Something listens but does not know administration lines: a daemon
+    /// older than they are.
+    Unsupported,
+    /// The connection failed after it was made.
+    Failed(String),
+}
+
+impl std::fmt::Display for AdminError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AdminError::Unavailable(m) | AdminError::Failed(m) => write!(f, "{m}"),
+            AdminError::Unsupported => write!(f, "the daemon is too old to answer administration lines"),
+        }
+    }
+}
+
+impl std::error::Error for AdminError {}
+
+/// Ask the daemon at `socket` for its identity, or to stop, with the
+/// version-independent administration line: it works whatever protocol
+/// version the daemon speaks, so a stale daemon can still be inspected and
+/// stopped after an upgrade.
+pub fn admin(socket: &Path, action: AdminAction) -> Result<AdminInfo, AdminError> {
+    let mut stream = UnixStream::connect(socket)
+        .map_err(|e| AdminError::Unavailable(format!("cannot connect to {}: {e}", socket.display())))?;
+    stream.set_read_timeout(Some(CALL_TIMEOUT)).ok();
+    let mut line =
+        serde_json::to_vec(&AdminRequest { admin: action }).map_err(|e| AdminError::Failed(e.to_string()))?;
+    line.push(b'\n');
+    stream.write_all(&line).and_then(|()| stream.flush()).map_err(|e| AdminError::Failed(format!("send: {e}")))?;
+    let mut answer = String::new();
+    match BufReader::new(stream).read_line(&mut answer) {
+        // Closed without an answer: not understood.
+        Ok(0) => Err(AdminError::Unsupported),
+        Ok(_) => serde_json::from_str::<AdminReply>(answer.trim_end())
+            .map(|reply| reply.admin)
+            .map_err(|_| AdminError::Unsupported),
+        Err(e) => Err(AdminError::Failed(e.to_string())),
+    }
+}
+
 /// One connection to the daemon.
 pub struct Client {
     reader: BufReader<UnixStream>,
@@ -67,6 +113,8 @@ pub struct Client {
     welcome: Welcome,
     /// How long the current wait for an answer lasts.
     call_timeout: Duration,
+    /// How long [`Client::call`] waits; [`CALL_TIMEOUT`] unless changed.
+    default_timeout: Duration,
 }
 
 impl Client {
@@ -118,6 +166,7 @@ impl Client {
             partial: String::new(),
             welcome: Welcome { protocol: 0, daemon_version: String::new(), pid: 0 },
             call_timeout: CALL_TIMEOUT,
+            default_timeout: CALL_TIMEOUT,
         };
 
         let hello = ClientHello {
@@ -152,10 +201,17 @@ impl Client {
         &self.welcome
     }
 
+    /// Change how long [`Self::call`] waits for an answer (60 s by default).
+    /// For tests, and for callers that know their daemon is slow.
+    pub fn set_default_timeout(&mut self, timeout: Duration) {
+        self.default_timeout = timeout;
+        self.call_timeout = timeout;
+    }
+
     /// Send `call` and wait for its answer. Events that arrive meanwhile are
     /// kept for [`Self::next_event`].
     pub fn call(&mut self, call: Call) -> Result<Value, RpcError> {
-        self.call_with_timeout(call, CALL_TIMEOUT)
+        self.call_with_timeout(call, self.default_timeout)
     }
 
     /// [`Self::call`] waiting up to `timeout` for the answer. On a timeout the
@@ -166,7 +222,7 @@ impl Client {
         let id = self.send(call)?;
         self.call_timeout = timeout;
         let answer = self.wait(id);
-        self.call_timeout = CALL_TIMEOUT;
+        self.call_timeout = self.default_timeout;
         answer
     }
 

@@ -42,6 +42,11 @@ fn write_wait(approval_secs: Option<u64>) -> Duration {
     Duration::from_secs(approval_secs.unwrap_or(DEFAULT_APPROVAL_SECS)) + APPROVAL_MARGIN
 }
 
+/// What the agent is told when the daemon did not answer in time.
+const TIMEOUT_MESSAGE: &str = "the daemon did not answer in time. The connection was closed, so a change that was \
+still waiting for approval or in the write queue is dropped and not applied, but one that was being applied at that \
+moment may still have gone through. Read the page again before trying again.";
+
 /// How often the shim checks whether the vault's permission changed.
 const PERMISSION_POLL: Duration = Duration::from_secs(1);
 
@@ -57,16 +62,32 @@ struct Link {
     vault: String,
     name: Mutex<Option<String>>,
     idle: Mutex<Vec<Client>>,
+    /// How long a plain call waits, when not the client's own 60 s. Tests
+    /// make it short to prove that writes do not use it.
+    default_timeout: Option<Duration>,
 }
 
 impl Link {
+    fn new(paths: DaemonPaths, vault: String, name: Option<String>) -> Self {
+        Self { paths, vault, name: Mutex::new(name), idle: Mutex::new(Vec::new()), default_timeout: None }
+    }
+
     fn take(&self) -> Result<Client, RpcError> {
         if let Some(client) = self.idle.lock().unwrap_or_else(|e| e.into_inner()).pop() {
             return Ok(client);
         }
         let name = self.name.lock().unwrap_or_else(|e| e.into_inner()).clone();
         // The connection is bound to this shim's one vault.
-        launch::connect_or_start(&self.paths, ClientKind::Agent, name.as_deref().or(Some("cerbo mcp")), Some(&self.vault))
+        let mut client = launch::connect_or_start(
+            &self.paths,
+            ClientKind::Agent,
+            name.as_deref().or(Some("cerbo mcp")),
+            Some(&self.vault),
+        )?;
+        if let Some(timeout) = self.default_timeout {
+            client.set_default_timeout(timeout);
+        }
+        Ok(client)
     }
 
     fn give_back(&self, client: Client) {
@@ -95,15 +116,12 @@ impl Link {
                 self.give_back(client);
                 Ok(value)
             }
-            // No answer in time. The connection is dropped, not reused: when
-            // the request still waits for approval, closing the connection
-            // makes the daemon cancel it, so it never applies after the agent
-            // was told it failed.
-            Err(e) if e.code == CODE_CLIENT_TIMEOUT => Err(RpcError::new(
-                CODE_CLIENT_TIMEOUT,
-                "the daemon did not answer in time; a change still waiting for approval was cancelled and not applied, \
-                 but check the page before trying again",
-            )),
+            // No answer in time. The connection is dropped, not reused:
+            // closing it makes the daemon cancel a change that still waits
+            // for approval and drop one that is queued but not yet applied.
+            // One already being applied may still go through, so the agent
+            // is told the outcome is unknown.
+            Err(e) if e.code == CODE_CLIENT_TIMEOUT => Err(RpcError::new(CODE_CLIENT_TIMEOUT, TIMEOUT_MESSAGE)),
             Err(e) if client.call(Call::Ping).is_ok() => {
                 self.give_back(client);
                 Err(e)
@@ -179,6 +197,10 @@ struct EditParams {
     page: String,
     /// The new markdown of the whole page. It replaces the old content.
     content: String,
+    /// The `version` that read_page returned for the text you based this edit
+    /// on. Always pass it: the edit is then refused with a conflict when the
+    /// page changed since you read it, instead of overwriting the change.
+    base_version: Option<String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -239,7 +261,11 @@ impl VaultServer {
         answer(self.link.call(Call::PageList { vault: self.vault() }).await)
     }
 
-    #[tool(description = "Read one page: its title, markdown content and metadata.")]
+    #[tool(
+        description = "Read one page: its title, markdown content, metadata and `version`. Pass that version as \
+                       `base_version` to edit_page, so an edit built on this read cannot overwrite a change made \
+                       after it."
+    )]
     async fn read_page(&self, Parameters(p): Parameters<PageParams>) -> Result<CallToolResult, ErrorData> {
         answer(self.link.call(Call::PageRead { vault: self.vault(), page: p.page }).await)
     }
@@ -295,9 +321,23 @@ impl VaultServer {
         )
     }
 
-    #[tool(description = "Replace the whole markdown of a page. May wait for the user's approval.")]
+    #[tool(
+        description = "Replace the whole markdown of a page. Always pass `base_version`, the `version` from the \
+                       read_page call your new text is based on: if the page changed since, the edit is refused with \
+                       a conflict and the page is left as it is; read it again and redo the edit. Without it the \
+                       edit overwrites whatever the page holds. May wait for the user's approval."
+    )]
     async fn edit_page(&self, Parameters(p): Parameters<EditParams>) -> Result<CallToolResult, ErrorData> {
-        answer(self.link.call(Call::PageEdit { vault: self.vault(), page: p.page, content: p.content }).await)
+        answer(
+            self.link
+                .call(Call::PageEdit {
+                    vault: self.vault(),
+                    page: p.page,
+                    content: p.content,
+                    base_version: p.base_version,
+                })
+                .await,
+        )
     }
 
     #[tool(description = "Change the title of a page. May wait for the user's approval.")]
@@ -387,7 +427,7 @@ impl ServerHandler for VaultServer {
 /// Run the server until the client closes stdin.
 pub async fn run(ctx: &CerboContext, vault: String, name: Option<String>) -> Result<(), String> {
     let paths = DaemonPaths::for_user(&ctx.cache_dir);
-    let link = Arc::new(Link { paths, vault: vault.clone(), name: Mutex::new(name), idle: Mutex::new(Vec::new()) });
+    let link = Arc::new(Link::new(paths, vault.clone(), name));
 
     // Start the daemon now, and refuse a vault it does not serve, so a wrong
     // `--vault` fails at once with a message instead of at the first tool call.
@@ -424,5 +464,89 @@ mod tests {
         assert_eq!(write_wait(Some(137)), Duration::from_secs(137) + APPROVAL_MARGIN);
         assert!(write_wait(Some(1)) > Duration::from_secs(1));
         assert!(write_wait(Some(3600)) >= Duration::from_secs(3600 + 1));
+    }
+
+    use cerbo_core::rpc::{Request, ServerMessage, CODE_CLIENT_TIMEOUT as TIMEOUT, PROTOCOL_VERSION};
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    /// A daemon that answers the permission query at once (approval limit 1 s)
+    /// but takes `slow` to answer anything else.
+    fn slow_daemon(paths: &DaemonPaths, slow: Duration) {
+        paths.prepare_dir().unwrap();
+        let listener = UnixListener::bind(&paths.socket).unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut out = stream;
+                    let mut line = String::new();
+                    let _ = reader.read_line(&mut line); // the hello
+                    let welcome =
+                        ServerMessage::Welcome { protocol: PROTOCOL_VERSION, daemon_version: "test".into(), pid: 137 };
+                    let _ = writeln!(out, "{}", serde_json::to_string(&welcome).unwrap());
+                    loop {
+                        line.clear();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                            return;
+                        }
+                        let Ok(request) = serde_json::from_str::<Request>(line.trim_end()) else { continue };
+                        let result = match request.call {
+                            Call::Permission { .. } => serde_json::json!({ "permission": "approve", "approval_timeout_secs": 1 }),
+                            _ => {
+                                std::thread::sleep(slow);
+                                serde_json::json!({ "uuid": "answered late" })
+                            }
+                        };
+                        let _ = writeln!(out, "{}", serde_json::to_string(&ServerMessage::ok(request.id, result)).unwrap());
+                    }
+                });
+            }
+        });
+    }
+
+    fn link_with_short_default(paths: DaemonPaths) -> Link {
+        let mut link = Link::new(paths, "notes".into(), Some("test".into()));
+        link.default_timeout = Some(Duration::from_millis(100));
+        link
+    }
+
+    #[test]
+    fn link_run_waits_for_a_write_past_the_plain_call_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = DaemonPaths::in_dir(tmp.path().join("run"));
+        slow_daemon(&paths, Duration::from_millis(500));
+        let link = link_with_short_default(paths);
+        let edit = Call::PageEdit {
+            vault: "notes".into(),
+            page: "p".into(),
+            content: "c".into(),
+            base_version: None,
+        };
+
+        // The answer comes after the plain call limit (100 ms here) and long
+        // before the approval deadline (1 s + margin): a write must wait for it.
+        // With a plain `client.call` this would be a client timeout.
+        let answer = link.run(edit).expect("a write waits for the approval deadline, not the plain call limit");
+        assert_eq!(answer["uuid"], "answered late");
+
+        // Control: the injected limit is really in force for everything else,
+        // so the test above can tell the two apart.
+        let err = link.run(Call::PageRead { vault: "notes".into(), page: "p".into() }).unwrap_err();
+        assert_eq!(err.code, TIMEOUT);
+    }
+
+    #[test]
+    fn the_timeout_message_does_not_promise_the_change_was_not_applied() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = DaemonPaths::in_dir(tmp.path().join("run"));
+        slow_daemon(&paths, Duration::from_millis(500));
+        let link = link_with_short_default(paths);
+
+        let err: RpcError = link.run(Call::PageRead { vault: "notes".into(), page: "p".into() }).unwrap_err();
+        assert_eq!(err.code, TIMEOUT);
+        assert!(!err.message.contains("cancelled and not applied"), "{}", err.message);
+        assert!(err.message.contains("may still have gone through"), "{}", err.message);
+        assert!(err.message.contains("Read the page again"), "{}", err.message);
     }
 }

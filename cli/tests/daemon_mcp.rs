@@ -649,6 +649,142 @@ fn a_stale_socket_without_a_daemon_still_falls_back_to_the_files() {
     assert!(pages_on_disk(&env, &root).contains("Direct"));
 }
 
+// ── `daemon stop` and `daemon status` work across protocol versions ──────────
+
+/// A daemon of protocol 1: it holds the instance lock, writes the pid of a
+/// stand-in process into it, and refuses every handshake as a mismatch. With
+/// `knows_admin` it also answers the version-independent administration line,
+/// as a newer daemon of another protocol would. The stand-in process is the
+/// "daemon" the CLI must end: when it dies, the lock and the socket go away.
+struct OldDaemon {
+    child_pid: u32,
+    asked_to_stop: Arc<std::sync::atomic::AtomicBool>,
+    gone: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl OldDaemon {
+    fn start(env: &Env, knows_admin: bool) -> Self {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        env.paths.prepare_dir().unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&env.paths.lock)
+            .unwrap();
+        lock.try_lock().unwrap();
+        let mut child = Command::new("sleep").arg("300").spawn().unwrap();
+        let child_pid = child.id();
+        (&lock).write_all(child_pid.to_string().as_bytes()).unwrap();
+
+        let listener = std::os::unix::net::UnixListener::bind(&env.paths.socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let socket = env.paths.socket.clone();
+        let gone = Arc::new(AtomicBool::new(false));
+        let asked_to_stop = Arc::new(AtomicBool::new(false));
+        let (gone_flag, asked_flag) = (Arc::clone(&gone), Arc::clone(&asked_to_stop));
+        std::thread::spawn(move || {
+            while !gone_flag.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
+                        let mut line = String::new();
+                        let _ = BufReader::new(&stream).read_line(&mut line);
+                        let mut out = stream;
+                        if knows_admin && line.trim() == r#"{"admin":"status"}"# {
+                            let _ = writeln!(
+                                out,
+                                r#"{{"admin":{{"protocol":1,"version":"0.0.1","pid":{child_pid},"uptime_secs":5}}}}"#
+                            );
+                        } else if knows_admin && line.trim() == r#"{"admin":"stop"}"# {
+                            let _ = writeln!(
+                                out,
+                                r#"{{"admin":{{"protocol":1,"version":"0.0.1","pid":{child_pid},"uptime_secs":5}}}}"#
+                            );
+                            asked_flag.store(true, Ordering::SeqCst);
+                            let _ = child.kill();
+                        } else {
+                            let mismatch = cerbo_core::rpc::ServerMessage::Error {
+                                error: cerbo_core::rpc::RpcError::new(
+                                    cerbo_core::rpc::CODE_PROTOCOL_MISMATCH,
+                                    "this program speaks protocol 1 but the other side speaks 3",
+                                ),
+                            };
+                            let _ = writeln!(out, "{}", serde_json::to_string(&mismatch).unwrap());
+                        }
+                    }
+                    Err(_) => std::thread::sleep(Duration::from_millis(10)),
+                }
+                // The process ended (SIGTERM from the CLI, or the kill above):
+                // the daemon is gone, its lock and socket with it.
+                if child.try_wait().ok().flatten().is_some() {
+                    gone_flag.store(true, Ordering::SeqCst);
+                }
+            }
+            let _ = std::fs::remove_file(&socket);
+            drop(lock);
+        });
+        OldDaemon { child_pid, asked_to_stop, gone }
+    }
+
+    fn is_gone(&self) -> bool {
+        self.gone.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Drop for OldDaemon {
+    fn drop(&mut self) {
+        if !self.is_gone() {
+            // A failed test must not leave the stand-in behind.
+            // SAFETY: plain kill(2) of the process this test started.
+            unsafe { libc::kill(self.child_pid as libc::pid_t, libc::SIGKILL) };
+        }
+    }
+}
+
+#[test]
+fn status_and_stop_end_a_daemon_that_speaks_protocol_1_by_its_pid() {
+    let env = Env::new();
+    let old = OldDaemon::start(&env, false);
+    assert!(env.paths.daemon_alive());
+
+    let status: Value = serde_json::from_str(&env.cerbo_ok(&["daemon", "status", "--json"])).unwrap();
+    assert_eq!(status["running"], true);
+    assert_eq!(status["protocol_mismatch"], true);
+    assert_eq!(status["pid"], old.child_pid);
+    let text = env.cerbo_ok(&["daemon", "status"]);
+    assert!(text.contains("cerbo daemon stop"), "{text}");
+
+    // The daemon cannot be spoken to, yet `stop` ends it: by the pid in its lock file.
+    let stopped = env.cerbo_ok(&["daemon", "stop", "--json"]);
+    let stopped: Value = serde_json::from_str(&stopped).unwrap();
+    assert_eq!(stopped["stopped"], true);
+    assert_eq!(stopped["signalled"], true);
+    assert_eq!(stopped["pid"], old.child_pid);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !old.is_gone() {
+        assert!(Instant::now() < deadline, "the old daemon is still there");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(env.cerbo_ok(&["daemon", "stop"]).contains("not running"), "after it, there is nothing to stop");
+}
+
+#[test]
+fn a_daemon_of_another_protocol_that_knows_admin_lines_is_asked_not_signalled() {
+    let env = Env::new();
+    let old = OldDaemon::start(&env, true);
+
+    let status: Value = serde_json::from_str(&env.cerbo_ok(&["daemon", "status", "--json"])).unwrap();
+    assert_eq!(status["protocol"], 1);
+    assert_eq!(status["version"], "0.0.1");
+    assert!(env.cerbo_ok(&["daemon", "status"]).contains("protocol 1"));
+
+    let stopped: Value = serde_json::from_str(&env.cerbo_ok(&["daemon", "stop", "--json"])).unwrap();
+    assert_eq!(stopped["signalled"], false, "the daemon was asked to stop, not killed");
+    assert!(old.asked_to_stop.load(std::sync::atomic::Ordering::SeqCst));
+}
+
 // ── An agent that goes away takes its pending change with it ─────────────────
 
 #[test]

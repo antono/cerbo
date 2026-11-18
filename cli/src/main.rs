@@ -1533,6 +1533,7 @@ async fn main() -> Result<(), String> {
                     vault: v,
                     page: uuid.clone(),
                     content: content.clone(),
+                    base_version: None,
                 }) {
                     answer?;
                     if json {

@@ -21,7 +21,9 @@ pub mod launch;
 /// Bumped whenever a message changes in a way an older peer cannot read.
 ///
 /// 2: an agent's hello names the one vault it is bound to.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// 3: [`Call::PageEdit`] may carry `base_version`; an older daemon would
+///    silently ignore it and overwrite a newer page.
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Error code of a refused handshake.
 pub const CODE_PROTOCOL_MISMATCH: &str = "protocol_mismatch";
@@ -336,7 +338,17 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
     },
-    PageEdit { vault: String, page: String, content: String },
+    /// Replace the page's text. With `base_version`, the `version` that
+    /// [`Call::PageRead`] returned for the text the new content was written
+    /// against, the daemon refuses with [`CODE_CONFLICT`] when the page is
+    /// not that text any more. The check runs inside the write queue.
+    PageEdit {
+        vault: String,
+        page: String,
+        content: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base_version: Option<String>,
+    },
     PageRename { vault: String, page: String, title: String },
     /// Set or clear (`None`) the page's virtual path.
     PageMove {
@@ -438,6 +450,48 @@ pub struct VaultInfo {
     pub id: String,
     pub name: String,
     pub path: String,
+}
+
+// ── Version-independent administration ───────────────────────────────────────
+//
+// The rest of the protocol changes between versions, so a client of one
+// version cannot talk to a daemon of another, not even to stop it. These two
+// lines are the exception and never change shape: instead of a hello, the
+// first line of a connection may be an [`AdminRequest`]; the daemon answers
+// one [`AdminReply`] line, whatever its protocol version, and closes. A daemon
+// that predates them answers with an error line or closes, which the client
+// reads as "not supported".
+
+/// What an admin line asks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdminAction {
+    /// Say who you are.
+    Status,
+    /// Say who you are, then stop after queued writes finish.
+    Stop,
+}
+
+/// The first line of an administration connection: `{"admin":"status"}` or
+/// `{"admin":"stop"}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminRequest {
+    pub admin: AdminAction,
+}
+
+/// What the daemon says about itself to an admin line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminInfo {
+    pub protocol: u32,
+    pub version: String,
+    pub pid: u32,
+    pub uptime_secs: u64,
+}
+
+/// The daemon's answer to an [`AdminRequest`]: `{"admin":{...}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdminReply {
+    pub admin: AdminInfo,
 }
 
 /// Judge a peer's protocol version. Shared by the daemon and by the clients,
@@ -581,11 +635,48 @@ mod tests {
 
     #[test]
     fn writes_are_the_calls_that_change_a_vault() {
-        assert!(Call::PageEdit { vault: "v".into(), page: "p".into(), content: "c".into() }.is_write());
+        assert!(
+            Call::PageEdit { vault: "v".into(), page: "p".into(), content: "c".into(), base_version: None }.is_write()
+        );
         assert!(Call::PageTrash { vault: "v".into(), page: "p".into() }.is_write());
         assert!(!Call::PageRead { vault: "v".into(), page: "p".into() }.is_write());
         assert!(!Call::Sparql { vault: "v".into(), query: "ASK {}".into() }.is_write());
         assert!(!Call::Stop.is_write());
+    }
+
+    #[test]
+    fn admin_lines_have_a_frozen_wire_form() {
+        // These strings are what every daemon version must keep
+        // understanding: changing them breaks `cerbo daemon stop` across
+        // upgrades.
+        assert_eq!(serde_json::to_string(&AdminRequest { admin: AdminAction::Stop }).unwrap(), r#"{"admin":"stop"}"#);
+        assert_eq!(
+            serde_json::to_string(&AdminRequest { admin: AdminAction::Status }).unwrap(),
+            r#"{"admin":"status"}"#
+        );
+        let reply: AdminReply =
+            serde_json::from_str(r#"{"admin":{"protocol":137,"version":"9","pid":1,"uptime_secs":2}}"#).unwrap();
+        assert_eq!(reply.admin.protocol, 137);
+        // A hello is not an admin line, so the two never get confused.
+        assert!(serde_json::from_str::<AdminRequest>(r#"{"hello":{"protocol":3,"client":"cli"}}"#).is_err());
+    }
+
+    #[test]
+    fn an_edit_without_a_base_version_has_the_old_wire_form() {
+        let line = round_trip(Request {
+            id: 1,
+            call: Call::PageEdit { vault: "v".into(), page: "p".into(), content: "c".into(), base_version: None },
+        });
+        assert!(!line.contains("base_version"), "{line}");
+        round_trip(Request {
+            id: 2,
+            call: Call::PageEdit {
+                vault: "v".into(),
+                page: "p".into(),
+                content: "c".into(),
+                base_version: Some("00ff".into()),
+            },
+        });
     }
 
     #[test]

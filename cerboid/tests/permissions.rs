@@ -50,6 +50,14 @@ impl Env {
         cerboid::spawn(self.config(Some(timeout))).unwrap().expect("no other daemon runs")
     }
 
+    /// A daemon whose write queue stands still until `gate` is opened.
+    fn start_gated(&self, gate: &Gate) -> Running {
+        let mut config = self.config(None);
+        let gate = Gate(Arc::clone(&gate.0));
+        config.before_write = Some(Arc::new(move || gate.pass()));
+        cerboid::spawn(config).unwrap().expect("no other daemon runs")
+    }
+
     fn start_capped(&self, cap: usize) -> Running {
         let mut config = self.config(None);
         config.max_pending_per_agent = cap;
@@ -76,13 +84,32 @@ impl Env {
     }
 }
 
+/// Holds every queued write until opened.
+struct Gate(Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>);
+
+impl Gate {
+    fn closed() -> Self {
+        Gate(Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new())))
+    }
+
+    fn open(&self) {
+        *self.0.0.lock().unwrap() = true;
+        self.0.1.notify_all();
+    }
+
+    fn pass(&self) {
+        let open = self.0.0.lock().unwrap();
+        let _open = self.0.1.wait_while(open, |open| !*open).unwrap();
+    }
+}
+
 fn content_of(client: &mut Client, vault: &str, page: &str) -> String {
     let page = client.call(Call::PageRead { vault: vault.into(), page: page.into() }).unwrap();
     page["content"].as_str().unwrap().to_string()
 }
 
 fn edit_call(vault: &str, page: &str, content: &str) -> Call {
-    Call::PageEdit { vault: vault.into(), page: page.into(), content: content.into() }
+    Call::PageEdit { vault: vault.into(), page: page.into(), content: content.into(), base_version: None }
 }
 
 /// A page made by the person, for the agent to work on.
@@ -496,6 +523,117 @@ fn an_edit_is_refused_when_the_page_changed_after_the_agent_asked() {
     let log: Vec<agent::ChangeEntry> =
         serde_json::from_value(person.call(Call::AgentChanges { vault: id.clone(), limit: 10 }).unwrap()).unwrap();
     assert!(log.is_empty(), "a refused change is not recorded as applied");
+}
+
+#[test]
+fn a_write_queued_behind_others_is_dropped_when_its_agent_went_away() {
+    let env = env();
+    let (id, _) = env.add_vault("main");
+    let page = seed_page(&env, &id, "Hello", "before\n");
+    env.set(&id, AgentPermission::Auto);
+    let gate = Gate::closed();
+    let _daemon = env.start_gated(&gate);
+
+    // The person's write holds the queue; the agents' writes wait behind it.
+    let mut person = env.connect(ClientKind::Cli, "person");
+    let blocker = person
+        .send(Call::PageCreate { vault: id.clone(), title: "Blocker".into(), content: None, path: None })
+        .unwrap();
+    let mut gone = env.agent("opencode", &id);
+    gone.send(edit_call(&id, &page, "the agent's text\n")).unwrap();
+    gone.send(Call::PageCreate { vault: id.clone(), title: "Abandoned".into(), content: None, path: None }).unwrap();
+    let mut kept = env.agent("kept", &id);
+    let kept_write =
+        kept.send(Call::PageCreate { vault: id.clone(), title: "Kept".into(), content: None, path: None }).unwrap();
+    // Let the daemon queue all three, then lose one agent.
+    std::thread::sleep(Duration::from_millis(300));
+    drop(gone);
+    std::thread::sleep(Duration::from_millis(300));
+    gate.open();
+
+    person.wait(blocker).unwrap();
+    kept.wait(kept_write).unwrap();
+    let titles: Vec<String> = person
+        .call(Call::PageList { vault: id.clone() })
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["title"].as_str().unwrap().to_string())
+        .collect();
+    assert!(titles.contains(&"Kept".to_string()), "a write of a connected agent still applies: {titles:?}");
+    assert!(!titles.contains(&"Abandoned".to_string()), "a write of a vanished agent was applied: {titles:?}");
+    assert_eq!(content_of(&mut person, &id, &page), "before\n", "the vanished agent's edit was applied");
+}
+
+#[test]
+fn an_edit_based_on_a_stale_read_is_refused_in_auto_mode() {
+    let env = env();
+    let (id, _) = env.add_vault("main");
+    let page = seed_page(&env, &id, "Hello", "line one\n");
+    env.set(&id, AgentPermission::Auto);
+    let _daemon = env.start();
+    let mut agent = env.agent("opencode", &id);
+    let mut person = env.connect(ClientKind::Cli, "person");
+    let edit_on = |version: &str, content: &str| Call::PageEdit {
+        vault: id.clone(),
+        page: page.clone(),
+        content: content.into(),
+        base_version: Some(version.into()),
+    };
+
+    let read = agent.call(Call::PageRead { vault: id.clone(), page: page.clone() }).unwrap();
+    let version = read["version"].as_str().expect("read_page returns the version").to_string();
+
+    // The person edits after the agent read.
+    person.call(edit_call(&id, &page, "line one\nthe person's line\n")).unwrap();
+    let err = agent.call(edit_on(&version, "the agent's whole page\n")).unwrap_err();
+    assert_eq!(err.code, CODE_CONFLICT);
+    assert_eq!(content_of(&mut person, &id, &page), "line one\nthe person's line\n", "the person's edit stays");
+
+    // After reading again, the edit goes through; the version moves with the text.
+    let read = agent.call(Call::PageRead { vault: id.clone(), page: page.clone() }).unwrap();
+    let fresh = read["version"].as_str().unwrap().to_string();
+    assert_ne!(fresh, version);
+    agent.call(edit_on(&fresh, "line one\nthe person's line\nthe agent's line\n")).unwrap();
+    assert_eq!(content_of(&mut person, &id, &page), "line one\nthe person's line\nthe agent's line\n");
+
+    // Not a version at all.
+    let err = agent.call(edit_on("not-a-version", "x\n")).unwrap_err();
+    assert_eq!(err.code, CODE_BAD_REQUEST);
+}
+
+#[test]
+fn an_approved_edit_is_checked_against_the_version_the_agent_read() {
+    let env = env();
+    let (id, _) = env.add_vault("main");
+    let page = seed_page(&env, &id, "Hello", "line one\n");
+    env.set(&id, AgentPermission::Approve);
+    let _daemon = env.start();
+    let mut agent = env.agent("opencode", &id);
+    let mut person = env.connect(ClientKind::Cli, "person");
+
+    let read = agent.call(Call::PageRead { vault: id.clone(), page: page.clone() }).unwrap();
+    let version = read["version"].as_str().unwrap().to_string();
+    // The person edits BEFORE the agent sends its edit: the page the agent
+    // asked about is already another text than the one it read.
+    person.call(edit_call(&id, &page, "line one\nthe person's line\n")).unwrap();
+
+    let (vault, page_id) = (id.clone(), page.clone());
+    let agent_thread = std::thread::spawn(move || {
+        agent.call(Call::PageEdit {
+            vault,
+            page: page_id,
+            content: "the agent's whole page\n".into(),
+            base_version: Some(version),
+        })
+    });
+    let queue = wait_queue(&mut person, 1);
+    person.call(Call::ApprovalAnswer { approval: queue[0].id, approve: true }).unwrap();
+
+    let err = agent_thread.join().unwrap().unwrap_err();
+    assert_eq!(err.code, CODE_CONFLICT);
+    assert_eq!(content_of(&mut person, &id, &page), "line one\nthe person's line\n", "the person's edit stays");
 }
 
 #[test]

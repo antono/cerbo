@@ -55,6 +55,7 @@ pub fn page_read(vault: &VaultHandle, id: &str) -> OpResult {
     Ok(json!({
         "uuid": id,
         "title": meta.title,
+        "version": version_text(fingerprint(&content)),
         "content": content,
         "type": meta.object_type.as_str(),
         "virtualPath": meta.virtual_path,
@@ -264,6 +265,16 @@ fn fingerprint(text: &str) -> u64 {
     let mut hasher = std::hash::DefaultHasher::new();
     text.hash(&mut hasher);
     hasher.finish()
+}
+
+/// A fingerprint as the `version` an agent reads and sends back.
+fn version_text(fingerprint: u64) -> String {
+    format!("{fingerprint:016x}")
+}
+
+/// The fingerprint a `version` stands for; `None` when it is not one.
+pub fn parse_version(version: &str) -> Option<u64> {
+    u64::from_str_radix(version, 16).ok().filter(|_| version.len() == 16)
 }
 
 /// The fingerprint of page `id` as it is now; none when it cannot be read.

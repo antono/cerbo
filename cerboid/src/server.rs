@@ -11,7 +11,7 @@ use cerbo_core::app_lock::AppLock;
 use cerbo_core::daemon_paths::DaemonPaths;
 use cerbo_core::agent::{self, AgentPermission, ChangeEntry};
 use cerbo_core::rpc::{
-    self, ApprovalOutcome, Call, ClientHello, ClientKind, Event, Hello, Origin, Request, RpcError, ServerMessage,
+    self, AdminAction, AdminInfo, AdminReply, AdminRequest, ApprovalOutcome, Call, ClientHello, ClientKind, Event, Hello, Origin, Request, RpcError, ServerMessage,
     StatusInfo, VaultInfo, MAX_PENDING_PER_AGENT, PROTOCOL_VERSION,
 };
 use cerbo_core::CerboContext;
@@ -50,6 +50,9 @@ pub struct Config {
     /// How many approval requests one agent connection may have waiting;
     /// more are refused at once. Default [`MAX_PENDING_PER_AGENT`].
     pub max_pending_per_agent: usize,
+    /// Called on the queue's thread at the start of every write job, before
+    /// anything is checked or changed. For tests, to hold the queue still.
+    pub before_write: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl Config {
@@ -62,6 +65,7 @@ impl Config {
             embedder: crate::embed::default_factory(),
             approval_timeout: None,
             max_pending_per_agent: MAX_PENDING_PER_AGENT,
+            before_write: None,
         }
     }
 }
@@ -152,6 +156,7 @@ struct Shared {
     approvals: Arc<Approvals>,
     approval_timeout: Option<Duration>,
     max_pending_per_agent: usize,
+    before_write: Option<Arc<dyn Fn() + Send + Sync>>,
     registry: Registry,
     events: broadcast::Sender<Event>,
     tracker: Arc<WriteTracker>,
@@ -225,6 +230,7 @@ async fn serve(
         approvals: Arc::new(Approvals::new(events.clone())),
         approval_timeout: config.approval_timeout,
         max_pending_per_agent: config.max_pending_per_agent,
+        before_write: config.before_write.clone(),
         registry,
         events,
         tracker,
@@ -298,6 +304,11 @@ async fn read_line<R: AsyncBufRead + Unpin>(reader: &mut R, buf: &mut Vec<u8>) -
     Ok(Line::Text(String::from_utf8_lossy(buf).trim_end().to_string()))
 }
 
+/// The action of a first line that is an administration line, if it is one.
+fn admin_line(text: &str) -> Option<AdminAction> {
+    serde_json::from_str::<AdminRequest>(text).ok().map(|request| request.admin)
+}
+
 /// Resolves when the daemon closes its connections. A function of its own so
 /// the watch guard is gone before the `select!` result crosses an await.
 async fn wait_closing(rx: &mut watch::Receiver<bool>) {
@@ -362,6 +373,25 @@ async fn connection(shared: Arc<Shared>, stream: UnixStream) {
     // Handshake: the first line must be a hello with our protocol version.
     let client = match read_line(&mut reader, &mut buf).await {
         Ok(Line::Text(text)) => match serde_json::from_str::<ClientHello>(&text) {
+            Err(_) if admin_line(&text).is_some() => {
+                // Version-independent administration: answered whatever the
+                // client's protocol version, so a stale daemon can be stopped.
+                let action = admin_line(&text).expect("just checked");
+                let info = AdminInfo {
+                    protocol: PROTOCOL_VERSION,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    pid: std::process::id(),
+                    uptime_secs: shared.started.elapsed().as_secs(),
+                };
+                // Answer first: a stop closes connections once it ran.
+                let mut line = serde_json::to_vec(&AdminReply { admin: info }).unwrap_or_default();
+                line.push(b'\n');
+                let _ = writer.0.lock().await.write_all(&line).await;
+                if action == AdminAction::Stop {
+                    shared.shutdown.trigger();
+                }
+                return;
+            }
             Ok(hello) => match rpc::check_protocol(hello.hello.protocol) {
                 Ok(()) => hello.hello,
                 Err(error) => {
@@ -641,14 +671,25 @@ impl Shared {
         if self.shutdown.is_triggered() {
             return Err(RpcError::new(rpc::CODE_SHUTTING_DOWN, "the daemon is stopping and takes no more writes"));
         }
+        // The text the caller says its edit was written against, if it said.
+        let given = match &call {
+            Call::PageEdit { base_version: Some(version), .. } => Some(ops::parse_version(version).ok_or_else(|| {
+                RpcError::new(
+                    rpc::CODE_BAD_REQUEST,
+                    "base_version is not a page version: pass the `version` that read_page returned",
+                )
+            })?),
+            _ => None,
+        };
         if client.client != ClientKind::Agent {
-            return self.queue_write(vault, call, client.client.into(), None, None);
+            return self.queue_write(vault, call, client.client.into(), None, given, None);
         }
         let agent_name = client.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| "agent".to_string());
         match agent::get_permission(&self.ctx, &vault.info.id) {
             AgentPermission::Read => Err(read_only(&vault)),
             AgentPermission::Auto => {
-                self.queue_write(vault, call, Origin::Agent, Some(AgentLog::new(agent_name, false)), None)
+                let closed = Some(conn.closed.clone());
+                self.queue_write(vault, call, Origin::Agent, Some(AgentLog::new(agent_name, false)), given, closed)
             }
             AgentPermission::Approve => {
                 let slot = PendingSlot::take(&conn.pending, self.max_pending_per_agent).ok_or_else(|| {
@@ -661,12 +702,13 @@ impl Shared {
                         ),
                     )
                 })?;
-                // What the page was when the agent asked: the approved edit
-                // replaces the whole page, so it must not land on another text.
-                let base = match &call {
+                // What the page was when the agent read it, if it said; else
+                // when it asked: the approved edit replaces the whole page, so
+                // it must not land on another text.
+                let base = given.or_else(|| match &call {
                     Call::PageEdit { page, .. } => ops::page_fingerprint(&vault, page),
                     _ => None,
-                };
+                });
                 let mut closed = conn.closed.clone();
                 let preview = ops::preview(&vault, &call);
                 let timeout =
@@ -705,7 +747,8 @@ impl Shared {
                             if !agent::get_permission(&this.ctx, &vault.info.id).can_write() {
                                 return Err(read_only(&vault));
                             }
-                            match this.queue_write(vault, call, Origin::Agent, Some(AgentLog::new(agent_name, true)), base) {
+                            let log = Some(AgentLog::new(agent_name, true));
+                            match this.queue_write(vault, call, Origin::Agent, log, base, Some(closed)) {
                                 Ok(done) => done.await,
                                 Err(e) => Err(e),
                             }
@@ -736,11 +779,25 @@ impl Shared {
         origin: Origin,
         log: Option<AgentLog>,
         base: Option<u64>,
+        closed: Option<watch::Receiver<bool>>,
     ) -> Result<Fut, RpcError> {
         let tracker = Arc::clone(&self.tracker);
         let ctx = self.ctx.clone();
         let job_vault = Arc::clone(&vault);
+        let before_write = self.before_write.clone();
         let queued = vault.queue.submit(move || {
+            if let Some(hook) = &before_write {
+                hook();
+            }
+            // The requester hanging up while this waited in the queue ends
+            // the write: nobody can be told how it went, so it is not applied.
+            // Checked here, right before writing, not only when it was queued.
+            if closed.is_some_and(|closed| *closed.borrow()) {
+                return Err(RpcError::new(
+                    rpc::CODE_SHUTTING_DOWN,
+                    "the agent went away before the change was applied, so it was not applied",
+                ));
+            }
             let id = job_vault.info.id.clone();
             let action = call.action().unwrap_or("change");
             // Attribute the file events before the files change.

@@ -44,6 +44,13 @@ impl DaemonPaths {
         matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
     }
 
+    /// The process id the running daemon wrote into the lock file, if it
+    /// wrote one. Only meaningful while [`Self::daemon_alive`]; a daemon from
+    /// before the number was written leaves the file empty.
+    pub fn lock_pid(&self) -> Option<u32> {
+        std::fs::read_to_string(&self.lock).ok()?.trim().parse().ok().filter(|pid| *pid > 1)
+    }
+
     /// Create the directory with mode 0700, or tighten an existing one to it.
     #[cfg(unix)]
     pub fn prepare_dir(&self) -> Result<(), String> {

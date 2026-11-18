@@ -77,3 +77,7 @@ A client SHALL check the daemon's protocol version when it connects. On a mismat
 #### Scenario: Old daemon after upgrade
 - **WHEN** the app is upgraded while an older daemon still runs
 - **THEN** the app SHALL report the mismatch and ask to restart the daemon
+
+#### Scenario: Stop and status across versions
+- **WHEN** the user runs `cerbo daemon stop` or `cerbo daemon status` while a daemon of another protocol version runs
+- **THEN** the command SHALL still work: through a version-independent administration line (`{"admin":"stop"}` or `{"admin":"status"}` as the first line, answered by one line with protocol, version and pid, never changing shape), and, for a daemon too old to know it, by SIGTERM to the process id the daemon wrote into its lock file (else the process behind the socket, when it is a `cerboid`)

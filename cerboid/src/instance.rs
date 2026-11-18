@@ -35,7 +35,8 @@ pub enum Acquired {
 /// Take the single-instance lock without waiting.
 pub fn acquire(paths: &DaemonPaths) -> Result<Acquired, String> {
     paths.prepare_dir()?;
-    // The lock file is only a handle, never data: opening must not truncate.
+    // Opening must not truncate: a daemon that runs holds the lock and its pid
+    // is in the file; only the holder of the lock rewrites it.
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -44,7 +45,14 @@ pub fn acquire(paths: &DaemonPaths) -> Result<Acquired, String> {
         .open(&paths.lock)
         .map_err(|e| format!("cannot open {}: {e}", paths.lock.display()))?;
     match file.try_lock() {
-        Ok(()) => Ok(Acquired::Instance(Instance { paths: paths.clone(), _lock: file, keep_socket: false })),
+        Ok(()) => {
+            // Only the holder of the lock writes it, so the number is the
+            // daemon's: it lets `cerbo daemon stop` end a daemon whose
+            // protocol it cannot speak. Best effort; the lock is what counts.
+            use std::io::Write;
+            let _ = file.set_len(0).and_then(|()| (&file).write_all(std::process::id().to_string().as_bytes()));
+            Ok(Acquired::Instance(Instance { paths: paths.clone(), _lock: file, keep_socket: false }))
+        }
         Err(TryLockError::WouldBlock) => Ok(Acquired::AlreadyRunning),
         Err(TryLockError::Error(e)) => Err(format!("cannot lock {}: {e}", paths.lock.display())),
     }

@@ -6,8 +6,8 @@
 
 use cerbo_core::agent::{self, AgentPermission};
 use cerbo_core::daemon_paths::DaemonPaths;
-use cerbo_core::rpc::client::{Client, ConnectError};
-use cerbo_core::rpc::{self, ApprovalInfo, Call, ClientKind, StatusInfo, CODE_UNKNOWN_VAULT};
+use cerbo_core::rpc::client::{self, AdminError, Client, ConnectError};
+use cerbo_core::rpc::{self, AdminAction, ApprovalInfo, Call, ClientKind, StatusInfo, CODE_UNKNOWN_VAULT};
 use cerbo_core::CerboContext;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -84,12 +84,144 @@ pub fn vault_call(
 
 // ── cerbo daemon ─────────────────────────────────────────────────────────────
 
-fn running(ctx: &CerboContext) -> Result<Option<Client>, String> {
+/// The running daemon, `Ok(None)` when none answers. A daemon of another
+/// protocol version is [`ConnectError::VersionMismatch`], which `stop` and
+/// `status` handle through the version-independent administration line.
+fn try_running(ctx: &CerboContext) -> Result<Option<Client>, ConnectError> {
     match Client::connect(&paths(ctx).socket, ClientKind::Cli, Some("cerbo")) {
         Ok(client) => Ok(Some(client)),
         Err(ConnectError::Unavailable(_)) => Ok(None),
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(e),
     }
+}
+
+fn running(ctx: &CerboContext) -> Result<Option<Client>, String> {
+    try_running(ctx).map_err(|e| e.to_string())
+}
+
+/// The process id of a daemon whose protocol this program cannot speak and
+/// that does not know administration lines either (it is older than they
+/// are): the number the daemon wrote into its lock file, else, on Linux, the
+/// process behind the socket when it is a `cerboid` (under systemd socket
+/// activation that is systemd's, which is never signalled).
+fn foreign_pid(paths: &DaemonPaths) -> Option<u32> {
+    paths.lock_pid().or_else(|| socket_peer_pid(&paths.socket))
+}
+
+#[cfg(target_os = "linux")]
+fn socket_peer_pid(socket: &Path) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+    let stream = std::os::unix::net::UnixStream::connect(socket).ok()?;
+    let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: `cred` and `len` are valid for the call and `len` is its size.
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast::<libc::c_void>(),
+            &mut len,
+        )
+    };
+    if rc != 0 || cred.pid <= 1 {
+        return None;
+    }
+    let pid = cred.pid as u32;
+    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    (comm.trim() == "cerboid").then_some(pid)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn socket_peer_pid(_socket: &Path) -> Option<u32> {
+    None
+}
+
+/// Wait until the daemon's lock is free, then (where `/proc` tells) until its
+/// process is gone, so `stop` then `start` never meets the old daemon's lock.
+fn wait_gone(paths: &DaemonPaths, pid: u32, deadline: Instant) -> Result<(), String> {
+    while paths.daemon_alive() {
+        if Instant::now() >= deadline {
+            return Err("cerboid was told to stop but is still running".to_string());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let proc = std::path::PathBuf::from(format!("/proc/{pid}"));
+    while Path::new("/proc/self").exists() && proc.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Ok(())
+}
+
+/// Stop a daemon of another protocol version: ask it with the
+/// version-independent administration line, and when it is too old to know
+/// that, end it with SIGTERM, which it handles like a stop.
+fn stop_foreign(ctx: &CerboContext, json: bool) -> Result<(), String> {
+    let paths = paths(ctx);
+    let (pid, signalled) = match client::admin(&paths.socket, AdminAction::Stop) {
+        Ok(info) => (info.pid, false),
+        Err(AdminError::Unsupported) => {
+            let pid = foreign_pid(&paths).ok_or_else(|| {
+                "cerboid runs with another protocol version and is too old to be asked to stop, and its process id \
+                 is unknown: end the `cerboid` process yourself (for example `pkill cerboid`)"
+                    .to_string()
+            })?;
+            // SAFETY: plain `kill(2)` on a process id; no memory is involved.
+            if unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } != 0 {
+                return Err(format!("cannot stop cerboid (pid {pid}): {}", std::io::Error::last_os_error()));
+            }
+            (pid, true)
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    wait_gone(&paths, pid, Instant::now() + Duration::from_secs(40))?;
+    if json {
+        println!("{}", json!({ "running": false, "stopped": true, "pid": pid, "signalled": signalled }));
+    } else {
+        println!("Stopped cerboid (pid {pid}), which spoke another protocol version");
+    }
+    Ok(())
+}
+
+/// `status` of a daemon of another protocol version: what its administration
+/// line says, or only its process id when it is too old for that.
+fn status_foreign(ctx: &CerboContext, json: bool) -> Result<(), String> {
+    let paths = paths(ctx);
+    let (info, pid) = match client::admin(&paths.socket, AdminAction::Status) {
+        Ok(info) => {
+            let pid = info.pid;
+            (Some(info), Some(pid))
+        }
+        Err(AdminError::Unsupported) => (None, foreign_pid(&paths)),
+        Err(e) => return Err(e.to_string()),
+    };
+    if json {
+        println!(
+            "{}",
+            json!({
+                "running": true, "protocol_mismatch": true, "protocol": info.as_ref().map(|i| i.protocol),
+                "expected_protocol": rpc::PROTOCOL_VERSION, "version": info.as_ref().map(|i| i.version.clone()),
+                "pid": pid, "uptime_secs": info.as_ref().map(|i| i.uptime_secs), "socket": paths.socket,
+            })
+        );
+        return Ok(());
+    }
+    let pid_text = pid.map_or_else(|| "pid unknown".to_string(), |p| format!("pid {p}"));
+    match &info {
+        Some(i) => println!(
+            "cerboid {} running ({pid_text}, up {}) but speaks protocol {}, this cerbo speaks {}",
+            i.version,
+            duration_text(i.uptime_secs),
+            i.protocol,
+            rpc::PROTOCOL_VERSION
+        ),
+        None => println!(
+            "cerboid running ({pid_text}) but speaks another protocol version than this cerbo ({})",
+            rpc::PROTOCOL_VERSION
+        ),
+    }
+    println!("Run `cerbo daemon stop`, then `cerbo daemon start`.");
+    Ok(())
 }
 
 pub fn start(ctx: &CerboContext, json: bool) -> Result<(), String> {
@@ -113,7 +245,12 @@ pub fn start(ctx: &CerboContext, json: bool) -> Result<(), String> {
 }
 
 pub fn stop(ctx: &CerboContext, json: bool) -> Result<(), String> {
-    let Some(mut client) = running(ctx)? else {
+    let client = match try_running(ctx) {
+        Ok(client) => client,
+        Err(ConnectError::VersionMismatch(_)) => return stop_foreign(ctx, json),
+        Err(e) => return Err(e.to_string()),
+    };
+    let Some(mut client) = client else {
         if json {
             println!("{}", json!({ "running": false, "stopped": false }));
         } else {
@@ -157,7 +294,12 @@ fn duration_text(secs: u64) -> String {
 
 pub fn status(ctx: &CerboContext, json: bool) -> Result<(), String> {
     let paths = paths(ctx);
-    let Some(mut client) = running(ctx)? else {
+    let client = match try_running(ctx) {
+        Ok(client) => client,
+        Err(ConnectError::VersionMismatch(_)) => return status_foreign(ctx, json),
+        Err(e) => return Err(e.to_string()),
+    };
+    let Some(mut client) = client else {
         if json {
             println!("{}", json!({ "running": false, "socket": paths.socket }));
         } else {
