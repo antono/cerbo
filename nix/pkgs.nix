@@ -1,30 +1,82 @@
-{ pkgs, tauri-deps }:
+{ pkgs, craneLib, tauri-deps }:
 let
+  lib = pkgs.lib;
+
   # fastembed loads ONNX Runtime at run time (ort `load-dynamic`); the binaries
   # find it through this variable unless the user sets their own.
   ortDylibPath = "${pkgs.onnxruntime}/lib/libonnxruntime.so";
 
-  cerbo = pkgs.rustPlatform.buildRustPackage {
-    pname = "cerbo";
+  # Only what cargo reads. Edits to the frontend, docs, specs or e2e leave the
+  # Rust packages' source, and so the packages, unchanged.
+  rustSrc = lib.fileset.toSource {
+    root = ../.;
+    fileset = lib.fileset.unions [
+      ../Cargo.toml
+      ../Cargo.lock
+      ../core
+      ../cli
+      ../cerboid
+      ../src-tauri
+    ];
+  };
 
-
+  # Settings every Rust build shares.
+  common = {
+    src = rustSrc;
+    strictDeps = true;
     version = "0.1.0";
-    src = ../.;
-    cargoLock.lockFile = ../Cargo.lock;
-    # Build only the CLI crate: without -p, cargo builds the whole workspace
-    # and the install hook would copy the desktop binary in as well.
-    cargoBuildFlags = [ "-p" "cerbo" ];
-    cargoTestFlags = [ "-p" "cerbo" "-p" "cerbo-core" ];
     # bindgenHook provides libclang for oxigraph's bundled RocksDB.
     nativeBuildInputs = [
       pkgs.pkg-config
-      pkgs.mandown
-      pkgs.makeWrapper
       pkgs.rustPlatform.bindgenHook
     ];
-    # nixpkgs' cargo setup hook exports RUSTONIG_SYSTEM_LIBONIG=1, so onig_sys
-    # links the system oniguruma instead of its bundled copy.
     buildInputs = [ pkgs.oniguruma ];
+    # Link the system oniguruma instead of onig_sys's bundled copy (nixpkgs'
+    # cargo hook sets this for buildRustPackage; crane does not).
+    RUSTONIG_SYSTEM_LIBONIG = "1";
+    # bindgenHook copies NIX_CFLAGS_COMPILE into BINDGEN_EXTRA_CLANG_ARGS, and
+    # that holds `-frandom-seed=<hash of this derivation>`. bindgen's build
+    # script reruns when the variable changes, so the package would rebuild
+    # bindgen and RocksDB after its dependency build. The seed only makes C
+    # output reproducible; bindgen generates no object code.
+    preConfigure = ''
+      BINDGEN_EXTRA_CLANG_ARGS=$(printf '%s' "$BINDGEN_EXTRA_CLANG_ARGS" | sed -E 's/ ?-frandom-seed=[^ ]*//g')
+      export BINDGEN_EXTRA_CLANG_ARGS
+    '';
+  };
+
+  # A package built from crates of the workspace. Its dependencies are built
+  # first, in a derivation of their own that only Cargo.lock, the Cargo.toml
+  # files and these settings change, so editing our own code no longer
+  # recompiles every dependency (oxigraph's bundled RocksDB is most of that
+  # time). The dependency build takes the package's own cargo arguments:
+  # cargo picks dependency features per set of crates built, and any
+  # difference would rebuild them (RocksDB with them).
+  rustPackage = args:
+    let
+      a = common // args // {
+        nativeBuildInputs = common.nativeBuildInputs ++ (args.nativeBuildInputs or [ ]);
+        buildInputs = common.buildInputs ++ (args.buildInputs or [ ]);
+      };
+      cargoArtifacts = craneLib.buildDepsOnly (removeAttrs a [ "postInstall" "preFixup" "postFixup" "postPatch" "preCheck" "installCheckPhase" "doInstallCheck" "meta" ] // {
+        pname = "${args.pname}-deps";
+        cargoTestExtraArgs = "--no-run ${args.cargoTestExtraArgs or ""}";
+        # `cargo check` would run the RocksDB build script a second time.
+        cargoCheckCommand = "true";
+      });
+    in
+    craneLib.buildPackage (a // { inherit cargoArtifacts; });
+
+  cerbo = rustPackage {
+    pname = "cerbo";
+    # Build only the CLI crate: without -p, cargo builds the whole workspace
+    # and the install hook would copy the desktop binary in as well.
+    cargoExtraArgs = "--locked -p cerbo";
+    cargoTestExtraArgs = "-p cerbo-core";
+    nativeBuildInputs = [
+      pkgs.mandown
+      pkgs.makeWrapper
+    ];
     # Network-dependent tests are #[ignore]d; the rest run in the sandbox.
     doCheck = true;
     # Imports shell out to curl; the import-ontology tests fetch file:// URLs.
@@ -58,25 +110,16 @@ let
   # The daemon: one process per user that owns every registered vault. Its
   # integration tests start real daemons on sockets in temporary directories,
   # which the build sandbox allows.
-  cerboid = pkgs.rustPlatform.buildRustPackage {
+  cerboid = rustPackage {
     pname = "cerboid";
-    version = "0.1.0";
-    src = ../.;
-    cargoLock.lockFile = ../Cargo.lock;
-    cargoBuildFlags = [ "-p" "cerboid" ];
-    cargoTestFlags = [ "-p" "cerboid" ];
+    cargoExtraArgs = "--locked -p cerboid";
     # The sandbox integration test runs real bwrap (checked: the Nix build
     # sandbox allows the nested user namespace). Where a builder does not, the
     # test skips itself with a message instead of failing.
     preCheck = ''
       export CERBO_BWRAP=${pkgs.bubblewrap}/bin/bwrap
     '';
-    nativeBuildInputs = [
-      pkgs.pkg-config
-      pkgs.makeWrapper
-      pkgs.rustPlatform.bindgenHook
-    ];
-    buildInputs = [ pkgs.oniguruma ];
+    nativeBuildInputs = [ pkgs.makeWrapper ];
     doCheck = true;
     meta.mainProgram = "cerboid";
 
@@ -93,19 +136,38 @@ let
     '';
   };
 
+  # The repository without the Rust crates and the files no build reads, so a
+  # Rust-only edit does not rebuild the frontend.
+  frontendSrc = lib.fileset.toSource {
+    root = ../.;
+    fileset = lib.fileset.difference ../. (lib.fileset.unions [
+      ../core
+      ../cli
+      ../cerboid
+      ../src-tauri
+      ../Cargo.toml
+      ../Cargo.lock
+      ../docs
+      ../openspec
+      ../e2e
+      ../test-vault
+      ../nix
+      ../flake.nix
+      ../flake.lock
+    ]);
+  };
+
   cerbo-frontend = pkgs.stdenv.mkDerivation {
     pname = "cerbo-frontend";
-
-
     version = "0.1.0";
-    src = ../.;
+    src = frontendSrc;
     nativeBuildInputs = [
       pkgs.bun
       pkgs.bun2nix.hook
     ];
     bunDeps = pkgs.bun2nix.fetchBunDeps {
       bunNix = ./bun.nix;
-      src = ../.;
+      src = frontendSrc;
     };
     buildPhase = ''
       bun install --no-save
@@ -117,26 +179,18 @@ let
     '';
   };
 
-  cerbo-desktop = pkgs.rustPlatform.buildRustPackage {
+  cerbo-desktop = rustPackage {
     pname = "cerbo-desktop";
-
-
-    version = "0.1.0";
-    src = ../.;
-    cargoLock.lockFile = ../Cargo.lock;
     # Build and test only the desktop crate; the CLI and core tests run in
     # the `cerbo` package above, which this one depends on.
-    cargoBuildFlags = [ "-p" "cerbo-desktop" ];
-    cargoTestFlags = [ "-p" "cerbo-desktop" ];
+    cargoExtraArgs = "--locked -p cerbo-desktop";
     nativeBuildInputs = [
-      pkgs.pkg-config
       pkgs.wrapGAppsHook3
       pkgs.gobject-introspection
       pkgs.jq
       pkgs.desktop-file-utils
-      pkgs.rustPlatform.bindgenHook
     ];
-    buildInputs = tauri-deps ++ [ pkgs.gtk3 pkgs.gsettings-desktop-schemas pkgs.adwaita-icon-theme pkgs.oniguruma ];
+    buildInputs = tauri-deps ++ [ pkgs.gtk3 pkgs.gsettings-desktop-schemas pkgs.adwaita-icon-theme ];
 
     postPatch = ''
       # Nullify devUrl and point frontendDist to the built frontend in the Nix store

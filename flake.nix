@@ -9,6 +9,8 @@
     # Only the flake check of the Home Manager module evaluates against it.
     home-manager.url = "github:nix-community/home-manager";
     home-manager.inputs.nixpkgs.follows = "nixpkgs";
+    # Builds the Rust dependencies once and reuses them (nix/pkgs.nix).
+    crane.url = "github:ipetkov/crane";
   };
 
   outputs =
@@ -18,6 +20,7 @@
       flake-utils,
       bun2nix,
       home-manager,
+      crane,
     }:
     {
       # `services.cerbo.daemon`: see nix/home-manager.nix.
@@ -34,7 +37,10 @@
         deps = import ./nix/deps.nix { inherit pkgs; };
         inherit (deps) tauri-deps dev-deps;
 
-        cerbo-pkgs = import ./nix/pkgs.nix { inherit pkgs tauri-deps; };
+        cerbo-pkgs = import ./nix/pkgs.nix {
+          inherit pkgs tauri-deps;
+          craneLib = crane.mkLib pkgs;
+        };
         inherit (cerbo-pkgs) cerbo cerboid cerbo-frontend cerbo-desktop tauri-driver;
 
         src = builtins.path { path = ./.; name = "cerbo-src"; };

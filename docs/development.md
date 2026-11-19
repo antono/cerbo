@@ -73,9 +73,16 @@ bun run test:e2e            # runs e2e/specs; uses xvfb-run when DISPLAY is unse
 For day-to-day runs, `bun run test:e2e:local` (in the dev shell) builds the
 three binaries with cargo instead and runs the suite against them; arguments
 go to wdio (`bun run test:e2e:local --spec e2e/specs/vault/agent-panel.e2e.ts`).
-After a small change that takes about a minute to build instead of a full
-`nix build`, which compiles every dependency, RocksDB included, from scratch.
-Run the `nix build` route before merging: it tests the packaged app.
+After a small change that takes about a minute to build; `nix build` of the
+three packages takes two to three minutes, because it also runs their Rust
+tests. Run the `nix build` route before merging: it tests the packaged app.
+
+The Nix packages are built with [crane](https://github.com/ipetkov/crane)
+(`nix/pkgs.nix`). Each one has a dependency build of its own, which only a
+change to `Cargo.lock`, a `Cargo.toml` or the build settings repeats; that is
+when RocksDB is compiled again, once per package. The Rust packages see only
+the Rust crates, so an edit to the frontend or the docs does not rebuild them,
+and the frontend package does not see the crates.
 
 Each spec file gets temporary XDG config, cache, data and runtime
 directories, and its own daemon (`cerboid`) on a socket in them; specs under
