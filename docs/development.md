@@ -70,6 +70,13 @@ cargo build -p cerbo --bins # cerbo-fake-agent, the scripted ACP agent of the Ag
 bun run test:e2e            # runs e2e/specs; uses xvfb-run when DISPLAY is unset
 ```
 
+For day-to-day runs, `bun run test:e2e:local` (in the dev shell) builds the
+three binaries with cargo instead and runs the suite against them; arguments
+go to wdio (`bun run test:e2e:local --spec e2e/specs/vault/agent-panel.e2e.ts`).
+After a small change that takes about a minute to build instead of a full
+`nix build`, which compiles every dependency, RocksDB included, from scratch.
+Run the `nix build` route before merging: it tests the packaged app.
+
 Each spec file gets temporary XDG config, cache, data and runtime
 directories, and its own daemon (`cerboid`) on a socket in them; specs under
 `e2e/specs/vault/` also get a fresh copy of `test-vault/`. Your own vaults,
