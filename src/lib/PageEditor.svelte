@@ -1009,6 +1009,14 @@
     height: 100%;
     overflow-y: auto;
     background: transparent;
+    /* The textarea re-measures its height on every keystroke, which made the
+       scrollbar flicker while typing. Scrolling (wheel, keys, touch) still
+       works; only the bar is hidden. */
+    scrollbar-width: none;
+  }
+
+  .page-editor :global(.carta-input::-webkit-scrollbar) {
+    display: none;
   }
 
   .page-editor :global(.carta-renderer) {
