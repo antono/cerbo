@@ -438,11 +438,28 @@ pub enum Call {
         limit: usize,
     },
     /// The agent permission of a vault: `{"permission": "read" | "auto" |
-    /// "approve", "approval_timeout_secs": n}`; the second is how long a write
-    /// may wait for an approval, so a client can wait that long for its
-    /// answer. Read-only knowledge, so agent connections may ask; it lets
+    /// "approve", "approval_timeout_secs": n, "host": bool}`; the second is how
+    /// long a write may wait for an approval, so a client can wait that long
+    /// for its answer; the third says whether host access is on. Read-only knowledge, so agent connections may ask; it lets
     /// the MCP shim list only the tools that can work.
     Permission { vault: String },
+
+    // Host access: files outside the vault. They never go through the vault's
+    // write queue; the daemon judges each one by the vault's host access
+    // setting and may ask a person first. Agent connections only.
+    /// List a directory outside the vault.
+    HostList { vault: String, path: String },
+    /// Read a chunk of a text file outside the vault.
+    HostRead {
+        vault: String,
+        path: String,
+        #[serde(default)]
+        offset: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<usize>,
+    },
+    /// Create or replace a text file outside the vault.
+    HostWrite { vault: String, path: String, content: String },
 
     // Reads
     PageList { vault: String },
@@ -613,6 +630,11 @@ impl Call {
         )
     }
 
+    /// True for the calls that reach files outside the vault.
+    pub fn is_host(&self) -> bool {
+        matches!(self, Call::HostList { .. } | Call::HostRead { .. } | Call::HostWrite { .. })
+    }
+
     /// What a write does, in the word the change log and approval prompts use.
     pub fn action(&self) -> Option<&'static str> {
         Some(match self {
@@ -645,6 +667,9 @@ impl Call {
             Call::SessionList { vault } => vault.as_deref(),
             Call::AgentChanges { vault, .. }
             | Call::Permission { vault }
+            | Call::HostList { vault, .. }
+            | Call::HostRead { vault, .. }
+            | Call::HostWrite { vault, .. }
             | Call::PageList { vault }
             | Call::PageRead { vault, .. }
             | Call::AttachmentList { vault, .. }

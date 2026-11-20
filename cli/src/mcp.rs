@@ -26,6 +26,10 @@ use std::time::Duration;
 /// The tools that change the vault. Not listed at `read`.
 const WRITE_TOOLS: [&str; 6] = ["create_page", "edit_page", "rename_page", "move_page", "delete_page", "link_pages"];
 
+/// The tools that reach files outside the vault. Listed only while the vault's
+/// host access is on.
+const HOST_TOOLS: [&str; 3] = ["host_list", "host_read", "host_write"];
+
 /// What a write that waits for approval gets on top of the approval time
 /// limit before the shim gives up on the daemon's answer: the write queue may
 /// hold it up a little after the approval.
@@ -101,9 +105,10 @@ impl Link {
     /// one had died (the daemon restarted); a write is never repeated, since
     /// it may have applied.
     fn run(&self, call: Call) -> Result<Value, RpcError> {
-        let retry = !call.is_write();
+        // A host write may have applied too, so it is not repeated either.
+        let retry = !call.is_write() && !matches!(call, Call::HostWrite { .. });
         let mut client = self.take()?;
-        let result = if call.is_write() {
+        let result = if call.is_write() || call.is_host() {
             // A write may wait for a person: wait for the answer at least
             // until the approval deadline, not for the short read limit.
             let secs = client
@@ -148,11 +153,16 @@ impl Link {
             .unwrap_or_else(|_| Err(RpcError::failed("the call crashed")))
     }
 
-    /// The vault's permission. When the daemon cannot say, `read`: the safe
-    /// answer is to offer fewer tools.
-    async fn permission(self: &Arc<Self>) -> AgentPermission {
-        let answer = self.call(Call::Permission { vault: self.vault.clone() }).await;
-        answer.ok().and_then(|v| v["permission"].as_str().and_then(|s| s.parse().ok())).unwrap_or_default()
+    /// The vault's permission and whether its host access is on. When the
+    /// daemon cannot say: `read` and off, the safe answer.
+    async fn state(self: &Arc<Self>) -> (AgentPermission, bool) {
+        let answer = self.call(Call::Permission { vault: self.vault.clone() }).await.ok();
+        let permission = answer
+            .as_ref()
+            .and_then(|v| v["permission"].as_str().and_then(|s| s.parse().ok()))
+            .unwrap_or_default();
+        let host = answer.as_ref().and_then(|v| v["host"].as_bool()).unwrap_or(false);
+        (permission, host)
     }
 }
 
@@ -162,6 +172,30 @@ impl Link {
 struct PageParams {
     /// UUID of the page.
     page: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct HostListParams {
+    /// Absolute path of a directory outside the vault.
+    path: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct HostReadParams {
+    /// Absolute path of a text file outside the vault.
+    path: String,
+    /// Byte offset to start at; use the `next_offset` of the previous answer to continue. Default 0.
+    offset: Option<u64>,
+    /// Return at most this many bytes (default and maximum 140288).
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct HostWriteParams {
+    /// Absolute path of the file to create or replace, outside the vault. Its folder must exist.
+    path: String,
+    /// The whole text of the file.
+    content: String,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -315,6 +349,35 @@ impl VaultServer {
         answer(self.link.call(Call::Sparql { vault: self.vault(), query: p.query }).await)
     }
 
+    #[tool(
+        description = "List a directory outside the vault. A path the user did not allow waits for the user's \
+                       approval; some places are never available."
+    )]
+    async fn host_list(&self, Parameters(p): Parameters<HostListParams>) -> Result<CallToolResult, ErrorData> {
+        answer(self.link.call(Call::HostList { vault: self.vault(), path: p.path }).await)
+    }
+
+    #[tool(
+        description = "Read a text file outside the vault, in chunks: pass `next_offset` as `offset` to continue. \
+                       A path the user did not allow waits for the user's approval; some places are never available."
+    )]
+    async fn host_read(&self, Parameters(p): Parameters<HostReadParams>) -> Result<CallToolResult, ErrorData> {
+        answer(
+            self.link
+                .call(Call::HostRead { vault: self.vault(), path: p.path, offset: p.offset.unwrap_or(0), limit: p.limit })
+                .await,
+        )
+    }
+
+    #[tool(
+        description = "Create or replace a text file outside the vault. Allowed only under a path the user opened for \
+                       writing; any other path waits for the user's approval. The call may wait. Files inside the \
+                       vault are changed with the page tools, not with this."
+    )]
+    async fn host_write(&self, Parameters(p): Parameters<HostWriteParams>) -> Result<CallToolResult, ErrorData> {
+        answer(self.link.call(Call::HostWrite { vault: self.vault(), path: p.path, content: p.content }).await)
+    }
+
     #[tool(description = "Create a page. Returns its UUID. May wait for the user's approval.")]
     async fn create_page(&self, Parameters(p): Parameters<CreateParams>) -> Result<CallToolResult, ErrorData> {
         answer(
@@ -397,8 +460,14 @@ impl ServerHandler for VaultServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let mut router = Self::tool_router();
-        if !self.link.permission().await.can_write() {
+        let (permission, host) = self.link.state().await;
+        if !permission.can_write() {
             for name in WRITE_TOOLS {
+                router.disable_route(name);
+            }
+        }
+        if !host {
+            for name in HOST_TOOLS {
                 router.disable_route(name);
             }
         }
@@ -414,11 +483,12 @@ impl ServerHandler for VaultServer {
         let link = Arc::clone(&self.link);
         let peer = context.peer.clone();
         tokio::spawn(async move {
-            let mut last = link.permission().await;
+            let mut last = link.state().await;
             loop {
                 tokio::time::sleep(PERMISSION_POLL).await;
-                let now = link.permission().await;
-                if now.can_write() != last.can_write() && peer.notify_tool_list_changed().await.is_err() {
+                let now = link.state().await;
+                let changed = now.0.can_write() != last.0.can_write() || now.1 != last.1;
+                if changed && peer.notify_tool_list_changed().await.is_err() {
                     break;
                 }
                 last = now;

@@ -352,13 +352,18 @@ enum VaultCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Show or set what agents may do in a vault: read (default), auto or approve
+    /// Show or set what agents may do in a vault: read (default), auto or approve; and their host access (files outside the vault)
     Agent {
         /// The vault: an ID or name from `cerbo vault list`, or its path
         vault: String,
-        /// read: agents only read. auto: their changes apply at once. approve: each change waits for you. Omit to print the current level
-        level: Option<cerbo_core::agent::AgentPermission>,
-        /// Output the result as JSON ({"vault", "name", "agent"})
+        /// read: agents only read. auto: their changes apply at once. approve: each change waits for you. Omit to print the current level.
+        /// `host [on|off]` prints or sets host access; `host-path add|remove <PATH> [--write]` edits the allowed paths
+        #[arg(num_args = 0.., value_name = "LEVEL | host [on|off] | host-path add|remove PATH")]
+        rest: Vec<String>,
+        /// With `host-path add`: let agents write below the path, not only read
+        #[arg(long)]
+        write: bool,
+        /// Output the result as JSON ({"vault", "name", "agent"}; with `host`: {"vault", "name", "host"})
         #[arg(long)]
         json: bool,
     },
@@ -1472,8 +1477,13 @@ async fn main() -> Result<(), String> {
                     println!("Approved vault: {} ({})", vault.name, vault.id);
                 }
             }
-            VaultCommands::Agent { vault, level, json } => {
-                if let Err(e) = daemon::vault_agent(&ctx, &vault, level, json) {
+            VaultCommands::Agent { vault, rest, write, json } => {
+                let done = match rest.first().map(String::as_str) {
+                    Some("host") => daemon::vault_agent_host(&ctx, &vault, &rest[1..], json),
+                    Some("host-path") => daemon::vault_agent_host_path(&ctx, &vault, &rest[1..], write, json),
+                    _ => daemon::parse_level(&rest).and_then(|level| daemon::vault_agent(&ctx, &vault, level, json)),
+                };
+                if let Err(e) = done {
                     eprintln!("Error: {}", e.message);
                     std::process::exit(e.exit_code());
                 }

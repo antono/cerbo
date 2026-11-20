@@ -11,6 +11,7 @@ use crate::watch::WriteTracker;
 use cerbo_core::app_lock::AppLock;
 use cerbo_core::daemon_paths::DaemonPaths;
 use cerbo_core::agent::{self, AgentPermission, ChangeEntry};
+use cerbo_core::host_access::{self, Action as HostAction, Decision as HostDecision};
 use cerbo_core::rpc::{
     self, AdminAction, AdminInfo, AdminReply, AdminRequest, ApprovalOutcome, Call, ClientHello, ClientKind, Event, Hello, Origin, Request, RpcError, ServerMessage,
     StatusInfo, VaultInfo, MAX_PENDING_PER_AGENT, PROTOCOL_VERSION,
@@ -161,6 +162,9 @@ fn ready(result: OpResult) -> Fut {
 
 struct Shared {
     ctx: CerboContext,
+    /// The daemon's own runtime directory (socket and lock): never reachable
+    /// through host access.
+    daemon_dir: std::path::PathBuf,
     approvals: Arc<Approvals>,
     sessions: Arc<Manager>,
     approval_timeout: Option<Duration>,
@@ -251,6 +255,7 @@ async fn serve(
     let sessions = Manager::new(config.agents.clone(), config.ctx.clone(), Arc::clone(&approvals), events.clone(), config.approval_timeout);
     let shared = Arc::new(Shared {
         ctx: config.ctx.clone(),
+        daemon_dir: config.paths.dir.clone(),
         approvals,
         sessions,
         approval_timeout: config.approval_timeout,
@@ -745,11 +750,15 @@ impl Shared {
                 match &call {
                     Call::Permission { .. } => {
                         let level = agent::get_permission(&self.ctx, &vault.info.id);
+                        let host = agent::get_host(&self.ctx, &vault.info.id).enabled;
                         let wait = self.approval_timeout.unwrap_or_else(|| agent::approval_timeout(&self.ctx));
-                        return Ok(ready(Ok(
-                            json!({ "permission": level.as_str(), "approval_timeout_secs": wait.as_secs() }),
-                        )));
+                        return Ok(ready(Ok(json!({
+                            "permission": level.as_str(),
+                            "approval_timeout_secs": wait.as_secs(),
+                            "host": host,
+                        }))));
                     }
+                    c if c.is_host() => return self.begin_host(vault, call, conn),
                     Call::AgentChanges { limit, .. } => {
                         let changes = agent::read_changes(&self.ctx, &vault.info.id, *limit).map_err(RpcError::failed)?;
                         return Ok(ready(serde_json::to_value(changes).map_err(|e| RpcError::failed(e.to_string()))));
@@ -850,6 +859,165 @@ impl Shared {
             vaults: self.vault_infos(),
         };
         serde_json::to_value(info).map_err(|e| RpcError::failed(e.to_string()))
+    }
+
+    /// The places host access never reaches on this machine, for this vault.
+    fn host_guard(&self, vault: &VaultHandle) -> cerbo_core::host_access::Guard {
+        let env = crate::agents::HostEnv::from_process();
+        let mut protected = vec![self.ctx.config_dir.clone(), self.ctx.cache_dir.clone(), self.daemon_dir.clone()];
+        if let Some(data) = env.data_home() {
+            protected.push(data.join("cerbo"));
+            protected.push(data.join("opencode/auth.json"));
+        }
+        let claude = env.claude_config_dir.clone().or_else(|| env.home.as_ref().map(|h| h.join(".claude")));
+        if let Some(claude) = claude {
+            protected.push(claude.join(".credentials.json"));
+        }
+        let others = self.registry.list().iter().filter(|v| v.info.id != vault.info.id).map(|v| v.root.clone()).collect();
+        agent::host_guard(vault.root.clone(), others, protected)
+    }
+
+    /// A host call (design D2): judged by the vault's host access setting,
+    /// read afresh on every call so a change applies to the next one. Covered
+    /// by the list: done at once. Not covered: a person approves this one
+    /// action. Never reachable or off: refused.
+    fn begin_host(self: &Arc<Self>, vault: Arc<VaultHandle>, call: Call, conn: &Conn) -> Result<Fut, RpcError> {
+        if conn.bound.is_none() {
+            return Err(forbidden("host calls are for agent connections"));
+        }
+        if self.shutdown.is_triggered() {
+            return Err(RpcError::new(rpc::CODE_SHUTTING_DOWN, "the daemon is stopping"));
+        }
+        let (path, action) = match &call {
+            Call::HostList { path, .. } => (path.clone(), HostAction::List),
+            Call::HostRead { path, .. } => (path.clone(), HostAction::Read),
+            Call::HostWrite { path, .. } => (path.clone(), HostAction::Write),
+            _ => unreachable!("begin_host takes host calls"),
+        };
+        let agent_name = conn.hello.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| "agent".to_string());
+        let real = host_access::resolve(&path, action).map_err(|e| RpcError::new(rpc::CODE_BAD_REQUEST, e))?;
+        let settings = agent::get_host(&self.ctx, &vault.info.id);
+        let guard = self.host_guard(&vault);
+        let log = {
+            let ctx = self.ctx.clone();
+            let vault_id = vault.info.id.clone();
+            let agent_name = agent_name.clone();
+            let real = real.clone();
+            move |approved: bool, outcome: &str| log_host(&ctx, &vault_id, &agent_name, action, &real, approved, outcome)
+        };
+        match host_access::decide(&settings, &guard, &real, action) {
+            HostDecision::Refuse(why) => {
+                log(false, "refused");
+                Err(RpcError::new(rpc::CODE_FORBIDDEN, why))
+            }
+            HostDecision::Allow => {
+                let task = tokio::task::spawn_blocking(move || run_host(&real, &call));
+                Ok(Box::pin(async move {
+                    let result = task.await.unwrap_or_else(|_| Err(RpcError::failed("the host call crashed")));
+                    log(false, if result.is_ok() { "done" } else { "failed" });
+                    result
+                }))
+            }
+            HostDecision::Ask => {
+                let (key, whose) = match &conn.session {
+                    Some(session) => (format!("session:{session}"), "this session"),
+                    None => (format!("vault:{}", vault.info.id), "this vault"),
+                };
+                let slot = PendingSlot::take(&self.pending, key, self.max_pending_per_agent).ok_or_else(|| {
+                    RpcError::new(
+                        rpc::CODE_TOO_MANY_PENDING,
+                        format!(
+                            "{whose} already has {} requests waiting for approval, the most it may have; \
+                             wait until some are answered",
+                            self.max_pending_per_agent
+                        ),
+                    )
+                })?;
+                let summary = match &call {
+                    Call::HostWrite { content, .. } => match host_access::existing_size(&real) {
+                        Some(old) => format!("Replace the file {} ({old} bytes) with {} bytes", real.display(), content.len()),
+                        None => format!("Create the file {} ({} bytes)", real.display(), content.len()),
+                    },
+                    Call::HostRead { .. } => format!("Read the file {}", real.display()),
+                    _ => format!("List the folder {}", real.display()),
+                };
+                let timeout = self.approval_timeout.unwrap_or_else(|| agent::approval_timeout(&self.ctx));
+                let (id, rx) = self.approvals.request(
+                    approvals::Request {
+                        vault: vault.info.id.clone(),
+                        vault_name: vault.info.name.clone(),
+                        agent: agent_name,
+                        action: format!("host {}", action.as_str()),
+                        page: None,
+                        summary,
+                        diff: None,
+                        session: conn.session.clone(),
+                        tool_title: None,
+                        tool_kind: None,
+                    },
+                    timeout,
+                );
+                let this = Arc::clone(self);
+                let mut closed = conn.closed.clone();
+                let path_given = path;
+                Ok(Box::pin(async move {
+                    let _slot = slot;
+                    let outcome = tokio::select! {
+                        outcome = this.approvals.wait(id, rx, timeout) => outcome,
+                        () = wait_closing(&mut closed) => {
+                            this.approvals.cancel(id);
+                            ApprovalOutcome::Cancelled
+                        }
+                    };
+                    match outcome {
+                        ApprovalOutcome::Approved => {
+                            if *closed.borrow() {
+                                log(true, "cancelled");
+                                return Err(RpcError::new(rpc::CODE_SHUTTING_DOWN, "the agent went away before the action was done"));
+                            }
+                            // The user may have tightened host access while this
+                            // waited, and the path may lead somewhere else now.
+                            let settings = agent::get_host(&this.ctx, &vault.info.id);
+                            let same = host_access::resolve(&path_given, action).ok().as_deref() == Some(real.as_path());
+                            let verdict = if same {
+                                host_access::decide(&settings, &this.host_guard(&vault), &real, action)
+                            } else {
+                                HostDecision::Refuse("the path changed while the request waited".into())
+                            };
+                            if let HostDecision::Refuse(why) = verdict {
+                                log(true, "refused");
+                                return Err(RpcError::new(rpc::CODE_FORBIDDEN, why));
+                            }
+                            let task = tokio::task::spawn_blocking({
+                                let real = real.clone();
+                                move || run_host(&real, &call)
+                            });
+                            let result = task.await.unwrap_or_else(|_| Err(RpcError::failed("the host call crashed")));
+                            log(true, if result.is_ok() { "done" } else { "failed" });
+                            result
+                        }
+                        ApprovalOutcome::Rejected => {
+                            log(false, "rejected");
+                            Err(RpcError::new(rpc::CODE_REJECTED, "the request was rejected by the user; nothing was touched"))
+                        }
+                        ApprovalOutcome::TimedOut => {
+                            log(false, "timed_out");
+                            Err(RpcError::new(
+                                rpc::CODE_TIMED_OUT,
+                                "nobody answered the approval request in time, so it counts as rejected; nothing was touched",
+                            ))
+                        }
+                        ApprovalOutcome::Cancelled => {
+                            log(false, "cancelled");
+                            Err(RpcError::new(
+                                rpc::CODE_SHUTTING_DOWN,
+                                "the request was cancelled before it was approved (the daemon stopped or the agent went away); nothing was touched",
+                            ))
+                        }
+                    }
+                }))
+            }
+        }
     }
 
     fn begin_read(&self, vault: Arc<VaultHandle>, call: Call) -> Fut {
@@ -1022,6 +1190,7 @@ impl Shared {
                         agent: log.agent.clone(),
                         action: action.to_string(),
                         approved: log.approved,
+                        outcome: None,
                     };
                     if let Err(e) = agent::append_change(&ctx, &entry) {
                         eprintln!("cerboid: cannot record an agent change: {e}");
@@ -1061,6 +1230,41 @@ struct AgentLog {
 impl AgentLog {
     fn new(agent: String, approved: bool, session: Option<String>) -> Self {
         Self { agent, approved, session }
+    }
+}
+
+/// Do the file operation of a host call on the resolved path.
+fn run_host(real: &Path, call: &Call) -> OpResult {
+    let done = match call {
+        Call::HostList { .. } => host_access::list_dir(real),
+        Call::HostRead { offset, limit, .. } => host_access::read_file(real, *offset, *limit),
+        Call::HostWrite { content, .. } => host_access::write_file(real, content),
+        _ => return Err(RpcError::failed("not a host call")),
+    };
+    done.map_err(RpcError::failed)
+}
+
+/// Record a host action in the agent change log.
+fn log_host(
+    ctx: &CerboContext,
+    vault: &str,
+    agent: &str,
+    action: HostAction,
+    real: &Path,
+    approved: bool,
+    outcome: &str,
+) {
+    let entry = ChangeEntry {
+        time: approvals::now_secs(),
+        vault: vault.to_string(),
+        page: real.display().to_string(),
+        agent: agent.to_string(),
+        action: format!("host_{}", action.as_str()),
+        approved,
+        outcome: Some(outcome.to_string()),
+    };
+    if let Err(e) = agent::append_change(ctx, &entry) {
+        eprintln!("cerboid: cannot record a host action: {e}");
     }
 }
 

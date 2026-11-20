@@ -493,6 +493,93 @@ pub fn find_vault(ctx: &CerboContext, selector: &str) -> Result<cerbo_core::vaul
         .ok_or_else(|| FindVaultError::NotRegistered(format!("vault not found: {selector} (see `cerbo vault list`)")))
 }
 
+/// The level named on the command line: none, or one of read, auto, approve.
+pub fn parse_level(rest: &[String]) -> Result<Option<AgentPermission>, VaultAgentError> {
+    match rest {
+        [] => Ok(None),
+        [level] => level.parse().map(Some).map_err(VaultAgentError::from),
+        _ => Err(VaultAgentError::from("too many arguments: give one of read, auto, approve, or `host …`".to_string())),
+    }
+}
+
+fn host_json(vault: &cerbo_core::vault::Vault, host: &cerbo_core::host_access::HostSettings) -> serde_json::Value {
+    json!({
+        "vault": vault.id,
+        "name": vault.name,
+        "host": {
+            "enabled": host.enabled,
+            "paths": host.paths.iter().map(|p| json!({"path": p.path, "write": p.write})).collect::<Vec<_>>(),
+        },
+    })
+}
+
+fn print_host(vault: &cerbo_core::vault::Vault, host: &cerbo_core::host_access::HostSettings, json: bool) {
+    if json {
+        println!("{}", host_json(vault, host));
+        return;
+    }
+    println!("{}", if host.enabled { "on" } else { "off" });
+    for p in &host.paths {
+        println!("{}\t{}", if p.write { "write" } else { "read" }, p.path.display());
+    }
+}
+
+/// `cerbo vault agent <vault> host [on|off]`.
+pub fn vault_agent_host(ctx: &CerboContext, vault: &str, rest: &[String], json: bool) -> Result<(), VaultAgentError> {
+    let vault = find_vault(ctx, vault)?;
+    match rest {
+        [] => {}
+        [s] if s == "on" || s == "off" => agent::set_host_enabled(ctx, &vault.id, s == "on")?,
+        _ => return Err(VaultAgentError::from("use `host`, `host on` or `host off`".to_string())),
+    }
+    print_host(&vault, &agent::get_host(ctx, &vault.id), json);
+    Ok(())
+}
+
+/// `cerbo vault agent <vault> host-path add|remove <path> [--write]`.
+pub fn vault_agent_host_path(
+    ctx: &CerboContext,
+    vault: &str,
+    rest: &[String],
+    write: bool,
+    json: bool,
+) -> Result<(), VaultAgentError> {
+    let vault = find_vault(ctx, vault)?;
+    let (verb, path) = match rest {
+        [verb, path] if verb == "add" || verb == "remove" => (verb.as_str(), path.as_str()),
+        _ => return Err(VaultAgentError::from("use `host-path add <path> [--write]` or `host-path remove <path>`".to_string())),
+    };
+    let absolute = std::path::absolute(path).map_err(|e| format!("{path}: {e}"))?;
+    let absolute = absolute.to_string_lossy().into_owned();
+    if verb == "add" {
+        let others = cerbo_core::vault::vault_list(ctx)?
+            .vaults
+            .iter()
+            .filter(|v| v.id != vault.id)
+            .map(|v| std::path::PathBuf::from(&v.path))
+            .collect();
+        let data = std::env::var_os("XDG_DATA_HOME")
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share")));
+        let mut protected = vec![ctx.config_dir.clone(), ctx.cache_dir.clone(), DaemonPaths::for_user(&ctx.cache_dir).dir];
+        protected.extend(data.map(|d| d.join("cerbo")));
+        let guard = agent::host_guard(std::path::PathBuf::from(&vault.path), others, protected);
+        let accepted = cerbo_core::host_access::accept_entry(&absolute, &guard)?;
+        if let Some(warning) = &accepted.warning {
+            eprintln!("Warning: {warning}");
+        }
+        agent::add_host_path(ctx, &vault.id, accepted.path, write)?;
+    } else {
+        let real = std::fs::canonicalize(&absolute).unwrap_or_else(|_| std::path::PathBuf::from(&absolute));
+        if !agent::remove_host_path(ctx, &vault.id, &real)? {
+            return Err(VaultAgentError::from(format!("{} is not on the list", real.display())));
+        }
+    }
+    print_host(&vault, &agent::get_host(ctx, &vault.id), json);
+    Ok(())
+}
+
 pub fn vault_agent(
     ctx: &CerboContext,
     vault: &str,
