@@ -54,6 +54,20 @@ pub(super) fn normalise(v: &mut [f32]) {
     }
 }
 
+/// Threads ONNX Runtime may use. fastembed's default is every core, which
+/// starves the desktop's UI thread while a saved page is re-embedded and made
+/// typing stutter. A quarter of the cores, between 1 and 2, keeps the UI free
+/// at the price of a slower background index. `CERBO_EMBED_THREADS` overrides
+/// it (the CLI's bulk `reindex` can ask for all cores).
+#[cfg(feature = "embeddings")]
+fn embed_threads() -> usize {
+    if let Some(n) = std::env::var("CERBO_EMBED_THREADS").ok().and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 0) {
+        return n;
+    }
+    let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+    (cores / 4).clamp(1, 2)
+}
+
 /// The pinned `multilingual-e5-small` through fastembed, with mean pooling and
 /// the model's 512-token window.
 #[cfg(feature = "embeddings")]
@@ -95,7 +109,9 @@ impl FastEmbedder {
             tokenizer_config_file: read(MODEL_TOKENIZER_CONFIG)?,
         };
         let model = UserDefinedEmbeddingModel::new(read(MODEL_ONNX)?, tokenizer_files).with_pooling(Pooling::Mean);
-        let options = InitOptionsUserDefined::new().with_max_length(MODEL_MAX_TOKENS);
+        let options = InitOptionsUserDefined::new()
+            .with_max_length(MODEL_MAX_TOKENS)
+            .with_intra_threads(embed_threads());
 
         // ONNX Runtime is loaded from ORT_DYLIB_PATH here; a missing or too old
         // library may panic inside `ort` rather than return an error.

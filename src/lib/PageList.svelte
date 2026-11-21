@@ -53,6 +53,11 @@
   import { dropPlacement, dropZone, passedThreshold, rootPlacement, type DropZone } from './tree-drag';
   import RowMenu, { type RowMenuItem } from './RowMenu.svelte';
 
+  // Row buttons show on hover only; a touch screen has no hover, so it gets
+  // none of them (three buttons and icons per row less to build). The row's
+  // context menu offers the same actions.
+  const canHover = typeof matchMedia === 'function' && matchMedia('(hover: hover)').matches;
+
   const tree = $derived(pageTree());
   const rows = $derived(flattenVisible(tree, new Set(app.collapsedFolders)));
 
@@ -451,6 +456,7 @@
               {#if row.expanded}<FolderOpen size={14} class="opacity-70" />{:else}<Folder size={14} class="opacity-70" />{/if}
               <span class="label">{row.name}</span>
             </button>
+            {#if canHover}
             <div class="page-actions">
               <button
                 class="icon-btn small"
@@ -467,6 +473,7 @@
                 <Pencil size={12} />
               </button>
             </div>
+            {/if}
           </li>
         {:else}
           <li
@@ -492,6 +499,7 @@
               <FileText size={14} class="opacity-70" />
               <span class="label">{row.title}</span>
             </button>
+            {#if canHover}
             <div class="page-actions">
               <button
                 class="icon-btn small"
@@ -515,6 +523,7 @@
                 <Trash2 size={12} />
               </button>
             </div>
+            {/if}
           </li>
         {/if}
       {/each}
@@ -577,6 +586,12 @@
     border-radius: 0.375rem;
     padding: 0;
     margin-bottom: 0.0625rem;
+  }
+  @media (pointer: coarse) {
+    .row-btn { padding-top: 0.75rem; padding-bottom: 0.75rem; }
+    /* Rows off screen are not laid out or painted: a long vault opens fast.
+       Touch only: paint containment would clip the mouse drop lines. */
+    .item { content-visibility: auto; contain-intrinsic-size: auto 2.75rem; }
   }
   .item:hover .icon-btn.small { opacity: 1; }
   .item.active,

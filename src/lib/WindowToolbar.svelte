@@ -468,6 +468,35 @@
     width: 36px;
   }
 
+  /* Touch screens: 44px targets in a 52px bar (`--titlebar-height`). */
+  @media (pointer: coarse) {
+    .window-toolbar {
+      font-size: 0.9375rem;
+      padding-left: 0.5rem;
+      gap: 0.25rem;
+    }
+    .tb-btn,
+    .window-toolbar.narrow .tb-btn {
+      height: var(--tap-target);
+      padding: 0 0.6rem;
+    }
+    .tb-btn.icon,
+    .window-toolbar.narrow .tb-btn.icon {
+      width: var(--tap-target);
+      padding: 0;
+    }
+    .segment {
+      line-height: var(--tap-target);
+    }
+    .search-field {
+      height: 40px;
+    }
+    .window-toolbar.narrow .tb-close,
+    .tb-close {
+      width: 52px;
+    }
+  }
+
   .close-sep {
     flex-shrink: 0;
     width: 1px;

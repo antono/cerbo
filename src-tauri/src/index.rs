@@ -7,12 +7,17 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Quiet time after the last file event before the index catches up, so one
 /// save (several files, temp file plus rename) becomes one index update.
 const DEBOUNCE: Duration = Duration::from_millis(300);
+/// How often changed pages are embedded in the background. The graph (links,
+/// backlinks) follows every save within [`DEBOUNCE`]; the model is expensive,
+/// so saved pages are only marked dirty and embedded together at most this
+/// often, at a moment the vault is quiet.
+const EMBED_INTERVAL: Duration = Duration::from_secs(10 * 60);
 /// Pause before retrying a catch-up that failed, e.g. while the CLI holds the
 /// index.
 const RETRY_DELAY: Duration = Duration::from_secs(2);
@@ -256,11 +261,18 @@ fn index_worker(
 ) {
     let mut pending: Vec<String> = Vec::new();
     let mut failed = false;
+    // Pages saved since the last embedding pass, and when the next one is due.
+    let mut embed_dirty = false;
+    let mut next_embed = Instant::now() + EMBED_INTERVAL;
     loop {
         if !full_scan_needed.load(Ordering::SeqCst) && pending.is_empty() {
-            match rx.recv() {
+            match rx.recv_timeout(next_embed.saturating_duration_since(Instant::now())) {
                 Ok(event) => collect(event, &mut pending, &full_scan_needed),
-                Err(_) => return,
+                Err(RecvTimeoutError::Timeout) => {
+                    embed_if_dirty(&app, &vault_ctx, &mut embed_dirty, &mut next_embed);
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => return,
             }
         }
         // Debounce: keep collecting until the vault is quiet.
@@ -301,7 +313,30 @@ fn index_worker(
             full_scan_needed.store(true, Ordering::SeqCst);
             failed = true;
             std::thread::sleep(RETRY_DELAY);
+        } else {
+            // The pages are in the graph; their vectors wait for the next pass.
+            embed_dirty = true;
+            // A busy stretch of saves can keep the worker from ever idling in
+            // the wait above, so the pass is also checked here.
+            if Instant::now() >= next_embed {
+                embed_if_dirty(&app, &vault_ctx, &mut embed_dirty, &mut next_embed);
+            }
         }
+    }
+}
+
+/// The periodic embedding pass: when pages were saved since the last one, embed
+/// them (a vault without embeddings is left alone), and schedule the next pass
+/// [`EMBED_INTERVAL`] from now. A failure is printed and the pages stay dirty,
+/// to be retried at the next pass.
+fn embed_if_dirty(app: &AppHandle, vault_ctx: &VaultContext, dirty: &mut bool, next: &mut Instant) {
+    *next = Instant::now() + EMBED_INTERVAL;
+    if !*dirty {
+        return;
+    }
+    match crate::semantic::refresh_embeddings_quietly(app, vault_ctx) {
+        Ok(_) => *dirty = false,
+        Err(e) => eprintln!("Warning: background embedding failed, retrying in {EMBED_INTERVAL:?}: {e}"),
     }
 }
 

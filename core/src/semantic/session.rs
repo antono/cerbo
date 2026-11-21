@@ -41,11 +41,16 @@ pub struct IndexOptions<'a> {
     pub progress: Progress<'a>,
     /// Progress of an embedding refresh, as `(done, total)` pages.
     pub embed_progress: EmbedProgress<'a>,
+    /// Re-embed changed pages before a `search` or `similar` answers (the
+    /// default, as the CLI wants). The desktop sets it to false: answers then
+    /// use the vectors as they are, and a background pass embeds the changed
+    /// pages later, so opening a page never waits for the model.
+    pub refresh_embeddings: bool,
 }
 
 impl Default for IndexOptions<'_> {
     fn default() -> Self {
-        Self { lock_timeout: LOCK_TIMEOUT, progress: None, embed_progress: None }
+        Self { lock_timeout: LOCK_TIMEOUT, progress: None, embed_progress: None, refresh_embeddings: true }
     }
 }
 

@@ -29,6 +29,8 @@
   let floatingOpen = $derived(app.widthClass === 'medium' && app.overlay === 'right' && !!app.currentUuid);
   let sheetOpen = $derived(narrow && app.overlay === 'right' && !!app.currentUuid);
   let anyOpen = $derived(drawerOpen || floatingOpen || sheetOpen);
+  // The drawer's page list appears once the slide-in has finished.
+  let drawerListReady = $state(false);
 
   function runVault() {
     const action = vault ? vaultSwitch : vaultAdd;
@@ -73,6 +75,8 @@
     aria-label="Page tree"
     style="width: min({app.sidebarWidth}px, calc(100% - 48px));"
     transition:fly={{ x: -280, duration: 160 }}
+    onintroend={() => (drawerListReady = true)}
+    onoutrostart={() => (drawerListReady = false)}
   >
     <div class="drawer-top">
       <button
@@ -98,7 +102,9 @@
       </button>
     </div>
     <div class="drawer-list">
-      {#if vault}
+      <!-- Mounted after the slide-in ends: building every row inside the
+           animation blocks its first frames, which looked like a slow drawer. -->
+      {#if vault && drawerListReady}
         <PageList />
       {/if}
     </div>
@@ -141,10 +147,14 @@
     position: absolute;
     z-index: 70;
     background: var(--sidebar-bg);
-    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+    /* A small shadow: a 28px blur repaints on every frame of the slide. */
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    /* Own compositor layer for the slide, and no layout leaking out of it. */
+    will-change: transform;
+    contain: layout paint;
   }
 
   .tree-drawer {
@@ -220,6 +230,17 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  @media (pointer: coarse) {
+    .drawer-btn {
+      height: 44px;
+    }
+    .drawer-btn.icon {
+      width: 44px;
+    }
   }
 
   .right-float {

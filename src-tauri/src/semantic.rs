@@ -9,7 +9,7 @@ use cerbo_core::prefix_map::PrefixMap;
 use cerbo_core::semantic::model::{self, ModelFile};
 use cerbo_core::semantic::{
     self as core_semantic, Embedder, EmbeddingRefresh, FastEmbedder, IndexOptions, LazyEmbedder,
-    QueryOutput, SearchHit, SearchOptions, SemanticError,
+    QueryOutput, SearchHit, SearchOptions, SemanticError, SemanticIndex,
 };
 use cerbo_core::VaultContext;
 use serde::Serialize;
@@ -189,6 +189,23 @@ async fn blocking<T: Send + 'static>(
         .map_err(|e| SemanticCommandError::Unavailable { message: e.to_string() })?
 }
 
+/// Embed the pages changed since their last embedding, for the index worker's
+/// periodic pass. Only for a vault that already has embeddings (the user
+/// enabled them, so the model is on disk); silent: no progress events, no
+/// download. Returns whether a pass ran.
+pub(crate) fn refresh_embeddings_quietly(app: &AppHandle, vault_ctx: &VaultContext) -> Result<bool, SemanticError> {
+    let enabled = SemanticIndex::open_existing(vault_ctx, IndexOptions::default())?.is_some_and(|i| i.has_embeddings());
+    if !enabled {
+        return Ok(false);
+    }
+    let gate = app.state::<IndexGate>();
+    let _turn = gate.hold();
+    let quiet: Report = Arc::new(|_| {});
+    let mut embedder = embedder(vault_ctx.global.cache_dir.clone(), quiet);
+    core_semantic::refresh_embeddings(vault_ctx, &mut embedder, IndexOptions::default())?;
+    Ok(true)
+}
+
 /// The embedder of `cerbo similar` and `cerbo index --embeddings`, loaded on
 /// first use, which also reports the one-time model download.
 fn embedder(cache_dir: PathBuf, report: Report) -> LazyEmbedder {
@@ -240,7 +257,13 @@ pub async fn similar_get(
         let report = reporter(&app);
         let embed_report = Arc::clone(&report);
         let on_embed = move |done: usize, total: usize| embed_events(done, total).into_iter().for_each(|p| embed_report(p));
-        let options = IndexOptions { embed_progress: Some(&on_embed), ..IndexOptions::default() };
+        // Opening a page must not wait for the model: changed pages are
+        // embedded by the background pass (`refresh_embeddings_quietly`).
+        let options = IndexOptions {
+            embed_progress: Some(&on_embed),
+            refresh_embeddings: false,
+            ..IndexOptions::default()
+        };
         let search = SearchOptions { limit: similar_limit(limit), ..SearchOptions::default() };
         let mut embedder = embedder(vault_ctx.global.cache_dir.clone(), report);
         let notes = core_semantic::similar(&vault_ctx, &uuid, &search, &mut embedder, options)?;

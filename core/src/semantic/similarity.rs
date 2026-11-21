@@ -475,6 +475,12 @@ fn open_refreshed(
     if !index.has_embeddings() {
         return Err(SemanticError::NoEmbeddings);
     }
+    if !options.refresh_embeddings {
+        // Pages changed since their last embedding keep their old vectors (or
+        // have none yet) until the next refresh.
+        let vectors = index.load_vectors(embedder.dim());
+        return Ok((index, vectors));
+    }
     let (_, vectors) = index.refresh(embedder, options.embed_progress)?;
     Ok((index, vectors))
 }
@@ -960,6 +966,30 @@ mod tests {
         let err = search(&vault.ctx, "city", &unknown, &mut mock, IndexOptions::default()).unwrap_err();
         assert!(matches!(err, SemanticError::InvalidFilter(_)), "{err:?}");
         assert!(err.to_string().contains("nope:"), "{err}");
+    }
+
+    #[test]
+    fn similar_without_refresh_embeds_nothing_until_the_next_refresh() {
+        let mut vault = Vault::new();
+        let a = vault.page("Berlin", "Berlin museums and the Spree");
+        let b = vault.page("Berlin", "Berlin museums and the Spree river");
+        let mut mock = MockEmbedder::default();
+        vault.refresh(&mut mock);
+        // A page saved after the last embedding pass, and a new one.
+        fs::write(vault.ctx.object_path(&a).join("page.md"), "Sourdough starter").unwrap();
+        let fresh = vault.page("New", "Brand new page");
+        mock.embedded.clear();
+
+        let lazy = IndexOptions { refresh_embeddings: false, ..IndexOptions::default() };
+        let hits = similar(&vault.ctx, &b, &SearchOptions::default(), &mut mock, lazy).unwrap();
+        assert!(mock.embedded.is_empty(), "no text may be embedded: {:?}", mock.embedded);
+        // The new page has no vector yet, so it is not among the answers.
+        assert!(!uuids(&hits).contains(&fresh.as_str()));
+        assert_eq!(similar(&vault.ctx, &fresh, &SearchOptions::default(), &mut mock, lazy).unwrap().len(), 0);
+
+        // The background pass embeds both changed pages.
+        let report = vault.refresh(&mut mock);
+        assert_eq!(report.embedded, 2);
     }
 
     #[test]
