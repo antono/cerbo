@@ -4,6 +4,7 @@
    * Approve / Reject. After an answer the card shows the outcome.
    */
   import { diffLines, type FeedItem } from './feed';
+  import { ACTION_LABELS as OTHER_ACTION_LABELS } from './host';
   import type { ApprovalOutcome } from './types';
 
   let {
@@ -40,7 +41,7 @@
   };
 
   let heading = $derived(
-    isTool ? `${ACTION_LABEL.tool}: ${approval.tool_title ?? approval.summary}` : (ACTION_LABEL[approval.action] ?? approval.action),
+    isTool ? `${ACTION_LABEL.tool}: ${approval.tool_title ?? approval.summary}` : (ACTION_LABEL[approval.action] ?? OTHER_ACTION_LABELS[approval.action] ?? approval.action),
   );
 
   async function answer(approve: boolean) {

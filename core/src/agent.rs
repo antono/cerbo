@@ -194,6 +194,35 @@ pub fn remove_host_path(ctx: &CerboContext, vault_id: &str, path: &std::path::Pa
     Ok(removed)
 }
 
+/// Allow `path` for `vault_id` the way a user does it (the CLI and the app):
+/// resolve it, refuse the places that are never reachable, store it, and say
+/// when the entry is very wide. The guard is built here, from the machine's
+/// own places and the other registered vaults.
+pub fn add_host_path_checked(
+    ctx: &CerboContext,
+    vault_id: &str,
+    path: &str,
+    write: bool,
+) -> Result<crate::host_access::Accepted, String> {
+    let vaults = crate::vault::vault_list(ctx)?.vaults;
+    let own = vaults.iter().find(|v| v.id == vault_id).ok_or_else(|| format!("vault not found: {vault_id}"))?;
+    let others = vaults.iter().filter(|v| v.id != vault_id).map(|v| PathBuf::from(&v.path)).collect();
+    let data = std::env::var_os("XDG_DATA_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
+    let mut protected = vec![
+        ctx.config_dir.clone(),
+        ctx.cache_dir.clone(),
+        crate::daemon_paths::DaemonPaths::for_user(&ctx.cache_dir).dir,
+    ];
+    protected.extend(data.map(|d| d.join("cerbo")));
+    let guard = host_guard(PathBuf::from(&own.path), others, protected);
+    let accepted = crate::host_access::accept_entry(path, &guard)?;
+    add_host_path(ctx, vault_id, accepted.path.clone(), write)?;
+    Ok(accepted)
+}
+
 /// What decides which places are never reachable on this machine, other than
 /// the daemon's own directories: the other vaults' roots and the home folder.
 pub fn host_guard(vault_root: PathBuf, other_vaults: Vec<PathBuf>, protected: Vec<PathBuf>) -> Guard {

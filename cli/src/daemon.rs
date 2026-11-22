@@ -552,24 +552,10 @@ pub fn vault_agent_host_path(
     let absolute = std::path::absolute(path).map_err(|e| format!("{path}: {e}"))?;
     let absolute = absolute.to_string_lossy().into_owned();
     if verb == "add" {
-        let others = cerbo_core::vault::vault_list(ctx)?
-            .vaults
-            .iter()
-            .filter(|v| v.id != vault.id)
-            .map(|v| std::path::PathBuf::from(&v.path))
-            .collect();
-        let data = std::env::var_os("XDG_DATA_HOME")
-            .filter(|v| !v.is_empty())
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/share")));
-        let mut protected = vec![ctx.config_dir.clone(), ctx.cache_dir.clone(), DaemonPaths::for_user(&ctx.cache_dir).dir];
-        protected.extend(data.map(|d| d.join("cerbo")));
-        let guard = agent::host_guard(std::path::PathBuf::from(&vault.path), others, protected);
-        let accepted = cerbo_core::host_access::accept_entry(&absolute, &guard)?;
+        let accepted = agent::add_host_path_checked(ctx, &vault.id, &absolute, write)?;
         if let Some(warning) = &accepted.warning {
             eprintln!("Warning: {warning}");
         }
-        agent::add_host_path(ctx, &vault.id, accepted.path, write)?;
     } else {
         let real = std::fs::canonicalize(&absolute).unwrap_or_else(|_| std::path::PathBuf::from(&absolute));
         if !agent::remove_host_path(ctx, &vault.id, &real)? {

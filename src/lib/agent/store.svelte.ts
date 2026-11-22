@@ -24,6 +24,7 @@ import {
   type ConnectionPayload,
 } from './events';
 import { buildSessionView, mergeEvents, type SessionView } from './feed';
+import { NO_HOST_ACCESS, parseHostAccess, type HostAccess } from './host';
 import { parsePermission, type AgentPermission } from './permission';
 import { deriveAgentStatus, panelView, pickAgent, type Connection } from './status';
 import type { AgentInfo, AgentKind, ApprovalInfo, PageRef, SessionEvent, SessionInfo } from './types';
@@ -85,6 +86,10 @@ export class AgentStore {
   /** Approvals waiting, of every vault. */
   pending = $state.raw<ApprovalInfo[]>([]);
   permission = $state.raw<AgentPermission>('read');
+  /** Host access of the open vault: files outside it. Off until the registry says otherwise. */
+  host = $state.raw<HostAccess>(NO_HOST_ACCESS);
+  /** A warning from the last allowed path (a very wide entry), shown until the next action. */
+  hostWarning = $state.raw<string | null>(null);
   /** The last failure to show in the panel, cleared by the next action. */
   error = $state.raw<string | null>(null);
   /** A session is being created or loaded. */
@@ -238,9 +243,12 @@ export class AgentStore {
     this.activeId = null;
     this.eventsBySession = {};
     this.permission = 'read';
+    this.host = NO_HOST_ACCESS;
+    this.hostWarning = null;
     this.syncStatus();
     if (!vault) return;
     await this.loadPermission(vault, epoch);
+    await this.loadHost(vault, epoch);
     if (this.connection.state !== 'connected') return;
     try {
       const sessions = await call<SessionInfo[]>('session_list', { vault });
@@ -259,6 +267,16 @@ export class AgentStore {
     try {
       const level = await call<string>('vault_agent_permission_get', { vaultId: vault });
       if (epoch === this.#epoch) this.permission = parsePermission(level);
+    } catch (e) {
+      if (epoch === this.#epoch) this.error = errorText(e);
+    }
+  }
+
+  async loadHost(vault = this.#vault, epoch = this.#epoch): Promise<void> {
+    if (!vault) return;
+    try {
+      const host = parseHostAccess(await call('vault_agent_host_get', { vaultId: vault }));
+      if (epoch === this.#epoch) this.host = host;
     } catch (e) {
       if (epoch === this.#epoch) this.error = errorText(e);
     }
@@ -443,6 +461,34 @@ export class AgentStore {
     } catch (e) {
       this.error = errorText(e);
     }
+  }
+
+  /** Run a host access command of the open vault and take the setting it answers. */
+  async #hostCommand(command: string, args: Record<string, unknown>): Promise<void> {
+    const vault = this.#vault;
+    if (!vault) return;
+    this.error = null;
+    this.hostWarning = null;
+    try {
+      const answer = await call<Record<string, unknown>>(command, { vaultId: vault, ...args });
+      this.host = parseHostAccess(answer);
+      const warning = answer?.warning;
+      this.hostWarning = typeof warning === 'string' ? warning : null;
+    } catch (e) {
+      this.error = errorText(e);
+    }
+  }
+
+  setHostEnabled(enabled: boolean): Promise<void> {
+    return this.#hostCommand('vault_agent_host_set_enabled', { enabled });
+  }
+
+  addHostPath(path: string, write: boolean): Promise<void> {
+    return this.#hostCommand('vault_agent_host_path_add', { path, write });
+  }
+
+  removeHostPath(path: string): Promise<void> {
+    return this.#hostCommand('vault_agent_host_path_remove', { path });
   }
 
   // ── Live events ────────────────────────────────────────────────────────────

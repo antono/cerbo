@@ -80,6 +80,7 @@ beforeEach(async () => {
   commands.agent_list = () => AGENTS;
   commands.approval_list = () => [];
   commands.vault_agent_permission_get = () => 'approve';
+  commands.vault_agent_host_get = () => ({ enabled: false, paths: [] });
   commands.session_list = () => [session('s1')];
   commands.session_events = () => log({ type: 'state', state: 'idle' });
   store = new AgentStore();
@@ -232,6 +233,47 @@ describe('AgentStore', () => {
     await store.setPermission('auto');
     expect(store.permission).toBe('auto');
     expect(calls.at(-1)).toEqual({ command: 'vault_agent_permission_set', args: { vaultId: 'v1', level: 'auto' } });
+  });
+
+  it('loads host access with the vault and keeps it off when the registry cannot say', async () => {
+    expect(store.host).toEqual({ enabled: false, paths: [] });
+    commands.vault_agent_host_get = () => ({ enabled: true, paths: [{ path: '/data/out', write: true }] });
+    await store.loadHost();
+    expect(store.host).toEqual({ enabled: true, paths: [{ path: '/data/out', write: true }] });
+    commands.vault_agent_host_get = () => 'garbage';
+    await store.loadHost();
+    expect(store.host).toEqual({ enabled: false, paths: [] });
+  });
+
+  it('turns host access on, adds and removes a path through the registry calls', async () => {
+    commands.vault_agent_host_set_enabled = (args) => ({ enabled: args.enabled, paths: [] });
+    await store.setHostEnabled(true);
+    expect(store.host.enabled).toBe(true);
+    expect(calls.at(-1)).toEqual({ command: 'vault_agent_host_set_enabled', args: { vaultId: 'v1', enabled: true } });
+
+    commands.vault_agent_host_path_add = (args) => ({
+      enabled: true,
+      paths: [{ path: args.path, write: args.write }],
+      warning: 'covers your whole home folder',
+    });
+    await store.addHostPath('/home/me', true);
+    expect(store.host.paths).toEqual([{ path: '/home/me', write: true }]);
+    expect(store.hostWarning).toMatch(/home folder/);
+    expect(calls.at(-1)).toEqual({ command: 'vault_agent_host_path_add', args: { vaultId: 'v1', path: '/home/me', write: true } });
+
+    commands.vault_agent_host_path_remove = () => ({ enabled: true, paths: [] });
+    await store.removeHostPath('/home/me');
+    expect(store.host.paths).toEqual([]);
+    expect(store.hostWarning).toBeNull();
+  });
+
+  it('shows a refused path as the panel error and leaves the list alone', async () => {
+    commands.vault_agent_host_path_add = () => {
+      throw 'cannot allow /home/me/.ssh: it holds credentials';
+    };
+    await store.addHostPath('/home/me/.ssh', false);
+    expect(store.error).toMatch(/credentials/);
+    expect(store.host).toEqual({ enabled: false, paths: [] });
   });
 
   it('keeps the open session on reconnect and refetches only after its last seq', async () => {

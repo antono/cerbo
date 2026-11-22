@@ -11,6 +11,7 @@
   import AgentFeed from './agent/AgentFeed.svelte';
   import AgentHeader from './agent/AgentHeader.svelte';
   import EmptyState from './agent/EmptyState.svelte';
+  import HostAccessControl from './agent/HostAccessControl.svelte';
   import PermissionControl from './agent/PermissionControl.svelte';
   import SessionsList from './agent/SessionsList.svelte';
 
@@ -54,6 +55,13 @@
 
   {#if store.panelView === 'ready'}
     <PermissionControl value={store.permission} onChange={(level) => store.setPermission(level)} />
+    <HostAccessControl
+      host={store.host}
+      warning={store.hostWarning}
+      onEnable={(enabled) => store.setHostEnabled(enabled)}
+      onAdd={(path, write) => store.addHostPath(path, write)}
+      onRemove={(path) => store.removeHostPath(path)}
+    />
     {#if warning}
       <p class="warning" data-testid="agent-sandbox-warning" role="alert">{warning}</p>
     {/if}

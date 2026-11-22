@@ -29,9 +29,9 @@
 
 ## 5. App
 
-- [ ] 5.1 Add host access controls and the path list to the agent settings
-- [ ] 5.2 Show the "host access on" marker and list in the agent panel
-- [ ] 5.3 Show host approval cards with real path, action and diff or size
+- [x] 5.1 Add host access controls and the path list to the agent settings
+- [x] 5.2 Show the "host access on" marker and list in the agent panel
+- [x] 5.3 Show host approval cards with real path, action and diff or size
 
 ## 6. Tests and docs
 
@@ -39,3 +39,11 @@
 - [x] 6.2 Test that tightening applies on the next call and rejects pending requests
 - [x] 6.3 Ontology tool tests: add type then resolve an annotation; duplicate; imported ontology refused
 - [x] 6.4 Update `docs/` with the host access explanation and run `openspec validate`
+
+## 7. Index, trash and ontology import tools
+
+- [x] 7.1 Core: `trash` module (list, restore the newest entry, refuse live UUIDs) and `ontology::import` with `check_import`, with unit tests
+- [x] 7.2 RPC calls and daemon handlers for index status and rebuild, trash list and restore, ontology import; imports always ask and are checked before the card
+- [x] 7.3 MCP tools `index_status`, `index_rebuild`, `list_trash`, `restore_page`, `ontology_import`; extend the management and ontology guides
+- [x] 7.4 Integration tests: restore after delete, index status, import asks in an auto vault and refuses a local file
+- [x] 7.5 Update the man page and `docs/` for the new tools

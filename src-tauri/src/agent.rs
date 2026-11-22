@@ -398,6 +398,61 @@ pub fn vault_agent_permission_set(
     Ok(agent_registry::get_permission(&ctx, &vault_id).as_str().to_string())
 }
 
+/// The host access of a vault, as the app shows it: `{enabled, paths: [{path,
+/// write}]}`. Read from the registry file; the daemon looks at it on every
+/// host call.
+#[tauri::command]
+pub fn vault_agent_host_get(app: AppHandle, vault_id: String) -> Result<Value, CommandError> {
+    let ctx = get_context(&app)?;
+    known_vault(&ctx, &vault_id)?;
+    Ok(host_json(&agent_registry::get_host(&ctx, &vault_id)))
+}
+
+/// Turn host access of a vault on or off; the list is kept. Answers the
+/// setting now in force.
+#[tauri::command]
+pub fn vault_agent_host_set_enabled(app: AppHandle, vault_id: String, enabled: bool) -> Result<Value, CommandError> {
+    let ctx = get_context(&app)?;
+    known_vault(&ctx, &vault_id)?;
+    agent_registry::set_host_enabled(&ctx, &vault_id, enabled)?;
+    Ok(host_json(&agent_registry::get_host(&ctx, &vault_id)))
+}
+
+/// Allow a path (`write` lets the agent write there, not only read). Answers
+/// the setting and, for a very wide entry, a `warning`.
+#[tauri::command]
+pub fn vault_agent_host_path_add(
+    app: AppHandle,
+    vault_id: String,
+    path: String,
+    write: bool,
+) -> Result<Value, CommandError> {
+    let ctx = get_context(&app)?;
+    known_vault(&ctx, &vault_id)?;
+    let accepted = agent_registry::add_host_path_checked(&ctx, &vault_id, path.trim(), write)?;
+    let mut out = host_json(&agent_registry::get_host(&ctx, &vault_id));
+    out["warning"] = accepted.warning.map_or(Value::Null, Value::String);
+    Ok(out)
+}
+
+/// Stop allowing a path. Answers the setting now in force.
+#[tauri::command]
+pub fn vault_agent_host_path_remove(app: AppHandle, vault_id: String, path: String) -> Result<Value, CommandError> {
+    let ctx = get_context(&app)?;
+    known_vault(&ctx, &vault_id)?;
+    let given = std::path::PathBuf::from(&path);
+    let real = std::fs::canonicalize(&given).unwrap_or(given);
+    agent_registry::remove_host_path(&ctx, &vault_id, &real)?;
+    Ok(host_json(&agent_registry::get_host(&ctx, &vault_id)))
+}
+
+fn host_json(host: &cerbo_core::host_access::HostSettings) -> Value {
+    serde_json::json!({
+        "enabled": host.enabled,
+        "paths": host.paths.iter().map(|p| serde_json::json!({ "path": p.path, "write": p.write })).collect::<Vec<_>>(),
+    })
+}
+
 fn known_vault(ctx: &cerbo_core::CerboContext, vault_id: &str) -> Result<(), CommandError> {
     cerbo_core::vault::get_vault_path(ctx, vault_id)
         .map(|_| ())

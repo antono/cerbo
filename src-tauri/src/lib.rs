@@ -173,6 +173,10 @@ pub fn run() {
             agent::approval_answer,
             agent::vault_agent_permission_get,
             agent::vault_agent_permission_set,
+            agent::vault_agent_host_get,
+            agent::vault_agent_host_set_enabled,
+            agent::vault_agent_host_path_add,
+            agent::vault_agent_host_path_remove,
             agent::daemon_status,
             agent::daemon_retry,
             // vault
