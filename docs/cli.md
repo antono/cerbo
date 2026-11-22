@@ -160,7 +160,7 @@ is in the agent change log (`cerbo approvals log`). Host access reduces isolatio
 list your home folder. The full rules are in `man cerbo`, section AGENT PERMISSIONS.
 
 An agent can also extend your vocabulary: with permission it creates a vocabulary owned by the vault and adds types
-to it (`ontology_create`, `ontology_add_type`), after looking at what exists (`ontology_list`, `ontology_types`).
+to it (`ontology_create`, `ontology_add_type`), after looking at what exists (`ontology_list`, `ontology_types`). It can import an ontology from a URL (`ontology_import`, which always asks you first, even in an `auto` vault), check and rebuild the index (`index_status`, `index_rebuild`) and restore a page you or it deleted (`list_trash`, `restore_page`).
 Its `guide` tool explains the method in three parts (`usage`, `management`, `ontology`), also served as the resources `cerbo://guide/<topic>`; the same texts are the skills `.agents/skills/cerbo-mcp-<topic>/SKILL.md`.
 
 ## Utilities

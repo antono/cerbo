@@ -249,6 +249,84 @@ pub fn add_type(
     Ok(json!({"iri": iri.as_str(), "existing": false, "prefix": prefix, "name": name}))
 }
 
+/// Largest ontology file an import takes, in bytes.
+const IMPORT_MAX_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Fetch `url` with curl: http and https only (also after a redirect), a size
+/// limit and a time limit, so a bad address cannot read a local file or hold
+/// the vault's write queue.
+fn fetch_url(url: &str) -> Result<String, String> {
+    let output = std::process::Command::new("curl")
+        .args(["-sS", "-L", "--fail", "--max-time", "30", "--max-filesize"])
+        .arg(IMPORT_MAX_BYTES.to_string())
+        .args(["--proto", "=http,https", "--proto-redir", "=http,https"])
+        .arg(url)
+        .output()
+        .map_err(|e| format!("cannot run curl: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("cannot fetch {url}: {}", String::from_utf8_lossy(&output.stderr).trim()));
+    }
+    String::from_utf8(output.stdout).map_err(|_| format!("{url} is not UTF-8 text"))
+}
+
+/// Import an ontology file from `url` as an Ontology object. With
+/// `registration` (`prefix`, `namespace`) the prefix is added to the vault's
+/// map; both or neither. The object is an imported one: it never accepts
+/// types added by [`add_type`].
+pub fn import(ctx: &CerboContext, url: &str, registration: Option<(&str, &str)>) -> Result<Value, String> {
+    import_with(ctx, url, registration, fetch_url)
+}
+
+/// What an import needs to be true before anything is fetched or anyone is
+/// asked: an http or https address, a valid prefix and namespace that are not
+/// in use. The daemon calls it before it shows an approval.
+pub fn check_import(ctx: &CerboContext, url: &str, registration: Option<(&str, &str)>) -> Result<(), String> {
+    let url = url.trim();
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err(format!("only http and https addresses can be imported, not {url:?}"));
+    }
+    if let Some((prefix, namespace)) = registration {
+        prefix_map::validate_registration(prefix, namespace)?;
+        let map = PrefixMap::load(&ctx.config_dir)?;
+        if map.prefixes.contains_key(prefix) || prefix_map::builtin_namespace(prefix).is_some() {
+            return Err(format!("the prefix {prefix:?} is already in use"));
+        }
+    }
+    Ok(())
+}
+
+fn import_with(
+    ctx: &CerboContext,
+    url: &str,
+    registration: Option<(&str, &str)>,
+    fetch: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<Value, String> {
+    check_import(ctx, url, registration)?;
+    let url = url.trim();
+    let body = fetch(url)?;
+    let uuid = Uuid::new_v4().to_string();
+    let dir = object_path(ctx, &uuid);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let meta = ObjectMeta {
+        object_type: ObjectType::Ontology,
+        title: format!("Ontology: {url}"),
+        created: now.clone(),
+        modified: now,
+        original_url: Some(url.to_string()),
+        mime_type: Some("text/markdown".to_string()),
+        slug: None,
+        virtual_path: None,
+    };
+    crate::fsio::write_atomic_str(&dir.join("meta.ttl"), &meta.to_turtle(&uuid)).map_err(|e| format!("meta.ttl: {e}"))?;
+    crate::fsio::write_atomic_str(&dir.join("page.md"), &body).map_err(|e| format!("page.md: {e}"))?;
+    if let Some((prefix, namespace)) = registration {
+        prefix_map::register_prefix(&ctx.config_dir, prefix, namespace, Some(&uuid))?;
+    }
+    crate::object::sync_index(ctx, &uuid);
+    Ok(json!({ "uuid": uuid, "url": url, "prefix": registration.map(|r| r.0), "namespace": registration.map(|r| r.1) }))
+}
+
 fn ontology_page(title: &str, namespace: &str, declared: &[Value]) -> String {
     let mut out = format!("# {title}\n\nA vocabulary owned by this vault.\n\nNamespace: `{namespace}`\n\n## Types\n\n");
     if declared.is_empty() {
@@ -372,6 +450,47 @@ mod tests {
         for bad in ["", "1x", "a b", "a/b", "é"] {
             assert!(add_type(&ctx, "ex", bad, None, None, None).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn an_import_registers_the_prefix_and_never_accepts_types() {
+        let (_tmp, ctx) = ctx();
+        let done = import_with(&ctx, "https://example.org/vocab.ttl", Some(("ex", "https://example.org/vocab#")), |url| {
+            assert_eq!(url, "https://example.org/vocab.ttl");
+            Ok("@prefix ex: <https://example.org/vocab#> .\n".to_string())
+        })
+        .unwrap();
+        let map = PrefixMap::load(&ctx.config_dir).unwrap();
+        assert_eq!(map.resolve("ex", "Thing").unwrap(), "https://example.org/vocab#Thing");
+        assert_eq!(map.prefixes["ex"].ontology.as_deref(), done["uuid"].as_str());
+        assert_eq!(types(&ctx, "ex").unwrap()["vaultOwned"], false);
+        let err = add_type(&ctx, "ex", "Mine", None, None, None).unwrap_err();
+        assert!(err.contains("imported"), "{err}");
+    }
+
+    #[test]
+    fn an_import_checks_the_address_and_the_prefix_before_it_fetches() {
+        let (_tmp, ctx) = ctx();
+        let never = |_: &str| -> Result<String, String> { panic!("fetched") };
+        for bad in ["file:///etc/passwd", "ftp://example.org/x", "example.org/x", "/etc/passwd", ""] {
+            assert!(import_with(&ctx, bad, None, never).is_err(), "{bad:?}");
+        }
+        create(&ctx, "ex", None).unwrap();
+        let taken = import_with(&ctx, "https://example.org/v", Some(("ex", "https://example.org/v#")), never);
+        assert!(taken.unwrap_err().contains("in use"));
+        let builtin = import_with(&ctx, "https://example.org/v", Some(("schema", "https://example.org/v#")), never);
+        assert!(builtin.is_err());
+        let bad_ns = import_with(&ctx, "https://example.org/v", Some(("ok", "not an iri")), never);
+        assert!(bad_ns.is_err());
+    }
+
+    #[test]
+    fn a_failed_fetch_leaves_nothing_behind() {
+        let (_tmp, ctx) = ctx();
+        let err = import_with(&ctx, "https://example.org/v", Some(("ex", "https://example.org/v#")), |_| Err("cannot fetch: 404".into()));
+        assert!(err.is_err());
+        assert!(std::fs::read_dir(ctx.config_dir.join("objects")).unwrap().next().is_none());
+        assert!(!ctx.config_dir.join(prefix_map::MAP_FILE).exists());
     }
 
     #[test]

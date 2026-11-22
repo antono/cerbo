@@ -56,6 +56,11 @@ Create a new type only when no standard or existing type fits and you expect to 
 
 Only vocabularies the vault owns accept types. `schema`, `foaf` and the like, and vocabularies imported from a URL or another vault, refuse with a message that says so. Do not work around that by inventing a prefix that looks like a standard one.
 
+## Importing an ontology and keeping the index healthy
+
+- `ontology_import` fetches an ontology file from an http or https address and stores it as an Ontology object; with `prefix` and `namespace` together it also registers the prefix, so `[Text]{prefix:Type}` resolves. It reaches the network, so it always waits for the user's approval, even in an `auto` vault: say which ontology and why, and use the address the ontology's own site publishes. An imported ontology is read-only for you: you cannot add types to it (add them to a vault-owned vocabulary, with a `parent` pointing into the imported one if that helps).
+- `index_status` tells whether the RDF graph is built, usable and current, and how many pages have embeddings. If SPARQL misses pages that exist, or the status says stale or unusable, run `index_rebuild`; it can take a while, so do not repeat it.
+
 ## What you cannot do from here
 
-Importing an outside ontology (`cerbo import-ontology <url>`), rebuilding the index (`cerbo index`), turning embeddings on and registering a prefix for a namespace you do not own are user actions in the terminal or the app. When one is needed, tell the user which command and why.
+Turning embeddings on (`cerbo index --embeddings`, which downloads a model) and registering a prefix for a namespace you do not own are user actions in the terminal or the app. When one is needed, tell the user which command and why.

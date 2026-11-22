@@ -206,11 +206,13 @@ impl Drop for Mcp {
     }
 }
 
-const READ_TOOLS: [&str; 11] = [
+const READ_TOOLS: [&str; 13] = [
     "backlinks",
     "guide",
+    "index_status",
     "list_attachments",
     "list_pages",
+    "list_trash",
     "ontology_list",
     "ontology_types",
     "outgoing_links",
@@ -219,15 +221,18 @@ const READ_TOOLS: [&str; 11] = [
     "search_text",
     "sparql_query",
 ];
-const WRITE_TOOLS: [&str; 8] = [
+const WRITE_TOOLS: [&str; 11] = [
     "create_page",
     "delete_page",
     "edit_page",
+    "index_rebuild",
     "link_pages",
     "move_page",
     "ontology_add_type",
     "ontology_create",
+    "ontology_import",
     "rename_page",
+    "restore_page",
 ];
 const HOST_TOOLS: [&str; 3] = ["host_list", "host_read", "host_write"];
 
@@ -287,14 +292,14 @@ fn the_guide_describes_only_what_the_session_may_do() {
     assert!(usage.contains("search_semantic") && usage.contains("backlinks"), "{usage}");
 
     let (_, read_only) = mcp.call("guide", json!({ "topic": "ontology" }));
-    assert!(read_only.contains("ontology_types") && read_only.contains("cannot add types"), "{read_only}");
+    assert!(read_only.contains("ontology_types") && read_only.contains("you cannot add types or vocabularies"), "{read_only}");
     assert!(!read_only.contains("ontology_add_type"), "{read_only}");
     let (_, management) = mcp.call("guide", json!({ "topic": "management" }));
     assert!(management.contains("read-only for you") && !management.contains("edit_page"), "{management}");
 
     env.cerbo_ok(&["vault", "agent", "notes", "auto"]);
     let (_, writable) = mcp.call("guide", json!({ "topic": "ontology" }));
-    assert!(writable.contains("ontology_add_type") && !writable.contains("cannot add types"), "{writable}");
+    assert!(writable.contains("ontology_add_type") && !writable.contains("you cannot add types or vocabularies"), "{writable}");
     let (_, management) = mcp.call("guide", json!({ "topic": "management" }));
     assert!(management.contains("edit_page") && management.contains("base_version"), "{management}");
     assert!(!management.contains("host_read"), "{management}");
@@ -548,6 +553,72 @@ fn approve_mode_holds_the_agents_change_until_the_cli_approves_it() {
     env.cerbo_ok(&["approvals", "reject", &id]);
     let (is_error, text) = mcp.finish(call);
     assert!(is_error && text.contains("rejected"), "{text}");
+}
+
+#[test]
+fn an_agent_can_restore_a_deleted_page_and_see_the_index() {
+    let env = Env::new();
+    let (_id, _) = env.add_vault("notes");
+    let _daemon = env.start_daemon();
+    env.cerbo_ok(&["vault", "agent", "notes", "auto"]);
+    let mut mcp = env.mcp("notes", None);
+
+    let created = mcp.call_ok("create_page", json!({ "title": "Fleeting", "content": "# Fleeting\n\nkeep me\n" }));
+    let page = created["uuid"].as_str().unwrap().to_string();
+    mcp.call_ok("delete_page", json!({ "page": page }));
+    let trash = mcp.call_ok("list_trash", json!({}));
+    assert_eq!(trash[0]["uuid"], page.as_str());
+    assert_eq!(trash[0]["title"], "Fleeting");
+
+    mcp.call_ok("restore_page", json!({ "page": page }));
+    let back = mcp.call_ok("read_page", json!({ "page": page }));
+    assert!(back["content"].as_str().unwrap().contains("keep me"), "{back}");
+    assert!(mcp.call_ok("list_trash", json!({})).as_array().unwrap().is_empty());
+    let (is_error, text) = mcp.call("restore_page", json!({ "page": page }));
+    assert!(is_error && text.contains("already exists"), "{text}");
+
+    let rebuilt = mcp.call_ok("index_rebuild", json!({}));
+    assert!(rebuilt["pagesProcessed"].as_u64().unwrap() >= 1, "{rebuilt}");
+    let status = mcp.call_ok("index_status", json!({}));
+    assert_eq!(status["built"], true);
+    assert_eq!(status["usable"], true);
+    assert_eq!(status["stale"], false);
+    assert_eq!(status["pages"], 1);
+}
+
+#[test]
+fn importing_an_ontology_asks_a_person_even_in_an_auto_vault() {
+    let env = Env::new();
+    let (_id, _) = env.add_vault("notes");
+    let _daemon = env.start_daemon();
+    env.cerbo_ok(&["vault", "agent", "notes", "auto"]);
+    let mut mcp = env.mcp("notes", Some("opencode"));
+
+    let call = mcp.start_call(
+        "ontology_import",
+        json!({ "url": "https://example.org/vocab.ttl", "prefix": "ex", "namespace": "https://example.org/vocab#" }),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let pending = loop {
+        let list: Value = serde_json::from_str(&env.cerbo_ok(&["approvals", "list", "--json"])).unwrap();
+        if let Some(first) = list.as_array().and_then(|l| l.first()) {
+            break first.clone();
+        }
+        assert!(Instant::now() < deadline, "no approval was asked for, in an auto vault");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(pending["summary"].as_str().unwrap().contains("https://example.org/vocab.ttl"), "{pending}");
+    env.cerbo_ok(&["approvals", "reject", &pending["id"].to_string()]);
+    let (is_error, text) = mcp.finish(call);
+    assert!(is_error && text.contains("rejected"), "{text}");
+
+    // Nothing was fetched or registered.
+    let list = mcp.call_ok("ontology_list", json!({}));
+    assert!(list.as_array().unwrap().iter().all(|r| r["prefix"] != "ex"), "{list}");
+
+    // A local file is not an ontology address, so it is refused before anyone is asked.
+    let (is_error, text) = mcp.call("ontology_import", json!({ "url": "file:///etc/passwd" }));
+    assert!(is_error, "{text}");
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────

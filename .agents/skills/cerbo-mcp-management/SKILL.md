@@ -20,7 +20,8 @@ You may change this vault. Every change goes through the daemon, which may ask t
 - Folders are virtual paths, not directories: `move_page` sets a page's folder (no path means the root), and a folder exists as long as a page is in it.
 - `rename_page` changes the title. Links are by UUID, so renaming never breaks them.
 - `link_pages` appends a link to page `to` at the end of page `from`. To link inside a sentence, use `edit_page` and write `[words](cerbo://<uuid>)`.
-- `delete_page` moves a page to the vault trash, from where the user can recover it. It is the only kind of delete you have. Check `backlinks` first and tell the user what linked to the page.
+- `delete_page` moves a page to the vault trash. It is the only kind of delete you have. Check `backlinks` first and tell the user what linked to the page.
+- `list_trash` shows what is in the trash (UUID, title, when it was deleted), newest first, and `restore_page` puts a page back with its UUID, so links to it work again. Restoring is refused when a page with that UUID exists. If you deleted something by mistake, restore it at once and say so. You cannot empty the trash; that is the user's call.
 
 ## After a change
 

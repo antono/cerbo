@@ -462,6 +462,10 @@ pub enum Call {
     HostWrite { vault: String, path: String, content: String },
 
     // Reads
+    /// Whether the semantic index is built, usable and current, and how many pages have embeddings.
+    IndexStatus { vault: String },
+    /// The pages in the vault trash, newest first.
+    TrashList { vault: String },
     /// The prefixes the vault can annotate with.
     OntologyList { vault: String },
     /// The declared types of one prefix's ontology.
@@ -545,6 +549,19 @@ pub enum Call {
     PageTrash { vault: String, page: String },
     /// Append a link to `to` at the end of page `from`.
     LinkAdd { vault: String, from: String, to: String },
+    /// Rebuild the vault's semantic index (a full index run, without embeddings).
+    IndexRebuild { vault: String },
+    /// Put a page back from the trash.
+    PageRestore { vault: String, page: String },
+    /// Import an ontology file from an http(s) address; always asks a person.
+    OntologyImport {
+        vault: String,
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prefix: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        namespace: Option<String>,
+    },
     /// Create a vault-owned ontology with its own prefix.
     OntologyCreate {
         vault: String,
@@ -652,7 +669,16 @@ impl Call {
                 | Call::LinkAdd { .. }
                 | Call::OntologyCreate { .. }
                 | Call::OntologyAddType { .. }
+                | Call::OntologyImport { .. }
+                | Call::IndexRebuild { .. }
+                | Call::PageRestore { .. }
         )
+    }
+
+    /// True for writes that wait for a person even when the vault is `auto`:
+    /// they reach outside the machine.
+    pub fn always_asks(&self) -> bool {
+        matches!(self, Call::OntologyImport { .. })
     }
 
     /// True for the calls that reach files outside the vault.
@@ -671,6 +697,9 @@ impl Call {
             Call::LinkAdd { .. } => "link",
             Call::OntologyCreate { .. } => "ontology",
             Call::OntologyAddType { .. } => "add_type",
+            Call::OntologyImport { .. } => "import_ontology",
+            Call::IndexRebuild { .. } => "reindex",
+            Call::PageRestore { .. } => "restore",
             _ => return None,
         })
     }
@@ -715,6 +744,11 @@ impl Call {
             | Call::PageTrash { vault, .. }
             | Call::SessionCreate { vault, .. }
             | Call::LinkAdd { vault, .. }
+            | Call::IndexStatus { vault }
+            | Call::TrashList { vault }
+            | Call::IndexRebuild { vault }
+            | Call::PageRestore { vault, .. }
+            | Call::OntologyImport { vault, .. }
             | Call::OntologyList { vault }
             | Call::OntologyTypes { vault, .. }
             | Call::OntologyCreate { vault, .. }

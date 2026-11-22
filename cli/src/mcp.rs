@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// The tools that change the vault. Not listed at `read`.
-pub(crate) const WRITE_TOOLS: [&str; 8] = [
+pub(crate) const WRITE_TOOLS: [&str; 11] = [
     "create_page",
     "edit_page",
     "rename_page",
@@ -34,6 +34,9 @@ pub(crate) const WRITE_TOOLS: [&str; 8] = [
     "link_pages",
     "ontology_create",
     "ontology_add_type",
+    "ontology_import",
+    "index_rebuild",
+    "restore_page",
 ];
 
 /// The tools that reach files outside the vault. Listed only while the vault's
@@ -226,6 +229,16 @@ struct OntologyCreateParams {
     prefix: String,
     /// A human title for the vocabulary. Default: `Vocabulary: <prefix>`.
     title: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct OntologyImportParams {
+    /// An http or https address of an ontology file (Turtle, RDF/XML...).
+    url: String,
+    /// A new prefix for it, to use in annotations. Give it together with `namespace`, or neither.
+    prefix: Option<String>,
+    /// The namespace IRI the ontology's names live in, such as `https://example.org/vocab#`.
+    namespace: Option<String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -457,6 +470,50 @@ impl VaultServer {
     )]
     async fn ontology_types(&self, Parameters(p): Parameters<OntologyTypesParams>) -> Result<CallToolResult, ErrorData> {
         answer(self.link.call(Call::OntologyTypes { vault: self.vault(), prefix: p.prefix }).await)
+    }
+
+    #[tool(
+        description = "Say whether the vault's semantic index (the RDF graph SPARQL and search use) is built, usable \
+                       and current, how many pages there are and how many have embeddings for search by meaning."
+    )]
+    async fn index_status(&self) -> Result<CallToolResult, ErrorData> {
+        answer(self.link.call(Call::IndexStatus { vault: self.vault() }).await)
+    }
+
+    #[tool(
+        description = "Rebuild the semantic index from the vault's files (without embeddings). Use it when \
+                       index_status says stale or unusable, or when SPARQL results miss pages you know exist. May \
+                       take a while."
+    )]
+    async fn index_rebuild(&self) -> Result<CallToolResult, ErrorData> {
+        answer(self.link.call(Call::IndexRebuild { vault: self.vault() }).await)
+    }
+
+    #[tool(
+        description = "Fetch an ontology file from an http(s) address and store it as an Ontology object, optionally \
+                       registering a prefix for it. It always waits for the user's approval, whatever the vault \
+                       permission, because it reaches the network. Imported ontologies cannot be extended with \
+                       ontology_add_type."
+    )]
+    async fn ontology_import(&self, Parameters(p): Parameters<OntologyImportParams>) -> Result<CallToolResult, ErrorData> {
+        answer(
+            self.link
+                .call(Call::OntologyImport { vault: self.vault(), url: p.url, prefix: p.prefix, namespace: p.namespace })
+                .await,
+        )
+    }
+
+    #[tool(description = "List the pages in the vault trash, newest first, as {uuid, title, deleted}.")]
+    async fn list_trash(&self) -> Result<CallToolResult, ErrorData> {
+        answer(self.link.call(Call::TrashList { vault: self.vault() }).await)
+    }
+
+    #[tool(
+        description = "Put a page back from the trash (the newest entry of that UUID). Refused when a page with the \
+                       UUID exists. May wait for the user's approval."
+    )]
+    async fn restore_page(&self, Parameters(p): Parameters<PageParams>) -> Result<CallToolResult, ErrorData> {
+        answer(self.link.call(Call::PageRestore { vault: self.vault(), page: p.page }).await)
     }
 
     #[tool(

@@ -69,3 +69,43 @@ The server SHALL declare the resources capability and list one Markdown resource
 #### Scenario: Read follows the permission
 - **WHEN** the vault's permission changes from `read` to `auto` and the client reads `cerbo://guide/management` again
 - **THEN** the second read SHALL describe the page-changing tools and the first SHALL NOT
+
+### Requirement: Index tools
+
+The server SHALL offer a read tool that reports whether the vault's semantic index is built, usable and current, how many pages there are and how many have embeddings, and a write tool that rebuilds the index from the vault's files without embeddings. The rebuild SHALL be subject to the vault's agent permission, hidden at `read`.
+
+#### Scenario: Status after a rebuild
+- **WHEN** the agent rebuilds the index and then asks for its status
+- **THEN** the status SHALL say built, usable and not stale, with the vault's page count
+
+#### Scenario: Read-only vault
+- **WHEN** the vault is `read` and the agent lists tools
+- **THEN** the status tool SHALL be listed and the rebuild tool SHALL NOT
+
+### Requirement: Trash tools
+
+The server SHALL offer a read tool that lists the trash (UUID, title, deletion time, newest first) and a write tool that puts a page back from it with its UUID. Restoring SHALL take the newest entry of that UUID and SHALL be refused, changing nothing, when a page with that UUID exists or the trash holds none. There SHALL be no tool that empties the trash or removes an entry.
+
+#### Scenario: Delete and restore
+- **WHEN** the agent deletes a page and then restores it
+- **THEN** the page SHALL be live again with the same UUID and text, and links to it SHALL work
+
+#### Scenario: Live page
+- **WHEN** the agent restores a UUID whose page exists
+- **THEN** the tool SHALL refuse and the page SHALL stay as it is
+
+### Requirement: Ontology import always asks
+
+The server SHALL offer a write tool that fetches an ontology file from an address and stores it as an Ontology object, optionally registering a prefix and namespace given together. It SHALL accept only http and https addresses, limit the size and the time of the fetch, and SHALL wait for a person's approval showing the address at every permission level that offers it, including `auto`. A bad address, a prefix in use or an invalid namespace SHALL be refused before anyone is asked.
+
+#### Scenario: Auto vault still asks
+- **WHEN** the vault is `auto` and the agent imports an ontology
+- **THEN** a person SHALL be asked, and a rejection SHALL leave the vault unchanged
+
+#### Scenario: Local file
+- **WHEN** the agent passes a `file://` address
+- **THEN** the tool SHALL refuse at once and no approval SHALL be shown
+
+#### Scenario: Imported ontologies stay closed
+- **WHEN** an ontology was imported
+- **THEN** the ontology write tools SHALL refuse to add types to it

@@ -182,8 +182,8 @@ mod tests {
         assert!(!management.render(false, true).contains("edit_page"));
         let ontology = topic("ontology").unwrap();
         assert!(ontology.render(true, false).contains("`ontology_add_type`"));
-        assert!(ontology.render(false, false).contains("cannot add types"));
-        assert!(!ontology.render(true, false).contains("cannot add types"));
+        assert!(ontology.render(false, false).contains("you cannot add types or vocabularies"));
+        assert!(!ontology.render(true, false).contains("you cannot add types or vocabularies"));
     }
 
     #[test]

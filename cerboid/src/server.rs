@@ -1034,6 +1034,10 @@ impl Shared {
         if self.shutdown.is_triggered() {
             return Err(RpcError::new(rpc::CODE_SHUTTING_DOWN, "the daemon is stopping and takes no more writes"));
         }
+        // A bad import is refused before a person is asked about it.
+        if let Call::OntologyImport { url, prefix, namespace, .. } = &call {
+            ops::check_ontology_import(&vault, url, prefix.as_deref(), namespace.as_deref())?;
+        }
         // The text the caller says its edit was written against, if it said.
         let given = match &call {
             Call::PageEdit { base_version: Some(version), .. } => Some(ops::parse_version(version).ok_or_else(|| {
@@ -1048,7 +1052,12 @@ impl Shared {
             return self.queue_write(vault, call, client.client.into(), None, given, None);
         }
         let agent_name = client.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| "agent".to_string());
-        match agent::get_permission(&self.ctx, &vault.info.id) {
+        // A call that reaches outside the machine asks a person even at `auto`.
+        let level = match agent::get_permission(&self.ctx, &vault.info.id) {
+            AgentPermission::Auto if call.always_asks() => AgentPermission::Approve,
+            other => other,
+        };
+        match level {
             AgentPermission::Read => Err(read_only(&vault)),
             AgentPermission::Auto => {
                 let closed = Some(conn.closed.clone());
@@ -1308,6 +1317,8 @@ fn read(vault: &VaultHandle, embed: &EmbedWorker, call: Call) -> OpResult {
             ops::similar(vault, embed, &page, limit, types, annotated)
         }
         Call::Sparql { query, .. } => ops::sparql(vault, &query),
+        Call::IndexStatus { .. } => ops::index_status(vault),
+        Call::TrashList { .. } => ops::trash_list(vault),
         Call::OntologyList { .. } => ops::ontology_list(vault),
         Call::OntologyTypes { prefix, .. } => ops::ontology_types(vault, &prefix),
         other => Err(RpcError::failed(format!("not a read: {other:?}"))),
@@ -1322,6 +1333,11 @@ fn write(vault: &VaultHandle, call: Call, base: Option<u64>) -> Written {
         Call::PageMove { page, path, .. } => ops::page_move(vault, &page, path),
         Call::PageTrash { page, .. } => ops::page_trash(vault, &page),
         Call::LinkAdd { from, to, .. } => ops::link_add(vault, &from, &to),
+        Call::IndexRebuild { .. } => ops::index_rebuild(vault),
+        Call::PageRestore { page, .. } => ops::page_restore(vault, &page),
+        Call::OntologyImport { url, prefix, namespace, .. } => {
+            ops::ontology_import(vault, &url, prefix.as_deref(), namespace.as_deref())
+        }
         Call::OntologyCreate { prefix, title, .. } => ops::ontology_create(vault, &prefix, title.as_deref()),
         Call::OntologyAddType { prefix, name, label, comment, parent, .. } => {
             ops::ontology_add_type(vault, &prefix, &name, label.as_deref(), comment.as_deref(), parent.as_deref())

@@ -382,6 +382,98 @@ pub fn link_add(vault: &VaultHandle, from: &str, to: &str) -> Written {
     }
 }
 
+// ── Index and trash ──────────────────────────────────────────────────────────
+
+pub fn index_status(vault: &VaultHandle) -> OpResult {
+    use cerbo_core::semantic::{IndexLocation, IndexState};
+    let location = IndexLocation::for_vault(&vault.vault_ctx.global.cache_dir, &vault.root).map_err(failed)?;
+    let state = IndexState::load(&location.state_path()).map_err(failed)?;
+    let pages = page_list(vault)?.as_array().map_or(0, Vec::len);
+    Ok(match state {
+        None => json!({ "built": false, "usable": false, "stale": false, "pages": pages, "embeddedPages": 0 }),
+        Some(state) => json!({
+            "built": true,
+            "usable": state.matches(&location),
+            "stale": state.stale || location.stale_path().exists(),
+            "generation": state.generation,
+            "pages": pages,
+            "embeddedPages": state.content_hashes.len(),
+        }),
+    })
+}
+
+pub fn index_rebuild(vault: &VaultHandle) -> Written {
+    let _gate = vault.index_guard();
+    match cerbo_core::metadata_index::index_vault(&vault.vault_ctx, IndexOptions::default()) {
+        Ok(stats) => written(
+            "index",
+            json!({
+                "pagesProcessed": stats.pages_processed,
+                "linksFound": stats.links_found,
+                "annotationsFound": stats.annotations_found,
+                "triples": stats.triples,
+                "errors": stats.errors.len(),
+                "indexErrors": stats.index_errors,
+            }),
+        ),
+        Err(e) => refused(failed(e)),
+    }
+}
+
+pub fn trash_list(vault: &VaultHandle) -> OpResult {
+    cerbo_core::trash::list(&vault.page_ctx).map_err(failed)
+}
+
+pub fn page_restore(vault: &VaultHandle, page: &str) -> Written {
+    let _gate = vault.index_guard();
+    let id = match page_id(page) {
+        Ok(id) => id,
+        Err(e) => return refused(e),
+    };
+    match cerbo_core::trash::restore(&vault.page_ctx, &id) {
+        Ok(done) => written(&id, done),
+        Err(e) => refused(failed(e)),
+    }
+}
+
+/// The prefix and namespace of an import: both or neither.
+fn import_registration<'a>(
+    prefix: Option<&'a str>,
+    namespace: Option<&'a str>,
+) -> Result<Option<(&'a str, &'a str)>, RpcError> {
+    match (prefix, namespace) {
+        (Some(p), Some(n)) => Ok(Some((p, n))),
+        (None, None) => Ok(None),
+        _ => Err(RpcError::failed("give the prefix and the namespace together, or neither")),
+    }
+}
+
+/// Refuse a bad import before anyone is asked about it.
+pub fn check_ontology_import(
+    vault: &VaultHandle,
+    url: &str,
+    prefix: Option<&str>,
+    namespace: Option<&str>,
+) -> Result<(), RpcError> {
+    let registration = import_registration(prefix, namespace)?;
+    cerbo_core::ontology::check_import(&vault.page_ctx, url, registration).map_err(failed)
+}
+
+pub fn ontology_import(vault: &VaultHandle, url: &str, prefix: Option<&str>, namespace: Option<&str>) -> Written {
+    let registration = match import_registration(prefix, namespace) {
+        Ok(r) => r,
+        Err(e) => return refused(e),
+    };
+    let _gate = vault.index_guard();
+    match cerbo_core::ontology::import(&vault.page_ctx, url, registration) {
+        Ok(done) => {
+            let uuid = done["uuid"].as_str().unwrap_or_default().to_string();
+            written(&uuid, done)
+        }
+        Err(e) => refused(failed(e)),
+    }
+}
+
 // ── Ontology ─────────────────────────────────────────────────────────────────
 
 pub fn ontology_list(vault: &VaultHandle) -> OpResult {
@@ -515,6 +607,24 @@ pub fn preview(vault: &VaultHandle, call: &cerbo_core::rpc::Call) -> Preview {
             }
             Preview { page: None, summary: text, diff: None }
         }
+        Call::OntologyImport { url, prefix, namespace, .. } => Preview {
+            page: None,
+            summary: match (prefix, namespace) {
+                (Some(p), Some(n)) => format!("Fetch the ontology at {url} and register the prefix {p}: for {n}"),
+                _ => format!("Fetch the ontology at {url} and store it as an Ontology object"),
+            },
+            diff: None,
+        },
+        Call::IndexRebuild { .. } => Preview {
+            page: None,
+            summary: "Rebuild the semantic index of the vault".to_string(),
+            diff: None,
+        },
+        Call::PageRestore { page, .. } => Preview {
+            page: Some(page.clone()),
+            summary: format!("Restore the page {page} from the trash"),
+            diff: None,
+        },
         other => Preview { page: None, summary: format!("{other:?}"), diff: None },
     }
 }
