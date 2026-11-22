@@ -132,6 +132,37 @@ cerbo vault active <vault-id>
 cerbo vault approve <vault-id>           # promote an auto-registered vault
 ```
 
+## Agents
+
+An agent works on a vault through `cerbo mcp`, and you decide what it may do per vault:
+
+```bash
+cerbo vault agent Notes                  # print the level: read (default), auto or approve
+cerbo vault agent Notes approve          # each change waits for your answer (cerbo approvals)
+```
+
+By default an agent can touch nothing outside the vault. Host access lets it work with files elsewhere, under
+rules you set. It is a second setting, independent of the level:
+
+```bash
+cerbo vault agent Notes host on                            # turn it on
+cerbo vault agent Notes host-path add ~/Documents/inbox    # the agent may read here without asking
+cerbo vault agent Notes host-path add ~/Projects/out --write   # and write here
+cerbo vault agent Notes host                               # print on/off and the list
+cerbo vault agent Notes host-path remove ~/Projects/out
+cerbo vault agent Notes host off
+```
+
+A path on the list is open without asking, within its mode. Any other path waits for your approval, for that one
+action, even when the vault is `auto`. Credentials (`~/.ssh`, `~/.gnupg`, `~/.aws`), Cerbo's own files and other
+vaults are never available, and the agent has no tool to delete or run anything outside the vault. Every host action
+is in the agent change log (`cerbo approvals log`). Host access reduces isolation: keep the list narrow and do not
+list your home folder. The full rules are in `man cerbo`, section AGENT PERMISSIONS.
+
+An agent can also extend your vocabulary: with permission it creates a vocabulary owned by the vault and adds types
+to it (`ontology_create`, `ontology_add_type`), after looking at what exists (`ontology_list`, `ontology_types`).
+Its `guide` tool explains the method in three parts (`usage`, `management`, `ontology`), also served as the resources `cerbo://guide/<topic>`; the same texts are the skills `.agents/skills/cerbo-mcp-<topic>/SKILL.md`.
+
 ## Utilities
 
 ```bash

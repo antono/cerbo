@@ -16,16 +16,16 @@
 ## 3. MCP server
 
 - [x] 3.1 Add `host_list`, `host_read`, `host_write` to `cli/src/mcp.rs`, listed only when host access is `on`; re-list on a settings change
-- [ ] 3.2 Add `ontology_list`, `ontology_types` (read) and `ontology_create`, `ontology_add_type` (write, hidden at `read`)
-- [ ] 3.3 Implement vault-owned ontology creation and class declaration in `core`, refusing bundled and imported ontologies and taken prefixes
-- [ ] 3.4 Extend the server instructions with the short method summary and a pointer to the skill
+- [x] 3.2 Add `ontology_list`, `ontology_types` (read) and `ontology_create`, `ontology_add_type` (write, hidden at `read`)
+- [x] 3.3 Implement vault-owned ontology creation and class declaration in `core`, refusing bundled and imported ontologies and taken prefixes
+- [x] 3.4 Extend the server instructions with the short method summary and a pointer to the skill
 
 ## 4. Agent skill
 
-- [ ] 4.1 Confirm where Claude Code and OpenCode read skills inside the agent home
-- [ ] 4.2 Write the skill: search choice, scores, links, annotations, checking and creating types, read-before-edit with `base_version`
-- [ ] 4.3 Render it per session (only the sections the session may use) and write it into the agent home; share the summary with the server instructions
-- [ ] 4.4 Add a test that every tool named in the skill is registered by the server and that a `read` session gets no write sections
+- [x] 4.1 Confirm where Claude Code and OpenCode read skills inside the agent home (done: the sandbox switches their own tools off, so the guide is an MCP tool instead, see design D8)
+- [x] 4.2 Write the three guides (usage, management, ontology and RDF with the known ontologies): search choice, scores, links, safe editing with `base_version`, annotations, checking and creating types, SPARQL recipes
+- [x] 4.3 Render each per session (only the sections the session may use) and serve it through the `guide` tool with a `topic` and as the resources `cerbo://guide/<topic>`; share the summary with the server instructions; keep one skill file per guide generated from the same texts
+- [x] 4.4 Add a test that every tool named in the skill is registered by the server and that a `read` session gets no write sections
 
 ## 5. App
 
@@ -37,5 +37,5 @@
 
 - [x] 6.1 Integration tests with the fake ACP agent: off, listed read, listed write, ask approved, ask rejected, timeout, link escape, never-reachable
 - [x] 6.2 Test that tightening applies on the next call and rejects pending requests
-- [ ] 6.3 Ontology tool tests: add type then resolve an annotation; duplicate; imported ontology refused
-- [ ] 6.4 Update `docs/` with the host access explanation and run `openspec validate`
+- [x] 6.3 Ontology tool tests: add type then resolve an annotation; duplicate; imported ontology refused
+- [x] 6.4 Update `docs/` with the host access explanation and run `openspec validate`

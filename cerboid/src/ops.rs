@@ -382,6 +382,49 @@ pub fn link_add(vault: &VaultHandle, from: &str, to: &str) -> Written {
     }
 }
 
+// ── Ontology ─────────────────────────────────────────────────────────────────
+
+pub fn ontology_list(vault: &VaultHandle) -> OpResult {
+    cerbo_core::ontology::list(&vault.page_ctx).map_err(failed)
+}
+
+pub fn ontology_types(vault: &VaultHandle, prefix: &str) -> OpResult {
+    cerbo_core::ontology::types(&vault.page_ctx, prefix).map_err(failed)
+}
+
+pub fn ontology_create(vault: &VaultHandle, prefix: &str, title: Option<&str>) -> Written {
+    let _gate = vault.index_guard();
+    match cerbo_core::ontology::create(&vault.page_ctx, prefix, title) {
+        Ok(made) => {
+            let uuid = made["uuid"].as_str().unwrap_or_default().to_string();
+            written(&uuid, made)
+        }
+        Err(e) => refused(failed(e)),
+    }
+}
+
+pub fn ontology_add_type(
+    vault: &VaultHandle,
+    prefix: &str,
+    name: &str,
+    label: Option<&str>,
+    comment: Option<&str>,
+    parent: Option<&str>,
+) -> Written {
+    let _gate = vault.index_guard();
+    // The ontology object the type lands in, to attribute the file events.
+    let ontology = cerbo_core::prefix_map::PrefixMap::load(&vault.page_ctx.config_dir)
+        .ok()
+        .and_then(|m| m.prefixes.get(prefix).and_then(|e| e.ontology.clone()));
+    match cerbo_core::ontology::add_type(&vault.page_ctx, prefix, name, label, comment, parent) {
+        Ok(done) => match ontology {
+            Some(uuid) => written(&uuid, done),
+            None => Written { page: None, result: Ok(done) },
+        },
+        Err(e) => refused(failed(e)),
+    }
+}
+
 // ── Previews for approval ────────────────────────────────────────────────────
 
 /// What a write would do, in words and (for text) as a diff.
@@ -451,6 +494,27 @@ pub fn preview(vault: &VaultHandle, call: &cerbo_core::rpc::Call) -> Preview {
             summary: format!("Add a link from \"{}\" to \"{}\"", title_of(vault, from), title_of(vault, to)),
             diff: None,
         },
+        Call::OntologyCreate { prefix, title, .. } => Preview {
+            page: None,
+            summary: format!(
+                "Create the vocabulary \"{}\" with the prefix {prefix}:",
+                title.as_deref().filter(|t| !t.trim().is_empty()).unwrap_or(prefix)
+            ),
+            diff: None,
+        },
+        Call::OntologyAddType { prefix, name, label, comment, parent, .. } => {
+            let mut text = format!("Add the type {prefix}:{name}");
+            if let Some(label) = label.as_deref().filter(|l| !l.trim().is_empty()) {
+                text.push_str(&format!(" (\"{label}\")"));
+            }
+            if let Some(parent) = parent.as_deref().filter(|p| !p.trim().is_empty()) {
+                text.push_str(&format!(", a kind of {parent}"));
+            }
+            if let Some(comment) = comment.as_deref().filter(|c| !c.trim().is_empty()) {
+                text.push_str(&format!(": {comment}"));
+            }
+            Preview { page: None, summary: text, diff: None }
+        }
         other => Preview { page: None, summary: format!("{other:?}"), diff: None },
     }
 }

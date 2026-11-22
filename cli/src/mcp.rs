@@ -12,8 +12,9 @@ use cerbo_core::rpc::{launch, Call, ClientKind, RpcError, CODE_CLIENT_TIMEOUT, C
 use cerbo_core::CerboContext;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, ContentBlock, InitializeRequestParams, InitializeResult, ListToolsResult, PaginatedRequestParams,
-    ServerCapabilities, ServerConfig,
+    CallToolResult, ContentBlock, InitializeRequestParams, InitializeResult, ListResourcesResult, ListToolsResult,
+    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
+    ResourceContents, ServerCapabilities, ServerConfig,
 };
 use rmcp::service::{NotificationContext, RequestContext};
 use rmcp::transport::stdio;
@@ -24,11 +25,20 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// The tools that change the vault. Not listed at `read`.
-const WRITE_TOOLS: [&str; 6] = ["create_page", "edit_page", "rename_page", "move_page", "delete_page", "link_pages"];
+pub(crate) const WRITE_TOOLS: [&str; 8] = [
+    "create_page",
+    "edit_page",
+    "rename_page",
+    "move_page",
+    "delete_page",
+    "link_pages",
+    "ontology_create",
+    "ontology_add_type",
+];
 
 /// The tools that reach files outside the vault. Listed only while the vault's
 /// host access is on.
-const HOST_TOOLS: [&str; 3] = ["host_list", "host_read", "host_write"];
+pub(crate) const HOST_TOOLS: [&str; 3] = ["host_list", "host_read", "host_write"];
 
 /// What a write that waits for approval gets on top of the approval time
 /// limit before the shim gives up on the daemon's answer: the write queue may
@@ -169,6 +179,12 @@ impl Link {
 // ── Tool parameters ──────────────────────────────────────────────────────────
 
 #[derive(Deserialize, schemars::JsonSchema)]
+struct GuideParams {
+    /// `usage` (default), `management` or `ontology`.
+    topic: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 struct PageParams {
     /// UUID of the page.
     page: String,
@@ -196,6 +212,34 @@ struct HostWriteParams {
     path: String,
     /// The whole text of the file.
     content: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct OntologyTypesParams {
+    /// The prefix, as in `[Text]{prefix:Type}`, for example `schema` or `ex`.
+    prefix: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct OntologyCreateParams {
+    /// A new prefix: letters, digits, `-`, `_` or `.`, starting with a letter. It must not be in use.
+    prefix: String,
+    /// A human title for the vocabulary. Default: `Vocabulary: <prefix>`.
+    title: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct OntologyAddTypeParams {
+    /// The prefix of a vocabulary owned by this vault (see ontology_list, `vaultOwned`).
+    prefix: String,
+    /// The type's name: letters, digits, `_` and `-`, starting with a letter, such as `Recipe`.
+    name: String,
+    /// A human label. Default: the name.
+    label: Option<String>,
+    /// A sentence saying what the type means.
+    comment: Option<String>,
+    /// A broader type: a name in the same vocabulary, or `prefix:Name` such as `schema:CreativeWork`.
+    parent: Option<String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -293,6 +337,25 @@ impl VaultServer {
         self.link.vault.clone()
     }
 
+    #[tool(
+        description = "Read a guide for working with this vault. `topic` is `usage` (finding and reading: which \
+                       search to use, how to read scores), `management` (changing pages safely, folders, links, \
+                       deleting, approvals) or `ontology` (types and prefixes, known ontologies, the RDF graph, \
+                       SPARQL recipes, creating types). Without a topic you get `usage`. Each guide describes only \
+                       the tools you were given. Read the one you need before you start."
+    )]
+    async fn guide(&self, Parameters(p): Parameters<GuideParams>) -> Result<CallToolResult, ErrorData> {
+        let id = p.topic.as_deref().map(str::trim).filter(|t| !t.is_empty()).unwrap_or("usage");
+        let Some(topic) = crate::mcp_guide::topic(id) else {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "no guide named {id:?}: the topics are {}",
+                crate::mcp_guide::ids()
+            ))]));
+        };
+        let (permission, host) = self.link.state().await;
+        Ok(CallToolResult::success(vec![ContentBlock::text(topic.render(permission.can_write(), host))]))
+    }
+
     #[tool(description = "List every page of the vault as {uuid, title, virtualPath}.")]
     async fn list_pages(&self) -> Result<CallToolResult, ErrorData> {
         answer(self.link.call(Call::PageList { vault: self.vault() }).await)
@@ -378,6 +441,52 @@ impl VaultServer {
         answer(self.link.call(Call::HostWrite { vault: self.vault(), path: p.path, content: p.content }).await)
     }
 
+    #[tool(
+        description = "List the prefixes you can use in annotations `[Text]{prefix:Type}`: built-in ones such as \
+                       `schema` and `foaf`, and the vault's own, with `vaultOwned` marking the vocabularies that \
+                       accept new types."
+    )]
+    async fn ontology_list(&self) -> Result<CallToolResult, ErrorData> {
+        answer(self.link.call(Call::OntologyList { vault: self.vault() }).await)
+    }
+
+    #[tool(
+        description = "List the types and properties a vocabulary declares, with labels, descriptions and parent \
+                       types. Check this before creating a type. Built-in vocabularies such as `schema` declare \
+                       nothing here, but any of their names still works in an annotation."
+    )]
+    async fn ontology_types(&self, Parameters(p): Parameters<OntologyTypesParams>) -> Result<CallToolResult, ErrorData> {
+        answer(self.link.call(Call::OntologyTypes { vault: self.vault(), prefix: p.prefix }).await)
+    }
+
+    #[tool(
+        description = "Create a vocabulary owned by this vault, with a new prefix, to hold types of your own. \
+                       Returns its prefix and namespace. May wait for the user's approval."
+    )]
+    async fn ontology_create(&self, Parameters(p): Parameters<OntologyCreateParams>) -> Result<CallToolResult, ErrorData> {
+        answer(self.link.call(Call::OntologyCreate { vault: self.vault(), prefix: p.prefix, title: p.title }).await)
+    }
+
+    #[tool(
+        description = "Add a type to a vocabulary owned by this vault (not to `schema`, `foaf` or imported ones). \
+                       Adding a type that exists changes nothing and returns it. Afterwards `[Text]{prefix:Name}` \
+                       works. May wait for the user's approval."
+    )]
+    async fn ontology_add_type(&self, Parameters(p): Parameters<OntologyAddTypeParams>) -> Result<CallToolResult, ErrorData> {
+        answer(
+            self.link
+                .call(Call::OntologyAddType {
+                    vault: self.vault(),
+                    prefix: p.prefix,
+                    name: p.name,
+                    label: p.label,
+                    comment: p.comment,
+                    parent: p.parent,
+                })
+                .await,
+        )
+    }
+
     #[tool(description = "Create a page. Returns its UUID. May wait for the user's approval.")]
     async fn create_page(&self, Parameters(p): Parameters<CreateParams>) -> Result<CallToolResult, ErrorData> {
         answer(
@@ -430,9 +539,9 @@ impl VaultServer {
 #[tool_handler]
 impl ServerHandler for VaultServer {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_tool_list_changed().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_tool_list_changed().enable_resources().build())
             .with_server_info(rmcp::model::Implementation::new("cerbo", env!("CARGO_PKG_VERSION")))
-            .with_instructions(INSTRUCTIONS.to_string())
+            .with_instructions(format!("{INSTRUCTIONS} {}", crate::mcp_guide::SUMMARY))
     }
 
     /// The agent's name for the change log and approval prompts is the MCP
@@ -477,6 +586,41 @@ impl ServerHandler for VaultServer {
         })
     }
 
+    /// The guides as resources, for clients that show or attach resources.
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        let resources = crate::mcp_guide::TOPICS
+            .iter()
+            .map(|t| {
+                Resource::new(crate::mcp_guide::uri(t), format!("guide-{}", t.id))
+                    .with_title(t.title)
+                    .with_description(t.about)
+                    .with_mime_type("text/markdown")
+            })
+            .collect();
+        Ok(ListResourcesResult::with_all_items(resources))
+    }
+
+    /// A guide, rendered for what this session may do, like the guide tool.
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        let Some(topic) = crate::mcp_guide::topic_of_uri(&request.uri) else {
+            return Err(ErrorData::resource_not_found(format!("no such resource: {}", request.uri), None));
+        };
+        let (permission, host) = self.link.state().await;
+        let text = topic.render(permission.can_write(), host);
+        Ok(ReadResourceResult::new(vec![
+            ResourceContents::text(text, request.uri.clone()).with_mime_type("text/markdown"),
+        ])
+        .into())
+    }
+
     /// Tell the client when the user changes the vault's permission, so the
     /// tool list is read again.
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
@@ -495,6 +639,12 @@ impl ServerHandler for VaultServer {
             }
         });
     }
+}
+
+/// The names of every tool the server can offer, whatever the permissions.
+#[cfg(test)]
+pub(crate) fn tool_names() -> Vec<String> {
+    VaultServer::tool_router().list_all().into_iter().map(|t| t.name.to_string()).collect()
 }
 
 /// Run the server until the client closes stdin.

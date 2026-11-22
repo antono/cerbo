@@ -206,17 +206,30 @@ impl Drop for Mcp {
     }
 }
 
-const READ_TOOLS: [&str; 8] = [
+const READ_TOOLS: [&str; 11] = [
     "backlinks",
+    "guide",
     "list_attachments",
     "list_pages",
+    "ontology_list",
+    "ontology_types",
     "outgoing_links",
     "read_page",
     "search_semantic",
     "search_text",
     "sparql_query",
 ];
-const WRITE_TOOLS: [&str; 6] = ["create_page", "delete_page", "edit_page", "link_pages", "move_page", "rename_page"];
+const WRITE_TOOLS: [&str; 8] = [
+    "create_page",
+    "delete_page",
+    "edit_page",
+    "link_pages",
+    "move_page",
+    "ontology_add_type",
+    "ontology_create",
+    "rename_page",
+];
+const HOST_TOOLS: [&str; 3] = ["host_list", "host_read", "host_write"];
 
 fn sorted(names: impl IntoIterator<Item = &'static str>) -> Vec<String> {
     let mut v: Vec<String> = names.into_iter().map(str::to_string).collect();
@@ -242,6 +255,120 @@ fn a_read_only_vault_lists_no_write_tool_and_refuses_a_write_call() {
     let pages = mcp.call_ok("list_pages", json!({}));
     assert_eq!(pages.as_array().unwrap().len(), 0, "no page was created");
     drop(id);
+}
+
+#[test]
+fn host_tools_are_listed_only_while_host_access_is_on() {
+    let env = Env::new();
+    let (_id, _) = env.add_vault("notes");
+    let _daemon = env.start_daemon();
+    let mut mcp = env.mcp("notes", None);
+    assert_eq!(mcp.tools(), sorted(READ_TOOLS));
+
+    env.cerbo_ok(&["vault", "agent", "notes", "host", "on"]);
+    let mut with_host: Vec<&'static str> = READ_TOOLS.to_vec();
+    with_host.extend(HOST_TOOLS);
+    assert_eq!(mcp.tools(), sorted(with_host), "host on adds the host tools and no write tool");
+
+    env.cerbo_ok(&["vault", "agent", "notes", "host", "off"]);
+    assert_eq!(mcp.tools(), sorted(READ_TOOLS));
+}
+
+#[test]
+fn the_guide_describes_only_what_the_session_may_do() {
+    let env = Env::new();
+    let (_id, _) = env.add_vault("notes");
+    let _daemon = env.start_daemon();
+    let mut mcp = env.mcp("notes", None);
+
+    // No topic: the usage guide.
+    let (is_error, usage) = mcp.call("guide", json!({}));
+    assert!(!is_error);
+    assert!(usage.contains("search_semantic") && usage.contains("backlinks"), "{usage}");
+
+    let (_, read_only) = mcp.call("guide", json!({ "topic": "ontology" }));
+    assert!(read_only.contains("ontology_types") && read_only.contains("cannot add types"), "{read_only}");
+    assert!(!read_only.contains("ontology_add_type"), "{read_only}");
+    let (_, management) = mcp.call("guide", json!({ "topic": "management" }));
+    assert!(management.contains("read-only for you") && !management.contains("edit_page"), "{management}");
+
+    env.cerbo_ok(&["vault", "agent", "notes", "auto"]);
+    let (_, writable) = mcp.call("guide", json!({ "topic": "ontology" }));
+    assert!(writable.contains("ontology_add_type") && !writable.contains("cannot add types"), "{writable}");
+    let (_, management) = mcp.call("guide", json!({ "topic": "management" }));
+    assert!(management.contains("edit_page") && management.contains("base_version"), "{management}");
+    assert!(!management.contains("host_read"), "{management}");
+
+    // An unknown topic names the real ones.
+    let (is_error, text) = mcp.call("guide", json!({ "topic": "cooking" }));
+    assert!(is_error);
+    assert!(text.contains("usage, management, ontology"), "{text}");
+}
+
+#[test]
+fn the_guides_are_also_resources_rendered_for_the_session() {
+    let env = Env::new();
+    let (_id, _) = env.add_vault("notes");
+    let _daemon = env.start_daemon();
+    let mut mcp = env.mcp("notes", None);
+
+    let id = mcp.request("resources/list", json!({}));
+    let listed = mcp.wait(id);
+    let mut uris: Vec<String> = listed["result"]["resources"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no resource list in {listed}"))
+        .iter()
+        .map(|r| r["uri"].as_str().unwrap().to_string())
+        .collect();
+    uris.sort();
+    assert_eq!(uris, ["cerbo://guide/management", "cerbo://guide/ontology", "cerbo://guide/usage"]);
+    assert_eq!(listed["result"]["resources"][0]["mimeType"], "text/markdown");
+
+    let id = mcp.request("resources/read", json!({ "uri": "cerbo://guide/management" }));
+    let read = mcp.wait(id);
+    let text = read["result"]["contents"][0]["text"].as_str().unwrap_or_else(|| panic!("no text in {read}"));
+    assert!(text.contains("read-only for you"), "{text}");
+
+    env.cerbo_ok(&["vault", "agent", "notes", "auto"]);
+    let id = mcp.request("resources/read", json!({ "uri": "cerbo://guide/management" }));
+    let read = mcp.wait(id);
+    assert!(read["result"]["contents"][0]["text"].as_str().unwrap().contains("edit_page"), "{read}");
+
+    let id = mcp.request("resources/read", json!({ "uri": "cerbo://guide/nope" }));
+    let missing = mcp.wait(id);
+    assert!(missing["error"].is_object(), "an unknown guide is a protocol error: {missing}");
+}
+
+#[test]
+fn an_agent_can_create_a_vocabulary_add_a_type_and_see_it() {
+    let env = Env::new();
+    let (_id, _) = env.add_vault("notes");
+    let _daemon = env.start_daemon();
+    env.cerbo_ok(&["vault", "agent", "notes", "auto"]);
+    let mut mcp = env.mcp("notes", None);
+
+    let made = mcp.call_ok("ontology_create", json!({ "prefix": "ex", "title": "Kitchen" }));
+    assert_eq!(made["prefix"], "ex");
+    let added = mcp.call_ok(
+        "ontology_add_type",
+        json!({ "prefix": "ex", "name": "Recipe", "comment": "A way to cook something" }),
+    );
+    assert_eq!(added["existing"], false);
+    let again = mcp.call_ok("ontology_add_type", json!({ "prefix": "ex", "name": "Recipe" }));
+    assert_eq!(again["existing"], true);
+
+    let types = mcp.call_ok("ontology_types", json!({ "prefix": "ex" }));
+    assert_eq!(types["vaultOwned"], true);
+    assert_eq!(types["types"][0]["name"], "Recipe");
+
+    // A bundled vocabulary is refused, with the way out.
+    let (is_error, text) = mcp.call("ontology_add_type", json!({ "prefix": "schema", "name": "Mine" }));
+    assert!(is_error);
+    assert!(text.contains("ontology_create"), "{text}");
+
+    // The change is recorded in the agent change log.
+    let log = env.cerbo_ok(&["approvals", "log", "notes"]);
+    assert!(log.contains("add_type") && log.contains("ontology"), "{log}");
 }
 
 #[test]

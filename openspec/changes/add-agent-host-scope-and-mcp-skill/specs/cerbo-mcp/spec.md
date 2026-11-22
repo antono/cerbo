@@ -50,10 +50,22 @@ When host access is `on` (see `agent-host-access`), the server SHALL offer tools
 - **WHEN** the agent reads a file outside every allowed path
 - **THEN** the call SHALL wait for approval and return the content only after it
 
-### Requirement: Instructions point to the skill
+### Requirement: Instructions point to the guides
 
-The server instructions SHALL give a short summary of how to search and annotate and SHALL name the skill described in `agent-skill`.
+The server instructions (a single text, as MCP defines them) SHALL give a short summary of how to search and annotate and SHALL tell the agent to call the `guide` tool, with the topics `usage`, `management` and `ontology`, described in `agent-skill`. The `guide` tool SHALL be listed at every permission level.
 
 #### Scenario: Instructions
 - **WHEN** a client initializes the server
-- **THEN** the instructions SHALL mention search by meaning, types and the skill
+- **THEN** the instructions SHALL mention search by meaning, types, the guide tool and its three topics
+
+### Requirement: Guides as resources
+
+The server SHALL declare the resources capability and list one Markdown resource per guide, `cerbo://guide/usage`, `cerbo://guide/management` and `cerbo://guide/ontology`. Reading one SHALL return the guide rendered for the session's permission and host access, as the guide tool does. Other URIs SHALL be unknown.
+
+#### Scenario: List
+- **WHEN** a client lists resources
+- **THEN** it SHALL receive the three guides with a title and a one-sentence description
+
+#### Scenario: Read follows the permission
+- **WHEN** the vault's permission changes from `read` to `auto` and the client reads `cerbo://guide/management` again
+- **THEN** the second read SHALL describe the page-changing tools and the first SHALL NOT

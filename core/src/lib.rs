@@ -79,6 +79,7 @@ impl From<context::CoreContext> for CerboContext {
 
 pub mod agent;
 pub mod host_access;
+pub mod ontology;
 pub mod config;
 pub mod context;
 pub mod cursor_positions;

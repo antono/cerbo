@@ -462,6 +462,10 @@ pub enum Call {
     HostWrite { vault: String, path: String, content: String },
 
     // Reads
+    /// The prefixes the vault can annotate with.
+    OntologyList { vault: String },
+    /// The declared types of one prefix's ontology.
+    OntologyTypes { vault: String, prefix: String },
     PageList { vault: String },
     PageRead { vault: String, page: String },
     /// The attachments of one page, or of the whole vault without `page`.
@@ -541,6 +545,25 @@ pub enum Call {
     PageTrash { vault: String, page: String },
     /// Append a link to `to` at the end of page `from`.
     LinkAdd { vault: String, from: String, to: String },
+    /// Create a vault-owned ontology with its own prefix.
+    OntologyCreate {
+        vault: String,
+        prefix: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
+    /// Add a type to a vault-owned ontology.
+    OntologyAddType {
+        vault: String,
+        prefix: String,
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        comment: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
+    },
 
     // Agent sessions. None of these are for agent connections.
     /// The agent CLIs and whether each can run: a list of [`AgentInfo`].
@@ -627,6 +650,8 @@ impl Call {
                 | Call::PageMove { .. }
                 | Call::PageTrash { .. }
                 | Call::LinkAdd { .. }
+                | Call::OntologyCreate { .. }
+                | Call::OntologyAddType { .. }
         )
     }
 
@@ -644,6 +669,8 @@ impl Call {
             Call::PageMove { .. } => "move",
             Call::PageTrash { .. } => "trash",
             Call::LinkAdd { .. } => "link",
+            Call::OntologyCreate { .. } => "ontology",
+            Call::OntologyAddType { .. } => "add_type",
             _ => return None,
         })
     }
@@ -687,7 +714,11 @@ impl Call {
             | Call::PageMove { vault, .. }
             | Call::PageTrash { vault, .. }
             | Call::SessionCreate { vault, .. }
-            | Call::LinkAdd { vault, .. } => Some(vault),
+            | Call::LinkAdd { vault, .. }
+            | Call::OntologyList { vault }
+            | Call::OntologyTypes { vault, .. }
+            | Call::OntologyCreate { vault, .. }
+            | Call::OntologyAddType { vault, .. } => Some(vault),
         }
     }
 }

@@ -1,6 +1,7 @@
 mod agent;
 mod daemon;
 mod mcp;
+mod mcp_guide;
 
 use cerbo_core::CerboContext;
 use cerbo_core::context::CoreContext;

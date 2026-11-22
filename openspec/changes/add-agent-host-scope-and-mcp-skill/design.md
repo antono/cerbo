@@ -52,7 +52,9 @@ The card reuses the existing approval queue and deadline of the vault flow (D7 o
 
 **D7. Ontology tools are thin.** `ontology_list`, `ontology_types` read the vault's ontology map and the `meta.ttl` class declarations. `ontology_create` and `ontology_add_type` follow what `cerbo import-ontology` and the vault import already do: a vault-owned ontology object with namespace `cerbo://vocab/<uuid>/`, a prefix in `.cerbo/ontology-map.json`, and a class declared in `meta.ttl`. They are write calls, so they pass the write queue, approval and change log like page edits. Bundled and imported ontologies are refused so that a vendor ontology is never silently altered.
 
-**D8. The skill is one source, rendered per session.** A single skill text lives in the repository (next to `.agents/skills/cerbo-cli`, which targets human-run CLI use; this one targets MCP tools). At session start the daemon renders it with only the sections the session may use (host section when `host = on`, write and ontology-write sections when permission is not `read`) and writes it into the agent's home, and the same rendered summary goes into the server instructions. A test compares tool names in the skill with the tools the server registers. Where each agent reads skills from inside its home (`.claude` for Claude Code, under `.config` for OpenCode) is to be confirmed against each agent's documentation before implementation.
+**D8. Three guides, offered as a tool and as resources.** MCP gives a server exactly one `instructions` string in the initialize result ([MCP lifecycle](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle)), so more than one text needs another primitive. MCP has three: tools are chosen by the model, resources are read-only documents the application attaches, and prompts are templates the user picks. The `rmcp` 3.11 we use supports resources and prompts. We use a tool and resources. The `guide` tool takes a `topic` and is the channel that always works: in the daemon's sandbox both agents have their own tools off (Claude is started with `tools: []`, OpenCode denies everything except `cerbo_*`), so the agent cannot call a client-side resource reader, and a skill file in the agent home could not be loaded either (Claude Code reads `$CLAUDE_CONFIG_DIR/skills/<name>/SKILL.md`, OpenCode `~/.config/opencode/skills/<name>/SKILL.md`; see [Claude Code skills](https://code.claude.com/docs/en/skills), [OpenCode skills](https://opencode.ai/docs/skills)). Resources `cerbo://guide/<topic>` carry the same texts for clients that show them (Claude Code lists resources with `@`, third-party sources say; unverified for OpenCode). Prompts are not used: a user-picked template does not fit text the model needs on its own.
+
+The three sources are `cli/src/guide/{usage,management,ontology}.md`, with sections marked for write, not-write and host and tools written `{{tool:name}}`. They are rendered for the session's state (write allowed, host on), by the tool and by the resource read alike. A short summary in the server instructions names the topics. The same texts, with every section, are kept as `.agents/skills/cerbo-mcp-<topic>/SKILL.md` for agents that run outside the sandbox. Tests check that every tool a guide names is registered, that a read-only rendering names no write or host tool, that the summary lists every topic, and that the skill files equal their sources. The SPARQL questions in the ontology guide were run against a real vault when written.
 
 **D9. Panel visibility.** The agent panel shows a persistent "host access on" marker with the list, and an approval card for a host call shows the real path, the action and, for writes, a diff (new file: its size).
 
@@ -61,8 +63,8 @@ The card reuses the existing approval queue and deadline of the vault flow (D7 o
 - [`write` entry covers a large area, such as the whole home folder] → the CLI and app warn when an entry is a parent of the home folder or `/`, and the manual says plainly that this reduces isolation.
 - [Check-then-use gap on a path] → D3; remaining risk is documented, as with the vault guarantee: a same-user process can already bypass everything.
 - [Large files through MCP are heavy] → host read has a size limit (default 137 KB per call, chunked by offset) and the card shows the size before approving.
-- [Skill drifts from the tools] → the generating test in D8.
-- [Agents ignore the skill] → server instructions carry the short summary, so the method reaches the agent even if the skill file is not loaded.
+- [Guide drifts from the tools] → the tests in D8.
+- [Agents ignore the guide] → server instructions carry the short summary, so the method reaches the agent even if it never calls the tool.
 - [Approval fatigue for many outside paths] → the user can add the folder to the list; the card text says so.
 
 ## Migration Plan
@@ -73,5 +75,4 @@ The card reuses the existing approval queue and deadline of the vault flow (D7 o
 
 ## Open Questions
 
-- Exact per-agent skill location inside the agent home (D8); decided during implementation, does not change the specs.
 - Default size limit for a host read (D-risks); easily changed later.

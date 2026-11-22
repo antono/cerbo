@@ -1308,6 +1308,8 @@ fn read(vault: &VaultHandle, embed: &EmbedWorker, call: Call) -> OpResult {
             ops::similar(vault, embed, &page, limit, types, annotated)
         }
         Call::Sparql { query, .. } => ops::sparql(vault, &query),
+        Call::OntologyList { .. } => ops::ontology_list(vault),
+        Call::OntologyTypes { prefix, .. } => ops::ontology_types(vault, &prefix),
         other => Err(RpcError::failed(format!("not a read: {other:?}"))),
     }
 }
@@ -1320,6 +1322,10 @@ fn write(vault: &VaultHandle, call: Call, base: Option<u64>) -> Written {
         Call::PageMove { page, path, .. } => ops::page_move(vault, &page, path),
         Call::PageTrash { page, .. } => ops::page_trash(vault, &page),
         Call::LinkAdd { from, to, .. } => ops::link_add(vault, &from, &to),
+        Call::OntologyCreate { prefix, title, .. } => ops::ontology_create(vault, &prefix, title.as_deref()),
+        Call::OntologyAddType { prefix, name, label, comment, parent, .. } => {
+            ops::ontology_add_type(vault, &prefix, &name, label.as_deref(), comment.as_deref(), parent.as_deref())
+        }
         other => Written { page: None, result: Err(RpcError::failed(format!("not a write: {other:?}"))) },
     }
 }
