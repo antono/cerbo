@@ -40,6 +40,7 @@ function context(state: Partial<ActionContext> = {}): ActionContext {
     openSearch: vi.fn(),
     toggleSearch: vi.fn(),
     addVault: vi.fn(),
+    importVault: vi.fn(),
     toggleLeftSidebar: vi.fn(),
     toggleRightSidebar: vi.fn(),
     useRightPanelTab: vi.fn(),

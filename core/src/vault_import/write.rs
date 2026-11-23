@@ -162,6 +162,27 @@ fn try_import_lock(vault: &VaultContext) -> Result<Option<File>, String> {
 
 /// Write `plan` into `vault` and return the report.
 ///
+/// Where a running import is, for a progress bar. `done` of `total` objects
+/// within `phase`; `indexing` is one indivisible step (`done` 0, `total` 1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Progress {
+    pub phase: &'static str,
+    pub done: usize,
+    pub total: usize,
+}
+
+/// Like [`run_import`], calling `on_progress` as objects are staged and made
+/// live, and once before the index catch-up.
+pub fn run_import_with_progress(
+    vault: &VaultContext,
+    plan: &ImportPlan,
+    options: ImportOptions,
+    on_progress: &mut dyn FnMut(Progress),
+) -> Result<ImportReport, String> {
+    run_import_inner(vault, plan, options, on_progress)
+}
+
 /// The whole run holds the vault's import lock, so a second import cannot
 /// take a live one's staging folder for a leftover. Before anything else a
 /// leftover staging folder from an interrupted import is cleaned up. Unless
@@ -172,6 +193,15 @@ pub fn run_import(
     vault: &VaultContext,
     plan: &ImportPlan,
     options: ImportOptions,
+) -> Result<ImportReport, String> {
+    run_import_inner(vault, plan, options, &mut |_| {})
+}
+
+fn run_import_inner(
+    vault: &VaultContext,
+    plan: &ImportPlan,
+    options: ImportOptions,
+    on_progress: &mut dyn FnMut(Progress),
 ) -> Result<ImportReport, String> {
     check_target_outside_source(&plan.source, &vault.vault_path)?;
     if !vault.cerbo_dir().is_dir() {
@@ -196,7 +226,7 @@ pub fn run_import(
 
     let staging = staging_root(vault).join(&plan.ontology_uuid);
     let prefix = unique_prefix(&PrefixMap::load_vault(vault)?, &plan.prefix_base);
-    if let Err(e) = stage(&staging, plan) {
+    if let Err(e) = stage(&staging, plan, on_progress) {
         let _ = fs::remove_dir_all(&staging);
         return Err(e);
     }
@@ -216,7 +246,7 @@ pub fn run_import(
     }
 
     let mut warnings = Vec::new();
-    let prefix = match commit(vault, &staging, &uuids, &prefix, plan) {
+    let prefix = match commit(vault, &staging, &uuids, &prefix, plan, on_progress) {
         Ok(prefix) => prefix,
         Err(Commit::Crashed) => return Err("simulated crash during commit".to_string()),
         Err(Commit::Failed { error, renamed }) => {
@@ -249,6 +279,7 @@ pub fn run_import(
         path: vault.vault_path.to_string_lossy().into_owned(),
     });
     report.warnings.extend(warnings);
+    on_progress(Progress { phase: "indexing", done: 0, total: 1 });
     if let Err(e) = refresh_index(vault) {
         report
             .warnings
@@ -415,7 +446,9 @@ fn unique_prefix(map: &PrefixMap, base: &str) -> String {
         .expect("some suffix is always free")
 }
 
-fn stage(staging: &Path, plan: &ImportPlan) -> Result<(), String> {
+fn stage(staging: &Path, plan: &ImportPlan, on_progress: &mut dyn FnMut(Progress)) -> Result<(), String> {
+    let total = plan.attachments.len() + plan.pages.len() + 1;
+    let mut done = 0usize;
     if staging.exists() {
         return Err(format!(
             "Staging folder already exists: {}",
@@ -453,6 +486,8 @@ fn stage(staging: &Path, plan: &ImportPlan) -> Result<(), String> {
             virtual_path: None,
         };
         write(&d.join("meta.ttl"), &meta.to_turtle(&a.uuid))?;
+        done += 1;
+        on_progress(Progress { phase: "staging", done, total });
     }
 
     for p in &plan.pages {
@@ -472,6 +507,8 @@ fn stage(staging: &Path, plan: &ImportPlan) -> Result<(), String> {
             &meta.to_turtle_with(&p.uuid, &p.triples),
         )?;
         write(&d.join("page.md"), &p.content)?;
+        done += 1;
+        on_progress(Progress { phase: "staging", done, total });
     }
 
     let d = dir(&plan.ontology_uuid)?;
@@ -497,6 +534,7 @@ fn stage(staging: &Path, plan: &ImportPlan) -> Result<(), String> {
         &meta.to_turtle_with(&plan.ontology_uuid, &extra),
     )?;
     write(&d.join("page.md"), &ontology_page(plan))?;
+    on_progress(Progress { phase: "staging", done: total, total });
     Ok(())
 }
 
@@ -554,6 +592,7 @@ fn commit(
     uuids: &[String],
     prefix: &str,
     plan: &ImportPlan,
+    on_progress: &mut dyn FnMut(Progress),
 ) -> Result<String, Commit> {
     let objects = vault.objects_dir();
     let mut renamed: Vec<String> = Vec::new();
@@ -569,6 +608,7 @@ fn commit(
             });
         }
         renamed.push(uuid.clone());
+        on_progress(Progress { phase: "committing", done: renamed.len(), total: uuids.len() });
     }
     let _ = fsio::sync_dir(&objects);
 

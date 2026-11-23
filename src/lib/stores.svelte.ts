@@ -225,6 +225,7 @@ export const app = $state({
   // New Folder dialog: open flag and the prefilled path.
   showNewFolder: false,
   newFolderPath: '',
+  showImportVault: false,
   showSparqlConsole: false,
   // Last query run in the SPARQL console, kept in ui.toml across restarts.
   lastSparqlQuery: null as string | null,
@@ -299,6 +300,7 @@ export function closeAllDialogs() {
   app.newPagePath = '';
   app.showNewFolder = false;
   app.newFolderPath = '';
+  app.showImportVault = false;
 }
 
 // ── Panels and editor mode ────────────────────────────────────────────────────
@@ -948,6 +950,11 @@ export function triggerNewFolder(parent = '') {
   closeAllDialogs();
   app.newFolderPath = parent ? `${parent}/` : '';
   app.showNewFolder = true;
+}
+
+export function triggerImportVault() {
+  closeAllDialogs();
+  app.showImportVault = true;
 }
 
 export function triggerMove(uuid?: string) {

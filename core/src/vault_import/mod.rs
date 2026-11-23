@@ -31,8 +31,8 @@ pub use report::{
 pub use scan::{Detection, UNDETECTABLE, detect};
 pub use triples::NS_VOCAB;
 pub use write::{
-    ImportOptions, check_repeat, check_target_outside_source, file_url, finish_interrupted_import,
-    recover_staging, run_import,
+    ImportOptions, Progress, check_repeat, check_target_outside_source, file_url, finish_interrupted_import,
+    recover_staging, run_import, run_import_with_progress,
 };
 
 use serde::{Deserialize, Serialize};

@@ -200,6 +200,9 @@ pub fn run() {
             vault::vault_relocate,
             vault::vault_update_last_page,
             vault::vault_objects_list,
+            vault::vault_import_detect,
+            vault::vault_import_plan,
+            vault::vault_import_run,
             // index
             index::backlinks_get,
             index::outgoing_links_get,

@@ -35,6 +35,7 @@ import {
   Sun,
   TextCursorInput,
   Trash2,
+  Import,
 } from 'lucide-svelte';
 import { isMac } from './hotkeys';
 import { RIGHT_PANELS, type RightPanelId } from './right-panels';
@@ -62,6 +63,7 @@ export interface ActionContext {
   /** Close search when open, else open it with `prefill`. */
   toggleSearch(prefill: string): void;
   addVault(): void;
+  importVault(): void;
   toggleLeftSidebar(): void;
   toggleRightSidebar(): void;
   /** Show the right panel on tab `id`, or hide it when `id` is already selected. */
@@ -171,6 +173,13 @@ export const ACTIONS: readonly Action[] = [
     hotkey: { mod: true, shift: true, key: 'o' },
     synonyms: ['new vault', 'register vault'],
     run: (ctx) => ctx.addVault(),
+  },
+  {
+    id: 'vault.import',
+    label: 'Import vault…',
+    icon: Import,
+    synonyms: ['obsidian', 'tolaria', 'import notes', 'import obsidian vault'],
+    run: (ctx) => ctx.importVault(),
   },
 
   // ── Panels and mode ─────────────────────────────────────────────────────

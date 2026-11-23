@@ -17,6 +17,7 @@ import {
   openPrevPage,
   openSearch,
   quickAddVault,
+  triggerImportVault,
   revealPage,
   saveUiSettings,
   setError,
@@ -87,6 +88,9 @@ export const appActions: ActionContext = {
   addVault() {
     closeAllDialogs();
     void quickAddVault();
+  },
+  importVault() {
+    triggerImportVault();
   },
   toggleLeftSidebar,
   toggleRightSidebar,

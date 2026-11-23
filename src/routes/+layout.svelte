@@ -13,6 +13,7 @@
   import MovePageDialog from '#lib/MovePageDialog.svelte';
   import RenameFolderDialog from '#lib/RenameFolderDialog.svelte';
   import NewFolderDialog from '#lib/NewFolderDialog.svelte';
+  import ImportVaultDialog from '#lib/ImportVaultDialog.svelte';
   import KeyboardHelp from '#lib/KeyboardHelp.svelte';
   import SparqlConsole from '#lib/SparqlConsole.svelte';
   import ExitConfirmation from '#lib/ExitConfirmation.svelte';
@@ -338,6 +339,10 @@
 
 {#if app.showNewFolder}
   <NewFolderDialog onClose={() => { app.showNewFolder = false; app.newFolderPath = ''; }} />
+{/if}
+
+{#if app.showImportVault}
+  <ImportVaultDialog onClose={() => app.showImportVault = false} />
 {/if}
 
 {#if app.showHelp}
