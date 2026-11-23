@@ -1,6 +1,12 @@
-{ pkgs, craneLib, tauri-deps }:
+{ pkgs, craneLib, tauri-deps, rev ? null }:
 let
   lib = pkgs.lib;
+
+  # The release version lives in cli/Cargo.toml (the release workflow bumps
+  # it). A build from a git checkout adds the commit: 0.1.0-unstable+1ef7acb,
+  # with "-dirty" for uncommitted changes.
+  cargoVersion = (lib.importTOML ../cli/Cargo.toml).package.version;
+  version = if rev == null then cargoVersion else "${cargoVersion}-unstable+${rev}";
 
   # fastembed loads ONNX Runtime at run time (ort `load-dynamic`); the binaries
   # find it through this variable unless the user sets their own.
@@ -24,7 +30,9 @@ let
   common = {
     src = rustSrc;
     strictDeps = true;
-    version = "0.1.0";
+    # The commit goes only on the final packages (rustPackage): in the
+    # dependency build it would rebuild RocksDB on every commit.
+    version = cargoVersion;
     # bindgenHook provides libclang for oxigraph's bundled RocksDB.
     nativeBuildInputs = [
       pkgs.pkg-config
@@ -65,7 +73,7 @@ let
         cargoCheckCommand = "true";
       });
     in
-    craneLib.buildPackage (a // { inherit cargoArtifacts; });
+    craneLib.buildPackage (a // { inherit cargoArtifacts version; });
 
   cerbo = rustPackage {
     pname = "cerbo";
@@ -159,7 +167,8 @@ let
 
   cerbo-frontend = pkgs.stdenv.mkDerivation {
     pname = "cerbo-frontend";
-    version = "0.1.0";
+    # Without the commit: a Rust-only commit must not rebuild the frontend.
+    version = cargoVersion;
     src = frontendSrc;
     nativeBuildInputs = [
       pkgs.bun

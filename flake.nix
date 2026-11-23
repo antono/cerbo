@@ -40,6 +40,7 @@
         cerbo-pkgs = import ./nix/pkgs.nix {
           inherit pkgs tauri-deps;
           craneLib = crane.mkLib pkgs;
+          rev = self.shortRev or self.dirtyShortRev or null;
         };
         inherit (cerbo-pkgs) cerbo cerboid cerbo-frontend cerbo-desktop tauri-driver;
 

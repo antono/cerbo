@@ -90,6 +90,7 @@ jobs:
           for path in [
               Path("core/Cargo.toml"),
               Path("cli/Cargo.toml"),
+              Path("cerboid/Cargo.toml"),
               Path("src-tauri/Cargo.toml"),
           ]:
               text = path.read_text(encoding="utf-8")
@@ -119,10 +120,6 @@ jobs:
               encoding="utf-8",
           )
 
-          nix_file = Path("nix/pkgs.nix")
-          nix_text = nix_file.read_text(encoding="utf-8")
-          nix_text = re.sub(r'version = "[^"]+";', f'version = "{version}";', nix_text)
-          nix_file.write_text(nix_text, encoding="utf-8")
           PY
       - name: Refresh Cargo lockfile
         run: cargo generate-lockfile
@@ -132,7 +129,7 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           BRANCH: ${{ steps.version.outputs.branch }}
         run: |
-          git add Cargo.lock core/Cargo.toml cli/Cargo.toml src-tauri/Cargo.toml src-tauri/tauri.conf.json package.json nix/pkgs.nix
+          git add Cargo.lock core/Cargo.toml cli/Cargo.toml cerboid/Cargo.toml src-tauri/Cargo.toml src-tauri/tauri.conf.json package.json
           git commit -m "chore(release): bump version to ${VERSION}"
           git push origin "HEAD:${BRANCH}"
           git tag -a "${TAG}" -m "Release ${TAG}"
