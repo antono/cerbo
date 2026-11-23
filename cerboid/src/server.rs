@@ -1317,6 +1317,8 @@ fn read(vault: &VaultHandle, embed: &EmbedWorker, call: Call) -> OpResult {
             ops::similar(vault, embed, &page, limit, types, annotated)
         }
         Call::Sparql { query, .. } => ops::sparql(vault, &query),
+        Call::ViewList { .. } => ops::view_list(vault),
+        Call::ViewGet { view, .. } => ops::view_get(vault, &view),
         Call::IndexStatus { .. } => ops::index_status(vault),
         Call::TrashList { .. } => ops::trash_list(vault),
         Call::OntologyList { .. } => ops::ontology_list(vault),
@@ -1332,6 +1334,9 @@ fn write(vault: &VaultHandle, call: Call, base: Option<u64>) -> Written {
         Call::PageRename { page, title, .. } => ops::page_rename(vault, &page, title),
         Call::PageMove { page, path, .. } => ops::page_move(vault, &page, path),
         Call::PageTrash { page, .. } => ops::page_trash(vault, &page),
+        Call::ViewCreate { title, nodes, .. } => ops::view_create(vault, &title, &nodes),
+        Call::ViewUpdate { view, title, nodes, .. } => ops::view_update(vault, &view, title.as_deref(), &nodes),
+        Call::ViewDelete { view, .. } => ops::view_delete(vault, &view),
         Call::LinkAdd { from, to, .. } => ops::link_add(vault, &from, &to),
         Call::IndexRebuild { .. } => ops::index_rebuild(vault),
         Call::PageRestore { page, .. } => ops::page_restore(vault, &page),

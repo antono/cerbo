@@ -34,6 +34,11 @@ pub struct UiSettings {
     /// in a `ui.toml` written before the tree existed.
     #[serde(default)]
     pub collapsed_folders: BTreeMap<String, Vec<String>>,
+    /// The sidebar view (spec `desktop-view-switcher`) the user last chose, per
+    /// vault id. A vault on the default view "All notes" has no entry. Absent
+    /// in a `ui.toml` written before views existed.
+    #[serde(default)]
+    pub active_views: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +92,7 @@ pub fn merge_ui_settings(
         last_sparql_query: last_sparql_query.or_else(|| base.last_sparql_query.clone()),
         right_panel_tab: right_panel_tab.or_else(|| base.right_panel_tab.clone()),
         collapsed_folders: base.collapsed_folders.clone(),
+        active_views: base.active_views.clone(),
     }
 }
 
@@ -100,6 +106,17 @@ pub fn set_collapsed_folders(ctx: &CerboContext, vault_id: &str, paths: Vec<Stri
     } else {
         settings.collapsed_folders.insert(vault_id.to_string(), paths);
     }
+    save_ui_settings(ctx, &settings)
+}
+
+/// Remember the sidebar view of `vault_id`; `None` (the default view) removes
+/// the vault's entry.
+pub fn set_active_view(ctx: &CerboContext, vault_id: &str, view: Option<String>) -> Result<(), String> {
+    let mut settings = load_ui_settings(ctx)?;
+    match view.filter(|v| !v.is_empty()) {
+        Some(view) => settings.active_views.insert(vault_id.to_string(), view),
+        None => settings.active_views.remove(vault_id),
+    };
     save_ui_settings(ctx, &settings)
 }
 
@@ -143,6 +160,7 @@ mod tests {
             last_sparql_query: None,
             right_panel_tab: None,
             collapsed_folders: BTreeMap::new(),
+            active_views: BTreeMap::new(),
         };
         save_ui_settings(&ctx, &settings).unwrap();
 
@@ -275,5 +293,21 @@ mod tests {
         // Saving other settings keeps the tab.
         let kept = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None, None, None);
         assert_eq!(kept.right_panel_tab.as_deref(), Some("outline"));
+    }
+
+    #[test]
+    fn active_view_round_trips_per_vault_and_clears() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = CerboContext { config_dir: tmp.path().join("config"), cache_dir: tmp.path().join("cache") };
+        assert!(load_ui_settings(&ctx).unwrap().active_views.is_empty());
+
+        set_active_view(&ctx, "vault-a", Some("view-1".into())).unwrap();
+        set_active_view(&ctx, "vault-b", Some("view-2".into())).unwrap();
+        let loaded = load_ui_settings(&ctx).unwrap();
+        assert_eq!((loaded.active_views["vault-a"].as_str(), loaded.active_views["vault-b"].as_str()), ("view-1", "view-2"));
+
+        set_active_view(&ctx, "vault-a", None).unwrap();
+        assert!(!load_ui_settings(&ctx).unwrap().active_views.contains_key("vault-a"));
+        assert_eq!(load_ui_settings(&ctx).unwrap().active_views.len(), 1);
     }
 }

@@ -53,6 +53,15 @@ import {
   type TreeNode,
   type TreeRow,
 } from './page-tree';
+import {
+  appendPage,
+  buildViewTree,
+  moveAt,
+  removeAt,
+  type StoredNode,
+  type ViewData,
+  type ViewMeta,
+} from './view-tree';
 
 
 // ── Types (mirror Rust structs) ───────────────────────────────────────────────
@@ -106,6 +115,8 @@ export interface UiSettings {
   rightPanelTab?: string | null;
   /** Collapsed sidebar folders per vault id; only collapsed ones are listed. */
   collapsedFolders?: Record<string, string[]>;
+  /** The sidebar view chosen per vault id; absent = the default view. */
+  activeViews?: Record<string, string>;
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system';
@@ -196,6 +207,18 @@ export const app = $state({
   collapsedFolders: [] as string[],
   // Collapsed folders of every vault, as loaded from ui.toml.
   uiCollapsedFolders: {} as Record<string, string[]>,
+  // Views (spec `desktop-view-switcher`): the vault's views, the active one's
+  // id (null is the default view "All notes"), its resolved tree and stored
+  // nodes (what an edit sends back), a load error, and the collapsed folders of
+  // the view (not remembered: a view's folders start expanded).
+  views: [] as ViewMeta[],
+  activeViewId: null as string | null,
+  viewData: null as ViewData | null,
+  viewNodes: [] as StoredNode[],
+  viewError: null as string | null,
+  viewCollapsed: [] as string[],
+  // The chosen view of every vault, as loaded from ui.toml.
+  uiActiveViews: {} as Record<string, string>,
   // The vault's sidebar layout from `.cerbo/tree.toml` (add-sidebar-ordering):
   // pinned folders and the order of each folder's children.
   layout: EMPTY_LAYOUT as TreeLayout,
@@ -230,6 +253,7 @@ export async function loadUiSettings(): Promise<void> {
     }
     app.rightPanelTab = parseRightPanel(res.rightPanelTab);
     app.uiCollapsedFolders = res.collapsedFolders ?? {};
+    app.uiActiveViews = res.activeViews ?? {};
     // `windowBounds` is applied by the desktop layer when the window opens
     // and saved by `app_exit`; the frontend never sends it (null keeps it).
   } catch (e) {
@@ -473,6 +497,7 @@ export async function openVault(vaultId: string): Promise<void> {
     await invoke('vault_set_active', { id: vaultId });
     await loadPages();
     app.collapsedFolders = pruneCollapsed(app.uiCollapsedFolders[vaultId] ?? [], app.pages, app.layout);
+    await restoreActiveView(vaultId);
     await loadVaultObjects();
     // Before the first page renders, so mentions resolve on first paint.
     await loadPrefixMap();
@@ -558,6 +583,8 @@ export async function loadPages(): Promise<void> {
     app.layout = EMPTY_LAYOUT;
     setError(String(e));
   }
+  // Titles and missing pages in the active view follow the pages.
+  if (app.activeViewId) void loadActiveView();
 }
 
 export async function loadPrefixMap(): Promise<void> {
@@ -647,14 +674,129 @@ export async function openPrevPage(): Promise<void> {
 
 // ── Sidebar tree (spec `desktop-page-tree`, design D5, D6) ───────────────────
 
-/** The sidebar tree of `app.pages` in the vault layout's order. */
+/** Whether the sidebar shows a view rather than the default tree. */
+export function inView(): boolean {
+  return app.activeViewId !== null && app.viewData !== null;
+}
+
+/** The sidebar tree: the active view's, or `app.pages` in the vault layout's order. */
 export function pageTree(): TreeNode[] {
+  if (inView() && app.viewData) return buildViewTree(app.viewData.nodes);
   return buildPageTree(app.pages, app.layout);
+}
+
+/** The collapsed folders of what the sidebar shows. */
+export function collapsedPaths(): ReadonlySet<string> {
+  return new Set(inView() ? app.viewCollapsed : app.collapsedFolders);
 }
 
 /** The sidebar rows: the tree minus collapsed subtrees. */
 export function visibleRows(): TreeRow[] {
-  return flattenVisible(pageTree(), new Set(app.collapsedFolders));
+  return flattenVisible(pageTree(), collapsedPaths());
+}
+
+// ── Views (spec `desktop-view-switcher`) ─────────────────────────────────────
+
+/** Reload the vault's view list (also when the dropdown opens: an agent may have added one). */
+export async function loadViews(): Promise<void> {
+  try {
+    app.views = await invoke<ViewMeta[]>('view_list');
+  } catch (e) {
+    app.views = [];
+    console.error('Failed to list views:', e);
+  }
+}
+
+/** Load the active view's tree; an id that fails to load leaves the default tree and says why. */
+export async function loadActiveView(): Promise<void> {
+  const id = app.activeViewId;
+  if (!id) {
+    app.viewData = null;
+    app.viewNodes = [];
+    app.viewError = null;
+    return;
+  }
+  try {
+    const [data, nodes] = await Promise.all([
+      invoke<ViewData>('view_get', { uuid: id }),
+      invoke<StoredNode[]>('view_nodes', { uuid: id }),
+    ]);
+    if (app.activeViewId !== id) return;
+    app.viewData = data;
+    app.viewNodes = nodes;
+    app.viewError = null;
+  } catch (e) {
+    if (app.activeViewId !== id) return;
+    app.viewData = null;
+    app.viewNodes = [];
+    app.viewError = String(e);
+  }
+}
+
+/** Restore the vault's remembered view; one that no longer exists is dropped. */
+async function restoreActiveView(vaultId: string): Promise<void> {
+  app.viewCollapsed = [];
+  await loadViews();
+  const saved = app.uiActiveViews[vaultId];
+  app.activeViewId = saved && app.views.some((v) => v.uuid === saved) ? saved : null;
+  if (saved && !app.activeViewId) {
+    delete app.uiActiveViews[vaultId];
+    invoke('ui_settings_set_active_view', { vaultId, viewId: null }).catch(() => {});
+  }
+  await loadActiveView();
+}
+
+/** Show view `id` (null: the default view) and remember the choice for this vault. */
+export async function setActiveView(id: string | null): Promise<void> {
+  const vaultId = app.activeVaultId;
+  if (!vaultId || app.activeViewId === id) return;
+  app.activeViewId = id;
+  app.viewCollapsed = [];
+  if (id) app.uiActiveViews[vaultId] = id;
+  else delete app.uiActiveViews[vaultId];
+  invoke('ui_settings_set_active_view', { vaultId, viewId: id }).catch((e) => {
+    console.error('Failed to save the sidebar view:', e);
+  });
+  await loadActiveView();
+}
+
+async function saveViewNodes(id: string, nodes: StoredNode[]): Promise<void> {
+  try {
+    await invoke('view_update', { uuid: id, title: null, nodes });
+  } catch (e) {
+    setError(String(e));
+    return;
+  }
+  if (app.activeViewId === id) await loadActiveView();
+}
+
+/** Take the node at `path` out of the active view; the page itself stays. */
+export async function viewRemoveNode(path: number[]): Promise<void> {
+  const id = app.activeViewId;
+  if (!id || !inView()) return;
+  await saveViewNodes(id, removeAt(app.viewNodes, path));
+}
+
+/** Move the node at `path` one place among its siblings in the active view. */
+export async function viewMoveNode(path: number[], delta: -1 | 1): Promise<void> {
+  const id = app.activeViewId;
+  if (!id || !inView()) return;
+  const next = moveAt(app.viewNodes, path, delta);
+  if (next !== app.viewNodes) await saveViewNodes(id, next);
+}
+
+/** Add a reference to page `uuid` at the end of view `viewId`, whether or not it is the active one. */
+export async function addPageToView(viewId: string, uuid: string): Promise<void> {
+  try {
+    const stored = viewId === app.activeViewId && inView()
+      ? app.viewNodes
+      : await invoke<StoredNode[]>('view_nodes', { uuid: viewId });
+    await invoke('view_update', { uuid: viewId, title: null, nodes: appendPage(stored, uuid) });
+  } catch (e) {
+    setError(String(e));
+    return;
+  }
+  if (app.activeViewId === viewId) await loadActiveView();
 }
 
 /** Set the collapsed folders of the open vault and remember them in ui.toml. */
@@ -672,15 +814,23 @@ export function setCollapsedFolders(paths: string[]): void {
 }
 
 export function collapseFolder(path: string): void {
+  if (inView()) {
+    if (!app.viewCollapsed.includes(path)) app.viewCollapsed = [...app.viewCollapsed, path];
+    return;
+  }
   if (!app.collapsedFolders.includes(path)) setCollapsedFolders([...app.collapsedFolders, path]);
 }
 
 export function expandFolder(path: string): void {
+  if (inView()) {
+    app.viewCollapsed = app.viewCollapsed.filter((p) => p !== path);
+    return;
+  }
   if (app.collapsedFolders.includes(path)) setCollapsedFolders(app.collapsedFolders.filter((p) => p !== path));
 }
 
 export function toggleFolder(path: string): void {
-  if (app.collapsedFolders.includes(path)) expandFolder(path);
+  if (collapsedPaths().has(path)) expandFolder(path);
   else collapseFolder(path);
 }
 

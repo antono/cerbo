@@ -206,7 +206,7 @@ impl Drop for Mcp {
     }
 }
 
-const READ_TOOLS: [&str; 13] = [
+const READ_TOOLS: [&str; 15] = [
     "backlinks",
     "guide",
     "index_status",
@@ -220,8 +220,10 @@ const READ_TOOLS: [&str; 13] = [
     "search_semantic",
     "search_text",
     "sparql_query",
+    "view_get",
+    "view_list",
 ];
-const WRITE_TOOLS: [&str; 11] = [
+const WRITE_TOOLS: [&str; 14] = [
     "create_page",
     "delete_page",
     "edit_page",
@@ -233,6 +235,9 @@ const WRITE_TOOLS: [&str; 11] = [
     "ontology_import",
     "rename_page",
     "restore_page",
+    "view_create",
+    "view_delete",
+    "view_update",
 ];
 const HOST_TOOLS: [&str; 3] = ["host_list", "host_read", "host_write"];
 
@@ -391,6 +396,55 @@ fn raising_the_permission_adds_the_write_tools_and_lowering_it_takes_them_away()
 
     env.cerbo_ok(&["vault", "agent", &id, "read"]);
     assert_eq!(mcp.tools(), sorted(READ_TOOLS));
+}
+
+#[test]
+fn an_agent_can_make_a_view_and_the_cli_sees_it() {
+    let env = Env::new();
+    let (id, root) = env.add_vault("notes");
+    let _daemon = env.start_daemon();
+    env.cerbo_ok(&["vault", "agent", "notes", "auto"]);
+    let mut mcp = env.mcp(root.to_str().unwrap(), Some("opencode"));
+
+    let berlin = mcp.call_ok("create_page", json!({ "title": "Berlin" }))["uuid"].as_str().unwrap().to_string();
+    let rome = mcp.call_ok("create_page", json!({ "title": "Rome" }))["uuid"].as_str().unwrap().to_string();
+
+    // A page that does not exist refuses the whole view.
+    let ghost = "00000000-0000-4000-8000-000000000137";
+    let (is_error, text) = mcp.call(
+        "view_create",
+        json!({ "title": "Bad", "nodes": [{ "kind": "page", "uuid": ghost }] }),
+    );
+    assert!(is_error && text.contains(ghost), "{text}");
+    assert_eq!(mcp.call_ok("view_list", json!({})).as_array().unwrap().len(), 0);
+
+    let made = mcp.call_ok(
+        "view_create",
+        json!({ "title": "Trip", "nodes": [
+            { "kind": "folder", "name": "Cities", "children": [
+                { "kind": "page", "uuid": berlin }, { "kind": "page", "uuid": rome } ] },
+            { "kind": "page", "uuid": berlin }
+        ] }),
+    );
+    let view = made["uuid"].as_str().unwrap().to_string();
+    assert_eq!(mcp.call_ok("view_list", json!({}))[0]["title"], "Trip");
+
+    let tree = mcp.call_ok("view_get", json!({ "view": view }));
+    assert_eq!(tree["nodes"][0]["children"][1]["title"], "Rome", "{tree}");
+    // The view is not a page, and the same page stands in two places.
+    assert_eq!(mcp.call_ok("list_pages", json!({})).as_array().unwrap().len(), 2);
+    assert_eq!(tree["nodes"][1]["uuid"], berlin.as_str());
+
+    // The CLI reads the same view from the files.
+    let shown = env.cerbo_ok(&["view", "show", &view, "--vault", &id]);
+    assert!(shown.contains("Trip") && shown.contains("Cities/") && shown.contains(&rome), "{shown}");
+
+    // Update replaces the tree; delete trashes the view and spares the pages.
+    mcp.call_ok("view_update", json!({ "view": view, "title": "Trip 2", "nodes": [{ "kind": "page", "uuid": rome }] }));
+    assert_eq!(mcp.call_ok("view_get", json!({ "view": view }))["title"], "Trip 2");
+    mcp.call_ok("view_delete", json!({ "view": view }));
+    assert_eq!(mcp.call_ok("view_list", json!({})).as_array().unwrap().len(), 0);
+    assert_eq!(mcp.call_ok("list_pages", json!({})).as_array().unwrap().len(), 2);
 }
 
 #[test]

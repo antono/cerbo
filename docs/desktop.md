@@ -20,6 +20,17 @@ its own vault selector) and edits the same `.cerbo/` store the CLI uses.
   page** and **New folder**. The order and the empty folders are stored in
   the vault (`.cerbo/tree.toml`), so `cerbo folder list` shows the same tree.
   `J`/`K` move, `Tab` cycles, `Ctrl+P` searches by title.
+  **Views**: the dropdown above the tree switches between the default tree
+  ("All notes", every page, as described above) and the vault's views, which
+  are alternative trees over the same pages, for example everything for one
+  trip. An agent can make a view on request (`view_create`), or you can with
+  `cerbo view create`. A view only references pages: it never moves one, and
+  the same page may stand in several places. In a view, **Move up**, **Move
+  down** (also `Alt`+arrows) and **Remove from view** change that view only;
+  `Delete` removes the row from the view and never deletes the page. A page's
+  menu has **Add to view: ...**. A query row lists the pages a SPARQL query
+  finds, up to 137, and shows its error if it fails; a page that was deleted
+  reads "Missing page". The view you chose is remembered per vault.
 - **Editor**: a write tab and a preview tab. Saves are queued and written
   atomically; a page changed on disk by another program shows a diff and asks
   before overwriting.

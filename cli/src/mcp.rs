@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// The tools that change the vault. Not listed at `read`.
-pub(crate) const WRITE_TOOLS: [&str; 11] = [
+pub(crate) const WRITE_TOOLS: [&str; 14] = [
     "create_page",
     "edit_page",
     "rename_page",
@@ -37,6 +37,9 @@ pub(crate) const WRITE_TOOLS: [&str; 11] = [
     "ontology_import",
     "index_rebuild",
     "restore_page",
+    "view_create",
+    "view_update",
+    "view_delete",
 ];
 
 /// The tools that reach files outside the vault. Listed only while the vault's
@@ -69,7 +72,9 @@ const PERMISSION_POLL: Duration = Duration::from_secs(1);
 
 const INSTRUCTIONS: &str = "Tools for one Cerbo vault: a local-first markdown wiki. Pages are identified by UUID and \
 link to each other as cerbo://<uuid>. Read tools always work. Tools that change the vault are only offered when the \
-user allowed it; a change may wait for the user's approval, and deleting a page moves it to the vault trash.";
+user allowed it; a change may wait for the user's approval, and deleting a page moves it to the vault trash. A view is \
+an alternative sidebar tree over the same pages (folders, page references, SPARQL queries): make one to group pages \
+for a task instead of moving them.";
 
 /// One vault's link to the daemon: idle connections, reused and replaced as
 /// needed. A call takes a connection for its whole duration, so a change that
@@ -321,6 +326,38 @@ struct LinkParams {
     to: String,
 }
 
+#[derive(Deserialize, schemars::JsonSchema)]
+struct ViewParams {
+    /// UUID of the view.
+    view: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct ViewCreateParams {
+    /// The view's title.
+    title: String,
+    /// The tree, an array of nodes: `{"kind": "folder", "name": "...", "children": [...]}`,
+    /// `{"kind": "page", "uuid": "..."}` (an existing page; the same page may appear many
+    /// times) and `{"kind": "query", "name": "...", "sparql": "SELECT ?page WHERE {...}"}`.
+    nodes: Vec<Value>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+struct ViewUpdateParams {
+    /// UUID of the view.
+    view: String,
+    /// The new title; omit to keep it.
+    title: Option<String>,
+    /// The whole new tree, replacing the old one; same shape as in `view_create`.
+    nodes: Vec<Value>,
+}
+
+/// The tree an agent sent, or the error to hand back to it.
+fn view_nodes(nodes: Vec<Value>) -> Result<Vec<cerbo_core::view::ViewNode>, RpcError> {
+    serde_json::from_value(Value::Array(nodes))
+        .map_err(|e| RpcError::failed(format!("the nodes are not a valid view tree: {e}")))
+}
+
 // ── The server ───────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -423,6 +460,47 @@ impl VaultServer {
     #[tool(description = "Run a read-only SPARQL query over the vault's semantic index; returns SPARQL JSON results.")]
     async fn sparql_query(&self, Parameters(p): Parameters<SparqlParams>) -> Result<CallToolResult, ErrorData> {
         answer(self.link.call(Call::Sparql { vault: self.vault(), query: p.query }).await)
+    }
+
+    #[tool(description = "List the vault's views as {uuid, title}. A view is an alternative sidebar tree over the same pages.")]
+    async fn view_list(&self) -> Result<CallToolResult, ErrorData> {
+        answer(self.link.call(Call::ViewList { vault: self.vault() }).await)
+    }
+
+    #[tool(description = "Read a view's tree: folders, pages (a deleted page is marked missing) and the pages each query node finds.")]
+    async fn view_get(&self, Parameters(p): Parameters<ViewParams>) -> Result<CallToolResult, ErrorData> {
+        answer(self.link.call(Call::ViewGet { vault: self.vault(), view: p.view }).await)
+    }
+
+    #[tool(
+        description = "Create a view: an alternative sidebar tree over existing pages, for one task. It does not move or \
+                       copy pages. Every page must exist and every query must run, or nothing is created. May wait for the \
+                       user's approval."
+    )]
+    async fn view_create(&self, Parameters(p): Parameters<ViewCreateParams>) -> Result<CallToolResult, ErrorData> {
+        let call = view_nodes(p.nodes).map(|nodes| Call::ViewCreate { vault: self.vault(), title: p.title, nodes });
+        match call {
+            Ok(call) => answer(self.link.call(call).await),
+            Err(e) => answer(Err(e)),
+        }
+    }
+
+    #[tool(
+        description = "Replace a view's whole tree, and its title when given. Read the view first and send the full tree. \
+                       May wait for the user's approval."
+    )]
+    async fn view_update(&self, Parameters(p): Parameters<ViewUpdateParams>) -> Result<CallToolResult, ErrorData> {
+        let call = view_nodes(p.nodes)
+            .map(|nodes| Call::ViewUpdate { vault: self.vault(), view: p.view, title: p.title, nodes });
+        match call {
+            Ok(call) => answer(self.link.call(call).await),
+            Err(e) => answer(Err(e)),
+        }
+    }
+
+    #[tool(description = "Delete a view by moving it to the vault trash; its pages are not touched. May wait for the user's approval.")]
+    async fn view_delete(&self, Parameters(p): Parameters<ViewParams>) -> Result<CallToolResult, ErrorData> {
+        answer(self.link.call(Call::ViewDelete { vault: self.vault(), view: p.view }).await)
     }
 
     #[tool(

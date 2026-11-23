@@ -4,6 +4,7 @@ mod page;
 mod paths;
 mod semantic;
 mod vault;
+mod view;
 mod window;
 
 use cerbo_core::context::CoreContext;
@@ -112,6 +113,18 @@ fn ui_settings_set_collapsed_folders(
     cerbo_core::ui_settings::set_collapsed_folders(&ctx, &vaultId, paths)
 }
 
+/// Remember the sidebar view of a vault (`None`: the default view).
+#[tauri::command]
+#[allow(non_snake_case)]
+fn ui_settings_set_active_view(
+    app: tauri::AppHandle,
+    vaultId: String,
+    viewId: Option<String>,
+) -> Result<(), String> {
+    let ctx = get_context(&app)?;
+    cerbo_core::ui_settings::set_active_view(&ctx, &vaultId, viewId)
+}
+
 #[tauri::command]
 fn window_bounds_load(
     app: tauri::AppHandle,
@@ -209,6 +222,13 @@ pub fn run() {
             page::folder_create,
             page::folder_delete,
             page::folder_set_order,
+            // views
+            view::view_list,
+            view::view_get,
+            view::view_create,
+            view::view_update,
+            view::view_delete,
+            view::view_nodes,
             page::cursor_position_save,
             page::cursor_position_load,
             page::attachment_list,
@@ -221,6 +241,7 @@ pub fn run() {
             ui_settings_load,
             ui_settings_save,
             ui_settings_set_collapsed_folders,
+            ui_settings_set_active_view,
             window_bounds_load,
             window_bounds_save,
             state_load,

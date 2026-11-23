@@ -25,6 +25,10 @@ A good order: meaning search to find candidates, `read_page` on the best two or 
 
 `read_page` returns the title, the markdown, metadata and a `version` that identifies the exact text you read. Quote UUIDs as they are; never invent one. An unknown UUID is an error naming it.
 
+## Views
+
+`view_list` lists the user's views, alternative sidebar trees over the pages, and `view_get` reads one. A view is a good map of a topic the user already organised; read it before you search the whole vault.
+
 ## Limits
 
 - You only see the tools the user allowed. If a tool you want is not there, say what you would do and let the user decide; there is no way around it.

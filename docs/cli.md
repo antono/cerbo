@@ -34,6 +34,8 @@ cerbo folder create inbox               # an empty folder that stays until delet
 cerbo folder order --root inbox <uuid>  # inbox first, then that page, then the rest
 cerbo folder list                       # the tree in sidebar order
 cerbo folder delete inbox               # only while no page is in it
+cerbo view create "Berlin trip" --tree tree.json   # an alternative sidebar tree; pages stay where they are
+cerbo view show <uuid>                  # the tree with pages looked up and queries run
 ```
 
 A page's folder is its `cerbo:virtualPath`: it nests the page in the symlink

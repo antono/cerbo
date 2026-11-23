@@ -51,6 +51,9 @@ cwd is auto-registered silently and shows as `(auto)` in `cerbo vault list`.
 | `cerbo folder list` | The tree in sidebar order: `name/` folders, `Title  <uuid>` pages, two spaces per level |
 | `cerbo folder create <PATH>` / `delete <PATH>` | Pin an empty folder that stays until deleted / delete a folder with no pages |
 | `cerbo folder order <FOLDER>` / `--root` `<ENTRY>...` | Set the sidebar order of a folder's children; an entry is a page UUID or a child folder name |
+| `cerbo view list` / `show <UUID>` | List the vault's views / print one view's tree (pages looked up, queries run) |
+| `cerbo view create <TITLE> [--tree FILE\|-]` | Create a view from a JSON array of `folder`, `page` and `query` nodes: an alternative sidebar tree, pages are not moved |
+| `cerbo view set <UUID> [--title T] [--tree FILE\|-]` / `delete <UUID>` | Replace a view's tree and/or title / move the view to the trash |
 | `cerbo resolve <UUID>` | UUID to filesystem path of the object directory |
 | `cerbo info` | Config dir, cache dir, registered vaults |
 | `cerbo import <URL>` | A read-only Source object (`schema:WebPage`) for the URL |

@@ -12,6 +12,7 @@ pub enum ObjectType {
     Source,    // Imported, read-only
     Attachment, // Binary file
     Ontology,  // Ontology definition
+    View,      // Alternative sidebar tree over pages (spec `vault-views`)
 }
 
 impl ObjectType {
@@ -21,6 +22,7 @@ impl ObjectType {
             ObjectType::Source => "Source",
             ObjectType::Attachment => "Attachment",
             ObjectType::Ontology => "Ontology",
+            ObjectType::View => "View",
         }
     }
 
@@ -36,6 +38,7 @@ impl ObjectType {
             "Source" => Some(ObjectType::Source),
             "Attachment" => Some(ObjectType::Attachment),
             "Ontology" => Some(ObjectType::Ontology),
+            "View" => Some(ObjectType::View),
             _ => None,
         }
     }
@@ -47,6 +50,7 @@ impl ObjectType {
             ObjectType::Source => "WebPage",
             ObjectType::Attachment => "MediaObject",
             ObjectType::Ontology => "DefinedTermSet",
+            ObjectType::View => "ItemList",
         })
     }
 
@@ -58,6 +62,7 @@ impl ObjectType {
             ObjectType::Source,
             ObjectType::Attachment,
             ObjectType::Ontology,
+            ObjectType::View,
         ]
         .into_iter()
         .find(|t| t.class_iri().as_str() == iri)

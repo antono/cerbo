@@ -514,6 +514,10 @@ pub enum Call {
     /// Run a SPARQL query; the result is the SPARQL JSON results document
     /// (JSON-LD for CONSTRUCT and DESCRIBE).
     Sparql { vault: String, query: String },
+    /// The vault's views (spec `vault-views`): a list of `{uuid, title}`.
+    ViewList { vault: String },
+    /// One view with its pages looked up and its query nodes run.
+    ViewGet { vault: String, view: String },
 
     // Writes
     PageCreate {
@@ -569,6 +573,25 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
     },
+    /// Create a view: an alternative sidebar tree over pages. The answer holds
+    /// the new view's `uuid`.
+    ViewCreate {
+        vault: String,
+        title: String,
+        #[serde(default)]
+        nodes: Vec<crate::view::ViewNode>,
+    },
+    /// Replace a view's whole tree, and its title when given.
+    ViewUpdate {
+        vault: String,
+        view: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default)]
+        nodes: Vec<crate::view::ViewNode>,
+    },
+    /// Move a view to the vault trash; its pages are not touched.
+    ViewDelete { vault: String, view: String },
     /// Add a type to a vault-owned ontology.
     OntologyAddType {
         vault: String,
@@ -672,6 +695,9 @@ impl Call {
                 | Call::OntologyImport { .. }
                 | Call::IndexRebuild { .. }
                 | Call::PageRestore { .. }
+                | Call::ViewCreate { .. }
+                | Call::ViewUpdate { .. }
+                | Call::ViewDelete { .. }
         )
     }
 
@@ -700,6 +726,9 @@ impl Call {
             Call::OntologyImport { .. } => "import_ontology",
             Call::IndexRebuild { .. } => "reindex",
             Call::PageRestore { .. } => "restore",
+            Call::ViewCreate { .. } => "view_create",
+            Call::ViewUpdate { .. } => "view_update",
+            Call::ViewDelete { .. } => "view_delete",
             _ => return None,
         })
     }
@@ -737,6 +766,11 @@ impl Call {
             | Call::SearchSemantic { vault, .. }
             | Call::Similar { vault, .. }
             | Call::Sparql { vault, .. }
+            | Call::ViewList { vault }
+            | Call::ViewGet { vault, .. }
+            | Call::ViewCreate { vault, .. }
+            | Call::ViewUpdate { vault, .. }
+            | Call::ViewDelete { vault, .. }
             | Call::PageCreate { vault, .. }
             | Call::PageEdit { vault, .. }
             | Call::PageRename { vault, .. }
@@ -890,6 +924,23 @@ mod tests {
             call: Call::PageCreate { vault: "v".into(), title: "T".into(), content: None, path: Some("a/b".into()) },
         });
         round_trip(Request { id: 5, call: Call::PageMove { vault: "v".into(), page: "p".into(), path: None } });
+        round_trip(Request {
+            id: 6,
+            call: Call::ViewCreate {
+                vault: "v".into(),
+                title: "Trip".into(),
+                nodes: vec![
+                    crate::view::ViewNode::Folder {
+                        name: "Cities".into(),
+                        children: vec![crate::view::ViewNode::Page { uuid: "p".into() }],
+                    },
+                    crate::view::ViewNode::Query { name: "Open".into(), sparql: "SELECT ?page WHERE {}".into() },
+                ],
+            },
+        });
+        assert!(Call::ViewUpdate { vault: "v".into(), view: "x".into(), title: None, nodes: vec![] }.is_write());
+        assert!(!Call::ViewGet { vault: "v".into(), view: "x".into() }.is_write());
+        assert_eq!(Call::ViewDelete { vault: "v".into(), view: "x".into() }.action(), Some("view_delete"));
     }
 
     #[test]

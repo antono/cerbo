@@ -275,6 +275,14 @@ enum Commands {
         #[command(subcommand)]
         action: FolderCommands,
     },
+    /// Work with views, alternative sidebar trees over the same pages: list, show, create, set, delete
+    View {
+        /// The vault: a registered vault's name or ID, or its path
+        #[arg(long, global = true)]
+        vault: Option<String>,
+        #[command(subcommand)]
+        action: ViewCommands,
+    },
     /// Rewrite stored metadata into the current format
     Migrate {
         #[command(subcommand)]
@@ -547,6 +555,57 @@ enum FolderCommands {
 }
 
 #[derive(Subcommand)]
+enum ViewCommands {
+    /// List the views of the vault, one `Title  <uuid>` per line
+    List {
+        /// Print a JSON array of {"uuid", "title"}
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print a view's tree: folders as `name/`, pages as `Title  <uuid>`, queries as `? name`
+    Show {
+        /// The view's UUID
+        uuid: String,
+        /// Print the resolved tree as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a view; the tree is a JSON array of nodes read from --tree (a file, or - for stdin), empty when absent
+    Create {
+        /// The view's title
+        title: String,
+        /// JSON array of {"kind": "folder"|"page"|"query", ...} nodes; a file path or - for stdin
+        #[arg(long, value_name = "FILE")]
+        tree: Option<String>,
+        /// Output the result as JSON ({"uuid"})
+        #[arg(long)]
+        json: bool,
+    },
+    /// Replace a view's whole tree (--tree) and/or rename it (--title)
+    Set {
+        /// The view's UUID
+        uuid: String,
+        /// The new title
+        #[arg(long)]
+        title: Option<String>,
+        /// JSON array of nodes; a file path or - for stdin. Without it the tree is left as it is
+        #[arg(long, value_name = "FILE")]
+        tree: Option<String>,
+        /// Output the result as JSON ({"uuid"})
+        #[arg(long)]
+        json: bool,
+    },
+    /// Move a view to the trash; its pages are not touched
+    Delete {
+        /// The view's UUID
+        uuid: String,
+        /// Output the result as JSON ({"uuid"})
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum PageCommands {
     /// List all pages of the vault: a header line, then one `<uuid>: <title> [<virtual path>]` per page
     List {
@@ -724,6 +783,51 @@ fn check_old_vocabulary(ctx: &CerboContext, vault_root: &std::path::Path) -> (us
 }
 
 /// The vault root a resolved page context points into.
+/// The nodes of a view from `--tree`: a JSON array in a file, or `-` for stdin;
+/// an empty tree when absent.
+fn read_view_nodes(source: Option<&str>) -> Result<Vec<cerbo_core::view::ViewNode>, String> {
+    let Some(source) = source else {
+        return Ok(Vec::new());
+    };
+    let text = if source == "-" {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut text).map_err(|e| format!("cannot read stdin: {e}"))?;
+        text
+    } else {
+        std::fs::read_to_string(source).map_err(|e| format!("cannot read {source}: {e}"))?
+    };
+    serde_json::from_str(&text).map_err(|e| format!("the tree is not a JSON array of view nodes: {e}"))
+}
+
+/// Print a resolved view tree, two spaces per level.
+fn print_view_nodes(nodes: &[cerbo_core::view::ResolvedNode], depth: usize) {
+    use cerbo_core::view::ResolvedNode;
+    let pad = "  ".repeat(depth);
+    for node in nodes {
+        match node {
+            ResolvedNode::Folder { name, children } => {
+                println!("{pad}{name}/");
+                print_view_nodes(children, depth + 1);
+            }
+            ResolvedNode::Page { uuid, title, missing } => {
+                if *missing {
+                    println!("{pad}(missing page)  {uuid}");
+                } else {
+                    println!("{pad}{title}  {uuid}");
+                }
+            }
+            ResolvedNode::Query { name, children, total, error } => {
+                match error {
+                    Some(e) => println!("{pad}? {name}  (error: {e})"),
+                    None if *total > children.len() => println!("{pad}? {name}  ({} of {total})", children.len()),
+                    None => println!("{pad}? {name}"),
+                }
+                print_view_nodes(children, depth + 1);
+            }
+        }
+    }
+}
+
 fn vault_root_of(vault_ctx: &CerboContext) -> &std::path::Path {
     vault_ctx.config_dir.parent().unwrap_or(&vault_ctx.config_dir)
 }
@@ -2006,6 +2110,97 @@ async fn main() -> Result<(), String> {
                 }
             }
         },
+        Commands::View { vault, action } => {
+            let eff_ctx = resolve_vault_ctx(&ctx, vault.as_deref(), cwd_vault_id.as_deref(), cwd_vault_root.as_deref())?;
+            let index_ctx = index_vault_ctx(&ctx, &eff_ctx);
+            let run = |sparql: &str| -> Result<Vec<String>, String> {
+                let output = cerbo_core::semantic::query(&index_ctx, sparql, cerbo_core::semantic::IndexOptions::default())
+                    .map_err(|e| e.to_string())?;
+                cerbo_core::view::pages_from_output(&output)
+            };
+            match action {
+                ViewCommands::List { json } => {
+                    let views = cerbo_core::view::view_list(&eff_ctx)?;
+                    if json {
+                        print_json(&views);
+                    } else {
+                        for v in &views {
+                            println!("{}  {}", v.title, v.uuid);
+                        }
+                    }
+                }
+                ViewCommands::Show { uuid, json } => {
+                    let tree = cerbo_core::view::view_get(&eff_ctx, &uuid, &run)?;
+                    if json {
+                        print_json(&tree);
+                    } else {
+                        println!("{}", tree.title);
+                        print_view_nodes(&tree.nodes, 1);
+                    }
+                }
+                ViewCommands::Create { title, tree, json } => {
+                    let nodes = read_view_nodes(tree.as_deref())?;
+                    let answer = daemon::vault_call(&ctx, vault_root_of(&eff_ctx), |v| Call::ViewCreate {
+                        vault: v,
+                        title: title.clone(),
+                        nodes: nodes.clone(),
+                    });
+                    let uuid = match answer {
+                        Some(answer) => answer?["uuid"].as_str().unwrap_or_default().to_string(),
+                        None => cerbo_core::view::view_create(&eff_ctx, &title, &nodes, &run)?,
+                    };
+                    if json {
+                        print_json(&serde_json::json!({ "uuid": uuid }));
+                    } else {
+                        println!("Created view {uuid}");
+                    }
+                }
+                ViewCommands::Set { uuid, title, tree, json } => {
+                    if title.is_none() && tree.is_none() {
+                        return Err("nothing to change: give --title and/or --tree".into());
+                    }
+                    // Without --tree the stored nodes are kept.
+                    let nodes = match tree.as_deref() {
+                        Some(source) => read_view_nodes(Some(source))?,
+                        None => cerbo_core::view::view_nodes(&eff_ctx, &uuid)?,
+                    };
+                    let answer = daemon::vault_call(&ctx, vault_root_of(&eff_ctx), |v| Call::ViewUpdate {
+                        vault: v,
+                        view: uuid.clone(),
+                        title: title.clone(),
+                        nodes: nodes.clone(),
+                    });
+                    match answer {
+                        Some(answer) => {
+                            answer?;
+                        }
+                        None => cerbo_core::view::view_update(&eff_ctx, &uuid, title.as_deref(), &nodes, &run)?,
+                    }
+                    if json {
+                        print_json(&serde_json::json!({ "uuid": uuid }));
+                    } else {
+                        println!("Updated view {uuid}");
+                    }
+                }
+                ViewCommands::Delete { uuid, json } => {
+                    let answer = daemon::vault_call(&ctx, vault_root_of(&eff_ctx), |v| Call::ViewDelete {
+                        vault: v,
+                        view: uuid.clone(),
+                    });
+                    match answer {
+                        Some(answer) => {
+                            answer?;
+                        }
+                        None => cerbo_core::view::view_delete(&eff_ctx, &uuid)?,
+                    }
+                    if json {
+                        print_json(&serde_json::json!({ "uuid": uuid }));
+                    } else {
+                        println!("Deleted view {uuid}");
+                    }
+                }
+            }
+        }
         Commands::Folder { action } => match action {
             FolderCommands::List { json } => {
                 let eff_ctx = resolve_vault_ctx(&ctx, None, cwd_vault_id.as_deref(), cwd_vault_root.as_deref())?;

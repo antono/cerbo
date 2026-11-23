@@ -216,6 +216,27 @@ pub fn sparql(vault: &VaultHandle, query: &str) -> OpResult {
     serde_json::from_str(&output.to_json()).map_err(failed)
 }
 
+/// Runs a view's SPARQL query for `cerbo_core::view`. The caller holds the
+/// index guard (it is not re-entrant), so this goes straight to the index.
+fn view_queries(vault: &VaultHandle) -> impl Fn(&str) -> Result<Vec<String>, String> + '_ {
+    move |query| {
+        let output = semantic::query(&vault.vault_ctx, query, IndexOptions::default()).map_err(|e| e.to_string())?;
+        cerbo_core::view::pages_from_output(&output)
+    }
+}
+
+pub fn view_list(vault: &VaultHandle) -> OpResult {
+    let views = cerbo_core::view::view_list(&vault.page_ctx).map_err(failed)?;
+    serde_json::to_value(views).map_err(failed)
+}
+
+pub fn view_get(vault: &VaultHandle, id: &str) -> OpResult {
+    let _gate = vault.index_guard();
+    let run = view_queries(vault);
+    let tree = cerbo_core::view::view_get(&vault.page_ctx, id, &run).map_err(failed)?;
+    serde_json::to_value(tree).map_err(failed)
+}
+
 // ── Writes ───────────────────────────────────────────────────────────────────
 //
 // Each returns the page it wrote, so the caller can attribute the file events.
@@ -352,6 +373,37 @@ pub fn page_trash(vault: &VaultHandle, id: &str) -> Written {
     };
     match cerbo_core::page::page_delete(&vault.page_ctx, id.clone()) {
         Ok(()) => written(&id, json!({ "uuid": id, "trashed": true })),
+        Err(e) => refused(failed(e)),
+    }
+}
+
+pub fn view_create(vault: &VaultHandle, title: &str, nodes: &[cerbo_core::view::ViewNode]) -> Written {
+    let _gate = vault.index_guard();
+    let run = view_queries(vault);
+    match cerbo_core::view::view_create(&vault.page_ctx, title, nodes, &run) {
+        Ok(id) => written(&id, json!({ "uuid": id })),
+        Err(e) => refused(failed(e)),
+    }
+}
+
+pub fn view_update(
+    vault: &VaultHandle,
+    id: &str,
+    title: Option<&str>,
+    nodes: &[cerbo_core::view::ViewNode],
+) -> Written {
+    let _gate = vault.index_guard();
+    let run = view_queries(vault);
+    match cerbo_core::view::view_update(&vault.page_ctx, id, title, nodes, &run) {
+        Ok(()) => written(id, json!({ "uuid": id })),
+        Err(e) => refused(failed(e)),
+    }
+}
+
+pub fn view_delete(vault: &VaultHandle, id: &str) -> Written {
+    let _gate = vault.index_guard();
+    match cerbo_core::view::view_delete(&vault.page_ctx, id) {
+        Ok(()) => written(id, json!({ "uuid": id, "trashed": true })),
         Err(e) => refused(failed(e)),
     }
 }
@@ -539,6 +591,14 @@ pub fn unified_diff(old: &str, new: &str) -> String {
     similar::TextDiff::from_lines(old, new).unified_diff().context_radius(3).to_string()
 }
 
+fn view_title(vault: &VaultHandle, id: &str) -> String {
+    cerbo_core::view::view_list(&vault.page_ctx)
+        .ok()
+        .and_then(|views| views.into_iter().find(|v| v.uuid.eq_ignore_ascii_case(id)))
+        .map(|v| format!("\"{}\"", v.title))
+        .unwrap_or_else(|| id.to_string())
+}
+
 /// Describe `call` for a person to approve. Never fails: what cannot be read
 /// is described by its id.
 pub fn preview(vault: &VaultHandle, call: &cerbo_core::rpc::Call) -> Preview {
@@ -613,6 +673,26 @@ pub fn preview(vault: &VaultHandle, call: &cerbo_core::rpc::Call) -> Preview {
                 (Some(p), Some(n)) => format!("Fetch the ontology at {url} and register the prefix {p}: for {n}"),
                 _ => format!("Fetch the ontology at {url} and store it as an Ontology object"),
             },
+            diff: None,
+        },
+        Call::ViewCreate { title, nodes, .. } => Preview {
+            page: None,
+            summary: format!("Create the view \"{title}\" with {} top-level nodes", nodes.len()),
+            diff: None,
+        },
+        Call::ViewUpdate { view, title, nodes, .. } => Preview {
+            page: None,
+            summary: format!(
+                "Replace the tree of the view {}{} with {} top-level nodes",
+                view_title(vault, view),
+                title.as_deref().map(|t| format!(" (rename it to \"{t}\")")).unwrap_or_default(),
+                nodes.len()
+            ),
+            diff: None,
+        },
+        Call::ViewDelete { view, .. } => Preview {
+            page: None,
+            summary: format!("Move the view {} to the trash", view_title(vault, view)),
             diff: None,
         },
         Call::IndexRebuild { .. } => Preview {

@@ -19,6 +19,8 @@
     FolderMinus,
     ArrowUp,
     ArrowDown,
+    Search as QueryIcon,
+    CircleX,
   } from 'lucide-svelte';
   import { tick, untrack } from 'svelte';
   import {
@@ -36,6 +38,11 @@
     pageTree,
     placeRow,
     deleteFolder,
+    inView,
+    collapsedPaths,
+    viewRemoveNode,
+    viewMoveNode,
+    addPageToView,
   } from './stores.svelte';
   import { isInputFocused } from './hotkeys';
   import { revealedAfterFocus } from './toolbar';
@@ -51,7 +58,9 @@
     type TreeRow,
   } from './page-tree';
   import { dropPlacement, dropZone, passedThreshold, rootPlacement, type DropZone } from './tree-drag';
+  import { canMoveAt } from './view-tree';
   import RowMenu, { type RowMenuItem } from './RowMenu.svelte';
+  import ViewSwitcher from './ViewSwitcher.svelte';
 
   // Row buttons show on hover only; a touch screen has no hover, so it gets
   // none of them (three buttons and icons per row less to build). The row's
@@ -59,12 +68,14 @@
   const canHover = typeof matchMedia === 'function' && matchMedia('(hover: hover)').matches;
 
   const tree = $derived(pageTree());
-  const rows = $derived(flattenVisible(tree, new Set(app.collapsedFolders)));
+  const viewMode = $derived(inView());
+  const rows = $derived(flattenVisible(tree, collapsedPaths()));
 
   let itemsList = $state<HTMLUListElement | null>(null);
 
   function rowKey(row: TreeRow): string {
-    return row.kind === 'folder' ? `f:${row.path}` : `p:${row.uuid}`;
+    // A page may stand in several places of a view, each with its own key.
+    return row.kind === 'folder' ? `f:${row.path}` : (row.key ?? `p:${row.uuid}`);
   }
 
   // ── Placing rows ─────────────────────────────────────────────────────────────
@@ -86,6 +97,14 @@
   }
 
   async function moveRow(row: TreeRow, delta: -1 | 1) {
+    if (viewMode) {
+      // In a view only the view's own order changes, never a page's folder.
+      if (!row.nodePath) return;
+      await viewMoveNode(row.nodePath, delta);
+      await tick();
+      focusRow(rowKey(row));
+      return;
+    }
     if (await place(moveBy(tree, row, delta))) {
       await tick();
       focusRow(rowKey(row));
@@ -104,6 +123,23 @@
 
   let menu = $state<{ x: number; y: number; items: RowMenuItem[] } | null>(null);
 
+  /** The menu of a row in a view: its own order, adding and removing; never page or folder changes. */
+  function viewMenuItems(row: TreeRow): RowMenuItem[] {
+    const path = row.nodePath ?? null;
+    const items: RowMenuItem[] = [];
+    if (row.kind === 'page' && !row.missing) {
+      items.push({ label: 'Open', icon: FileText, onSelect: () => void openPage(row.uuid) });
+    }
+    if (path) {
+      items.push(
+        { label: 'Move up', icon: ArrowUp, disabled: !canMoveAt(app.viewNodes, path, -1), onSelect: () => void moveRow(row, -1) },
+        { label: 'Move down', icon: ArrowDown, disabled: !canMoveAt(app.viewNodes, path, 1), onSelect: () => void moveRow(row, 1) },
+        { label: 'Remove from view', icon: FolderMinus, danger: true, onSelect: () => void viewRemoveNode(path) },
+      );
+    }
+    return items;
+  }
+
   function orderItems(row: TreeRow): RowMenuItem[] {
     return [
       { label: 'Move up', icon: ArrowUp, disabled: !canMoveBy(tree, row, -1), onSelect: () => void moveRow(row, -1) },
@@ -111,7 +147,17 @@
     ];
   }
 
+  /** "Add to view" entries for a page, one per view it is not already standing in at the top. */
+  function addToViewItems(uuid: string): RowMenuItem[] {
+    return app.views
+      .filter((v) => v.uuid !== app.activeViewId)
+      .map((v) => ({ label: `Add to view: ${v.title}`, icon: FilePlus, onSelect: () => void addPageToView(v.uuid, uuid) }));
+  }
+
   function menuItemsFor(row: TreeRow): RowMenuItem[] {
+    if (viewMode) {
+      return [...viewMenuItems(row), ...(row.kind === 'page' && !row.missing ? addToViewItems(row.uuid) : [])];
+    }
     if (row.kind === 'folder') {
       const path = row.path;
       const items: RowMenuItem[] = [
@@ -131,6 +177,7 @@
       { label: 'Move to…', icon: FolderInput, onSelect: () => triggerMove(uuid) },
       { label: 'Rename', icon: Pencil, onSelect: () => triggerRename(uuid) },
       ...orderItems(row),
+      ...addToViewItems(uuid),
       { label: 'Delete', icon: Trash2, danger: true, onSelect: () => triggerDelete(uuid) },
     ];
   }
@@ -153,7 +200,8 @@
 
   /** Right-click on sidebar space that is not a row: the Add menu. */
   function openAddMenu(e: MouseEvent) {
-    if ((e.target as Element | null)?.closest('.item')) return;
+    // New pages and folders belong to the vault's own tree, not to a view.
+    if (viewMode || (e.target as Element | null)?.closest('.item')) return;
     e.preventDefault();
     menuOpenedAt = e.timeStamp;
     menu = { x: e.clientX, y: e.clientY, items: addItems };
@@ -214,7 +262,9 @@
     if (e.key === 'r') {
       e.preventDefault();
       e.stopPropagation();
-      if (row?.kind === 'folder') triggerRenameFolder(row.path);
+      if (row?.kind === 'folder') {
+        if (!viewMode) triggerRenameFolder(row.path);
+      }
       else {
         const uuid = row?.kind === 'page' ? row.uuid : app.currentUuid;
         if (uuid) triggerRename(uuid);
@@ -224,7 +274,9 @@
     if (e.key === 'm') {
       e.preventDefault();
       e.stopPropagation();
-      if (row?.kind === 'folder') triggerRenameFolder(row.path);
+      if (row?.kind === 'folder') {
+        if (!viewMode) triggerRenameFolder(row.path);
+      }
       else {
         const uuid = row?.kind === 'page' ? row.uuid : app.currentUuid;
         if (uuid) triggerMove(uuid);
@@ -232,6 +284,13 @@
       return;
     }
     if (e.key === 'Delete' || e.key === 'Backspace') {
+      // In a view the key takes the row out of the view; it never deletes a page.
+      if (viewMode) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (row?.nodePath) void viewRemoveNode(row.nodePath);
+        return;
+      }
       if (row?.kind === 'folder') return;
       e.preventDefault();
       e.stopPropagation();
@@ -302,7 +361,8 @@
   let suppressClick = false;
 
   function onRowMouseDown(e: MouseEvent, row: TreeRow) {
-    if (e.button !== 0 || (e.target as Element | null)?.closest('.page-actions')) return;
+    // A view is ordered by its menu and keys; dragging would move pages.
+    if (viewMode || e.button !== 0 || (e.target as Element | null)?.closest('.page-actions')) return;
     pending = { row, x: e.clientX, y: e.clientY };
     window.addEventListener('mousemove', onPointerMove, true);
     window.addEventListener('mouseup', onPointerUp, true);
@@ -416,6 +476,7 @@
 </script>
 
 <aside class="page-list">
+  <ViewSwitcher />
   <!-- Tree rows -->
   <div
     class="items-wrap"
@@ -453,10 +514,11 @@
               <span class="chevron">
                 {#if row.expanded}<ChevronDown size={12} />{:else}<ChevronRight size={12} />{/if}
               </span>
-              {#if row.expanded}<FolderOpen size={14} class="opacity-70" />{:else}<Folder size={14} class="opacity-70" />{/if}
+              {#if row.variant === 'query'}<QueryIcon size={14} class="opacity-70" />{:else if row.expanded}<FolderOpen size={14} class="opacity-70" />{:else}<Folder size={14} class="opacity-70" />{/if}
               <span class="label">{row.name}</span>
+              {#if row.info}<span class="info" class:error={row.info.startsWith('error')}>{row.info}</span>{/if}
             </button>
-            {#if canHover}
+            {#if canHover && !viewMode}
             <div class="page-actions">
               <button
                 class="icon-btn small"
@@ -480,6 +542,7 @@
             class="item page {dropClass(row)}"
             class:active={row.uuid === app.currentUuid}
             class:dragging={drag?.key === rowKey(row)}
+            class:missing={row.missing}
             style="--indent: {0.75 + row.depth * 0.875}rem"
             role="treeitem"
             aria-selected={row.uuid === app.currentUuid}
@@ -494,12 +557,12 @@
             <button
               class="row-btn page-btn"
               style="padding-left: var(--indent)"
-              onclick={(e) => { if (isRowClick(e)) openPage(row.uuid); }}
+              onclick={(e) => { if (isRowClick(e) && !row.missing) openPage(row.uuid); }}
             >
-              <FileText size={14} class="opacity-70" />
+              {#if row.missing}<CircleX size={14} class="opacity-70" />{:else}<FileText size={14} class="opacity-70" />{/if}
               <span class="label">{row.title}</span>
             </button>
-            {#if canHover}
+            {#if canHover && !viewMode}
             <div class="page-actions">
               <button
                 class="icon-btn small"
@@ -626,6 +689,9 @@
   .folder .row-btn:hover { color: var(--fg); }
   .chevron { display: flex; align-items: center; width: 0.75rem; flex-shrink: 0; }
   .page-actions { display: flex; gap: 0.125rem; padding-right: 0.25rem; flex-shrink: 0; }
+  .item.missing .label { opacity: 0.55; font-style: italic; }
+  .info { margin-left: auto; padding-left: 0.5rem; font-size: 0.7rem; font-weight: 400; color: var(--muted-foreground); flex-shrink: 0; }
+  .info.error { color: #dc2626; }
   .empty-hint { padding: 0.75rem; color: var(--muted-foreground); font-size: 0.8125rem; }
 
   .root-drop {

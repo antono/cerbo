@@ -31,8 +31,26 @@ export type FolderNode = {
   /** Pages at or under this folder. */
   pageCount: number;
   children: TreeNode[];
+  /** Views only (`view-tree.ts`): a query node shows the pages a SPARQL query finds. */
+  variant?: 'query';
+  /** Views only: a short note after the name, such as a query's error or row cap. */
+  info?: string;
+  /** Views only: where the stored node sits (indexes from the root), null when not editable. */
+  nodePath?: number[] | null;
 };
-export type PageNode = { kind: 'page'; path: string | null; uuid: string; title: string; depth: number };
+export type PageNode = {
+  kind: 'page';
+  path: string | null;
+  uuid: string;
+  title: string;
+  depth: number;
+  /** Views only: unique row key, since a page may appear many times in one view. */
+  key?: string;
+  /** Views only: the page no longer exists. */
+  missing?: boolean;
+  /** Views only: where the stored node sits (indexes from the root), null when not editable. */
+  nodePath?: number[] | null;
+};
 export type TreeNode = FolderNode | PageNode;
 
 /** A row the sidebar renders: a node without its children. */
@@ -46,6 +64,9 @@ export type TreeRow =
       pinned: boolean;
       pageCount: number;
       hasChildren: boolean;
+      variant?: 'query';
+      info?: string;
+      nodePath?: number[] | null;
     }
   | PageNode;
 
@@ -233,6 +254,9 @@ export function flattenVisible(tree: TreeNode[], collapsed: ReadonlySet<string>)
         pinned: node.pinned,
         pageCount: node.pageCount,
         hasChildren: node.children.length > 0,
+        variant: node.variant,
+        info: node.info,
+        nodePath: node.nodePath,
       });
       if (expanded) walk(node.children);
     }
