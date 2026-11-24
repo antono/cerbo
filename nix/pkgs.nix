@@ -23,8 +23,14 @@ let
       ../cli
       ../cerboid
       ../src-tauri
+      # A cli test (mcp_guide) checks these against the guides it generates.
+      cerboMcpSkills
     ];
   };
+
+  cerboMcpSkills = lib.fileset.unions (map (name: ../.agents/skills + "/${name}/SKILL.md") (
+    lib.filter (lib.hasPrefix "cerbo-mcp-") (lib.attrNames (builtins.readDir ../.agents/skills))
+  ));
 
   # Settings every Rust build shares.
   common = {
