@@ -35,8 +35,14 @@
   --p-4: 1rem;
 }
 
-/* Touch screens: a taller top bar with finger-sized buttons. */
-@media (pointer: coarse) {
+/* Touch screens: a taller top bar with finger-sized buttons.
+   The second branch is for WebKitGTK on a touch-only Wayland phone (Phosh):
+   GTK always adds a virtual "Core Pointer", so WebKit reports a mouse as
+   the primary pointer (`pointer: fine`, `hover: hover`) and only
+   `any-pointer: coarse` shows the touchscreen. A narrow window with a touch
+   device is treated as a phone. Every `(pointer: coarse)` query in the app
+   uses this same pair; keep them in sync. */
+@media (pointer: coarse), (any-pointer: coarse) and (max-width: 768px) {
   :root {
     --titlebar-height: 52px;
   }

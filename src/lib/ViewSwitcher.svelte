@@ -64,7 +64,7 @@
     font-size: 0.75rem;
     color: #dc2626;
   }
-  @media (pointer: coarse) {
+  @media (pointer: coarse), (any-pointer: coarse) and (max-width: 768px) {
     select {
       height: 44px;
       font-size: 0.9375rem;

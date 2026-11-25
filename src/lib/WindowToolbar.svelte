@@ -469,7 +469,7 @@
   }
 
   /* Touch screens: 44px targets in a 52px bar (`--titlebar-height`). */
-  @media (pointer: coarse) {
+  @media (pointer: coarse), (any-pointer: coarse) and (max-width: 768px) {
     .window-toolbar {
       font-size: 0.9375rem;
       padding-left: 0.5rem;

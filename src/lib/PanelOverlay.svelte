@@ -234,7 +234,7 @@
     -webkit-overflow-scrolling: touch;
   }
 
-  @media (pointer: coarse) {
+  @media (pointer: coarse), (any-pointer: coarse) and (max-width: 768px) {
     .drawer-btn {
       height: 44px;
     }

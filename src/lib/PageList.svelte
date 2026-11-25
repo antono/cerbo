@@ -65,7 +65,12 @@
   // Row buttons show on hover only; a touch screen has no hover, so it gets
   // none of them (three buttons and icons per row less to build). The row's
   // context menu offers the same actions.
-  const canHover = typeof matchMedia === 'function' && matchMedia('(hover: hover)').matches;
+  // A touch phone under WebKitGTK reports `hover: hover` (see app.css), so
+  // the same narrow-touch fallback as the CSS rules counts as no hover.
+  const canHover =
+    typeof matchMedia === 'function' &&
+    matchMedia('(hover: hover)').matches &&
+    !matchMedia('(any-pointer: coarse) and (max-width: 768px)').matches;
 
   const tree = $derived(pageTree());
   const viewMode = $derived(inView());
@@ -650,7 +655,7 @@
     padding: 0;
     margin-bottom: 0.0625rem;
   }
-  @media (pointer: coarse) {
+  @media (pointer: coarse), (any-pointer: coarse) and (max-width: 768px) {
     .row-btn { padding-top: 0.75rem; padding-bottom: 0.75rem; }
     /* Rows off screen are not laid out or painted: a long vault opens fast.
        Touch only: paint containment would clip the mouse drop lines. */
