@@ -5,8 +5,13 @@ import { $, browser, expect } from '@wdio/globals';
 // scale the whole webview. A zoomed webview has fewer CSS pixels across the
 // same window, so `innerWidth` shows the factor.
 
-const tb = (id: string) => $(`[data-testid="${id}"]`);
-const menuItem = (action: string) => $(`.row-menu .menu-item[data-action="${action}"]`);
+// WebKitWebDriver does not scale click coordinates by the page zoom, so a
+// native click on a zoomed page lands elsewhere; click through the DOM.
+const domClick = (selector: string) =>
+  browser.execute((sel) => (document.querySelector(sel) as HTMLElement | null)?.click(), selector);
+const MORE = '[data-testid="toolbar-more"]';
+const itemSel = (action: string) => `.row-menu .menu-item[data-action="${action}"]`;
+const menuItem = (action: string) => $(itemSel(action));
 const cssWidth = () => browser.execute(() => window.innerWidth);
 
 /** Wait until the webview is zoomed to `factor` relative to `base` CSS pixels. */
@@ -18,12 +23,14 @@ async function expectZoom(base: number, factor: number) {
 }
 
 async function menuLabel(action: string): Promise<string> {
-  await tb('toolbar-more').click();
+  await domClick(MORE);
   const item = menuItem(action);
   await item.waitForDisplayed({ timeout: 5_000 });
   const label = String(await item.$('.menu-label').getProperty('textContent'));
   await browser.keys('Escape');
   await item.waitForExist({ reverse: true, timeout: 5_000 });
+  // A ⋯ click within 300 ms of its menu closing means "close" (`shouldOpenMenu`).
+  await browser.pause(400);
   return label;
 }
 
@@ -53,15 +60,15 @@ describe('interface zoom', () => {
   });
 
   it('zooms from the ⋯ menu', async () => {
-    await tb('toolbar-more').click();
+    await domClick(MORE);
     await menuItem('view.zoomOut').waitForDisplayed({ timeout: 5_000 });
-    await menuItem('view.zoomOut').click();
+    await domClick(itemSel('view.zoomOut'));
     await expectZoom(base, 0.9);
     expect(await menuLabel('view.zoomOut')).toBe('Zoom out (90%)');
 
-    await tb('toolbar-more').click();
+    await domClick(MORE);
     await menuItem('view.zoomReset').waitForDisplayed({ timeout: 5_000 });
-    await menuItem('view.zoomReset').click();
+    await domClick(itemSel('view.zoomReset'));
     await expectZoom(base, 1);
   });
 });
