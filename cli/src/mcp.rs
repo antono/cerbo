@@ -14,9 +14,9 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
     CallToolResult, ContentBlock, InitializeRequestParams, InitializeResult, ListResourcesResult, ListToolsResult,
     PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
-    ResourceContents, ServerCapabilities, ServerConfig,
+    ResourceContents, ServerCapabilities, ServerConfig, SubscriptionFilter,
 };
-use rmcp::service::{NotificationContext, RequestContext};
+use rmcp::service::{NotificationContext, RequestContext, SubscriptionContext};
 use rmcp::transport::stdio;
 use rmcp::{tool, tool_handler, tool_router, ErrorData, RoleServer, ServerHandler, ServiceExt};
 use serde::Deserialize;
@@ -757,22 +757,60 @@ impl ServerHandler for VaultServer {
     }
 
     /// Tell the client when the user changes the vault's permission, so the
-    /// tool list is read again.
+    /// tool list is read again. This is the `initialize` lifecycle; clients
+    /// on the stateless one (protocol 2026-07-28, opened with
+    /// `server/discover`) never send `initialized` and use `listen` instead.
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
         let link = Arc::clone(&self.link);
         let peer = context.peer.clone();
-        tokio::spawn(async move {
-            let mut last = link.state().await;
-            loop {
-                tokio::time::sleep(PERMISSION_POLL).await;
-                let now = link.state().await;
-                let changed = now.0.can_write() != last.0.can_write() || now.1 != last.1;
-                if changed && peer.notify_tool_list_changed().await.is_err() {
-                    break;
-                }
-                last = now;
-            }
+        tokio::spawn(watch_tool_list(link, move || {
+            let peer = peer.clone();
+            async move { peer.notify_tool_list_changed().await.is_ok() }
+        }));
+    }
+
+    /// Only tool list changes are offered on `subscriptions/listen`.
+    fn accepted_subscription_filter(&self, _requested: &SubscriptionFilter) -> Option<SubscriptionFilter> {
+        Some(SubscriptionFilter::builder().tools_list_changed().build())
+    }
+
+    /// The stateless lifecycle's way to hear of tool list changes: the same
+    /// watch as `on_initialized`, for as long as the subscription is open.
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), ErrorData> {
+        if context.accepted().tools_list_changed != Some(true) {
+            context.cancelled().await;
+            return Ok(());
+        }
+        let sink = context.sink().clone();
+        let watch = watch_tool_list(Arc::clone(&self.link), move || {
+            let sink = sink.clone();
+            async move { sink.notify_tool_list_changed().await.is_ok() }
         });
+        tokio::select! {
+            () = context.cancelled() => {}
+            () = watch => {}
+        }
+        Ok(())
+    }
+}
+
+/// Poll the vault's permission and host access, and call `notify` each time
+/// the tool list they decide changes. Returns when `notify` fails (the client
+/// is gone or the subscription closed).
+async fn watch_tool_list<F, Fut>(link: Arc<Link>, notify: F)
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let mut last = link.state().await;
+    loop {
+        tokio::time::sleep(PERMISSION_POLL).await;
+        let now = link.state().await;
+        let changed = now.0.can_write() != last.0.can_write() || now.1 != last.1;
+        if changed && !notify().await {
+            return;
+        }
+        last = now;
     }
 }
 
@@ -941,5 +979,114 @@ mod tests {
         assert!(!err.message.contains("cancelled and not applied"), "{}", err.message);
         assert!(err.message.contains("may still have gone through"), "{}", err.message);
         assert!(err.message.contains("Read the page again"), "{}", err.message);
+    }
+
+    /// A daemon that answers only the permission query: `auto` while `write`
+    /// is set, else `read`. `asked` counts the queries.
+    fn permission_daemon(
+        paths: &DaemonPaths,
+        write: Arc<std::sync::atomic::AtomicBool>,
+        asked: Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        paths.prepare_dir().unwrap();
+        let listener = UnixListener::bind(&paths.socket).unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let write = Arc::clone(&write);
+                let asked = Arc::clone(&asked);
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut out = stream;
+                    let mut line = String::new();
+                    let _ = reader.read_line(&mut line); // the hello
+                    let welcome =
+                        ServerMessage::Welcome { protocol: PROTOCOL_VERSION, daemon_version: "test".into(), pid: 137 };
+                    let _ = writeln!(out, "{}", serde_json::to_string(&welcome).unwrap());
+                    loop {
+                        line.clear();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                            return;
+                        }
+                        let Ok(request) = serde_json::from_str::<Request>(line.trim_end()) else { continue };
+                        asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let level = if write.load(std::sync::atomic::Ordering::SeqCst) { "auto" } else { "read" };
+                        let result = serde_json::json!({ "permission": level, "approval_timeout_secs": 1, "host": false });
+                        let _ = writeln!(out, "{}", serde_json::to_string(&ServerMessage::ok(request.id, result)).unwrap());
+                    }
+                });
+            }
+        });
+    }
+
+    /// Claude Code opens the stateless lifecycle (protocol 2026-07-28): no
+    /// `initialize`, so no `initialized`, and tool list changes arrive only on
+    /// a `subscriptions/listen` request. A permission change during the session
+    /// must reach it there, or the agent keeps the read-only tool list.
+    #[tokio::test]
+    async fn a_permission_change_reaches_a_stateless_client_through_its_subscription() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = DaemonPaths::in_dir(tmp.path().join("run"));
+        let write = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        permission_daemon(&paths, Arc::clone(&write), Arc::clone(&asked));
+        let link = Arc::new(Link::new(paths, "notes".into(), Some("test".into())));
+
+        let (client_side, server_side) = tokio::io::duplex(64 * 1024);
+        let (server_read, server_write) = tokio::io::split(server_side);
+        tokio::spawn(async move {
+            if let Ok(service) = VaultServer::new(link).serve((server_read, server_write)).await {
+                let _ = service.waiting().await;
+            }
+        });
+        let (client_read, mut client_write) = tokio::io::split(client_side);
+        let mut lines = tokio::io::BufReader::new(client_read).lines();
+
+        let listen = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "watch-137",
+            "method": "subscriptions/listen",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                },
+                "notifications": { "toolsListChanged": true }
+            }
+        });
+        client_write.write_all(format!("{listen}\n").as_bytes()).await.unwrap();
+
+        // Read lines until one has `method`, failing after a few seconds.
+        async fn next_method(lines: &mut tokio::io::Lines<impl tokio::io::AsyncBufRead + Unpin>) -> Value {
+            loop {
+                let line = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+                    .await
+                    .expect("the server said nothing in time")
+                    .unwrap()
+                    .expect("the server closed the stream");
+                let message: Value = serde_json::from_str(&line).unwrap();
+                assert!(message.get("error").is_none(), "{message}");
+                if message.get("method").is_some() {
+                    return message;
+                }
+            }
+        }
+
+        let ack = next_method(&mut lines).await;
+        assert_eq!(ack["method"], "notifications/subscriptions/acknowledged", "{ack}");
+        assert_eq!(ack["params"]["notifications"]["toolsListChanged"], true, "{ack}");
+
+        // The user lets the agent change the vault, once the watch has read
+        // the level it starts from (`read`).
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while asked.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            assert!(std::time::Instant::now() < deadline, "the watch never asked for the permission");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        write.store(true, std::sync::atomic::Ordering::SeqCst);
+        let changed = next_method(&mut lines).await;
+        assert_eq!(changed["method"], "notifications/tools/list_changed", "{changed}");
+        assert_eq!(changed["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"], "watch-137", "{changed}");
     }
 }
