@@ -5,6 +5,7 @@ import {
   isDocked,
   maxPanelWidth,
   panelShown,
+  rightPanelMax,
   showPanel,
   togglePanel,
   widthClassFor,
@@ -128,6 +129,19 @@ describe('maxPanelWidth', () => {
     expect(maxPanelWidth(1000, 280, 200, 600)).toBe(360);
     expect(maxPanelWidth(1600, 280, 200, 600)).toBe(600);
     expect(maxPanelWidth(700, 280, 200, 600)).toBe(200);
+  });
+});
+
+describe('rightPanelMax', () => {
+  it('lets the right panel reach half the window, never less than 600px', () => {
+    expect(rightPanelMax(1920)).toBe(960);
+    expect(rightPanelMax(2560)).toBe(1280);
+    expect(rightPanelMax(1000)).toBe(600);
+  });
+
+  it('still leaves the editor 360px with the tree open', () => {
+    expect(maxPanelWidth(1920, 280, 250, rightPanelMax(1920))).toBe(960);
+    expect(maxPanelWidth(1280, 280, 250, rightPanelMax(1280))).toBe(640);
   });
 });
 

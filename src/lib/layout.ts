@@ -90,6 +90,15 @@ export const RIGHT_MIN = 250;
 export const PANEL_MAX = 600;
 
 /**
+ * The widest the docked right panel (agent chat, links...) may be dragged:
+ * half the window, never less than `PANEL_MAX`. `maxPanelWidth` still keeps
+ * the editor its `EDITOR_MIN`.
+ */
+export function rightPanelMax(windowWidth: number): number {
+  return Math.max(PANEL_MAX, Math.floor(windowWidth / 2));
+}
+
+/**
  * The widths the docked panels get in a window `windowWidth` wide, so the
  * editor keeps `EDITOR_MIN` (spec "Editor keeps its width": side panels give
  * way to the editor). `tree` and `right` are the stored widths, 0 when that

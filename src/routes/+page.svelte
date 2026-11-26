@@ -4,7 +4,7 @@
   import RightSidebarPanel from '#lib/RightSidebarPanel.svelte';
   import { actionAvailable, actionById, actionIcon, actionLabel } from '#lib/actions.js';
   import { appActions } from '#lib/action-host.js';
-  import { maxPanelWidth } from '#lib/layout.js';
+  import { maxPanelWidth, rightPanelMax, RIGHT_MIN } from '#lib/layout.js';
   import { controlTitle } from '#lib/toolbar.js';
 
   // The edit/preview toggle floats over the editor in the narrow layout
@@ -40,7 +40,8 @@
     if (!isResizingBacklinks) return;
     // The editor keeps at least 360px (spec "Editor keeps its width").
     const left = dockedPanelWidths().tree;
-    app.backlinksWidth = Math.max(250, Math.min(maxPanelWidth(window.innerWidth, left, 250, 600), window.innerWidth - e.clientX));
+    const max = maxPanelWidth(window.innerWidth, left, RIGHT_MIN, rightPanelMax(window.innerWidth));
+    app.backlinksWidth = Math.max(RIGHT_MIN, Math.min(max, window.innerWidth - e.clientX));
   }
 
   function stopResizing() {
