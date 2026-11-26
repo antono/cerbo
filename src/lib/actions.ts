@@ -36,9 +36,13 @@ import {
   TextCursorInput,
   Trash2,
   Import,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
 } from 'lucide-svelte';
 import { isMac } from './hotkeys';
 import { RIGHT_PANELS, type RightPanelId } from './right-panels';
+import { ZOOM_DEFAULT, ZOOM_MAX, ZOOM_MIN, zoomIn, zoomOut, zoomPercent } from './zoom';
 
 export type ActionIcon = typeof Search;
 
@@ -55,6 +59,8 @@ export interface ActionContext {
   rightPanelTab: RightPanelId;
   canGoBack: boolean;
   canGoForward: boolean;
+  /** Interface zoom factor, 1 = 100% (`zoom.ts`). */
+  zoom: number;
 
   /** Open or close one dialog; opening closes every other transient element. */
   toggleDialog(dialog: 'search' | 'newPage' | 'vaultSelector' | 'help' | 'sparqlConsole'): void;
@@ -80,6 +86,8 @@ export interface ActionContext {
   copyPageLink(): void;
   revealPage(): void;
   newFolder(): void;
+  /** Scale the whole interface; the caller clamps, applies and saves it. */
+  setZoom(zoom: number): void;
   quit(): void;
 }
 
@@ -350,6 +358,36 @@ export const ACTIONS: readonly Action[] = [
     run: (ctx) => ctx.setTheme(ctx.theme === 'dark' ? 'light' : 'dark'),
     helpLabel: 'Toggle light/dark theme',
   },
+  // Interface zoom: Shift is part of the hotkey (`Ctrl+Shift++`), so plain
+  // `Ctrl+-` stays free for the editor. Codes, not keys: Shift turns `=` into
+  // `+` and `-` into `_`, and other layouts put other characters there.
+  {
+    id: 'view.zoomIn',
+    label: (ctx) => `Zoom in (${zoomPercent(ctx.zoom)})`,
+    icon: ZoomIn,
+    hotkey: { mod: true, shift: true, code: 'Equal', overDialogs: true },
+    synonyms: ['zoom', 'scale', 'bigger', 'enlarge', 'larger', 'interface size'],
+    run: (ctx) => ctx.setZoom(zoomIn(ctx.zoom)),
+    helpLabel: `Enlarge the interface (up to ${zoomPercent(ZOOM_MAX)})`,
+  },
+  {
+    id: 'view.zoomOut',
+    label: (ctx) => `Zoom out (${zoomPercent(ctx.zoom)})`,
+    icon: ZoomOut,
+    hotkey: { mod: true, shift: true, code: 'Minus', overDialogs: true },
+    synonyms: ['zoom', 'scale', 'smaller', 'shrink', 'interface size'],
+    run: (ctx) => ctx.setZoom(zoomOut(ctx.zoom)),
+    helpLabel: `Shrink the interface (down to ${zoomPercent(ZOOM_MIN)})`,
+  },
+  {
+    id: 'view.zoomReset',
+    label: 'Reset zoom (100%)',
+    icon: RotateCcw,
+    hotkey: { mod: true, shift: true, code: 'Digit0', overDialogs: true },
+    synonyms: ['zoom', 'scale', 'actual size', 'default size', '100%'],
+    run: (ctx) => ctx.setZoom(ZOOM_DEFAULT),
+    helpLabel: 'Reset the interface zoom to 100%',
+  },
   {
     id: 'sparql.console',
     label: 'SPARQL console',
@@ -382,7 +420,16 @@ export const ACTIONS: readonly Action[] = [
 export const PAGE_MENU: readonly string[] = ['page.rename', 'page.move', 'page.copyLink', 'page.reveal', 'page.delete'];
 
 /** Entries of the toolbar's ⋯ menu (spec "Overflow menu"). */
-export const OVERFLOW_MENU: readonly string[] = ['theme.toggle', 'sparql.console', 'folder.new', 'help.shortcuts', 'app.quit'];
+export const OVERFLOW_MENU: readonly string[] = [
+  'theme.toggle',
+  'view.zoomIn',
+  'view.zoomOut',
+  'view.zoomReset',
+  'sparql.console',
+  'folder.new',
+  'help.shortcuts',
+  'app.quit',
+];
 
 /** Global shortcuts listed in the help, in this order. */
 export const HELP_ACTIONS: readonly string[] = [
@@ -394,6 +441,9 @@ export const HELP_ACTIONS: readonly string[] = [
   'panel.right',
   ...RIGHT_PANELS.map((p) => `panel.right.${p.id}`),
   'theme.toggle',
+  'view.zoomIn',
+  'view.zoomOut',
+  'view.zoomReset',
   'vault.switch',
   'vault.add',
   'sparql.console',
@@ -437,6 +487,8 @@ const KEY_NAMES: Record<string, string> = {
   arrowdown: '↓',
   delete: 'Del',
   backslash: '\\',
+  equal: '+',
+  minus: '-',
   escape: 'Esc',
 };
 

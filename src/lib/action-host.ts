@@ -7,6 +7,8 @@
 import { mode, setMode } from 'mode-watcher';
 import type { ActionContext } from './actions';
 import { insertionFor } from './link-picker';
+import { clampZoom } from './zoom';
+import { applyZoom } from './zoom-host';
 import {
   app,
   closeAllDialogs,
@@ -70,6 +72,9 @@ export const appActions: ActionContext = {
   },
   get canGoForward() {
     return app.historyIndex < app.history.length - 1;
+  },
+  get zoom() {
+    return app.zoom;
   },
 
   toggleDialog(dialog) {
@@ -135,6 +140,13 @@ export const appActions: ActionContext = {
   },
   newFolder() {
     triggerNewFolder();
+  },
+  setZoom(zoom) {
+    const next = clampZoom(zoom);
+    if (next === app.zoom) return;
+    app.zoom = next;
+    void applyZoom(next);
+    void saveUiSettings();
   },
   quit() {
     closeAllDialogs();

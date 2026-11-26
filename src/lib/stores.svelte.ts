@@ -27,6 +27,8 @@ import {
   type SimilarState,
 } from './similar-notes';
 import { serialQueue } from './write-queue';
+import { parseZoom } from './zoom';
+import { applyZoom } from './zoom-host';
 import {
   changeWidthClass,
   dockedWidths,
@@ -117,6 +119,8 @@ export interface UiSettings {
   collapsedFolders?: Record<string, string[]>;
   /** The sidebar view chosen per vault id; absent = the default view. */
   activeViews?: Record<string, string>;
+  /** Interface zoom factor (1 = 100%); absent in old files (= 100%). */
+  zoom?: number | null;
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system';
@@ -180,6 +184,8 @@ export const app = $state({
 
   // UI state
   theme: 'light' as ThemeMode,
+  // Interface zoom factor, 1 = 100% (`zoom.ts`, applied by `zoom-host.ts`).
+  zoom: 1,
   editorTab: 'preview' as 'write' | 'preview',
   showSearch: false,
   // Text page search opens with; `>` opens it in command mode
@@ -255,6 +261,8 @@ export async function loadUiSettings(): Promise<void> {
     app.rightPanelTab = parseRightPanel(res.rightPanelTab);
     app.uiCollapsedFolders = res.collapsedFolders ?? {};
     app.uiActiveViews = res.activeViews ?? {};
+    app.zoom = parseZoom(res.zoom);
+    if (app.zoom !== 1) void applyZoom(app.zoom);
     // `windowBounds` is applied by the desktop layer when the window opens
     // and saved by `app_exit`; the frontend never sends it (null keeps it).
   } catch (e) {
@@ -273,6 +281,7 @@ export async function saveUiSettings(): Promise<void> {
       windowBounds: null, // kept: `app_exit` saves the window size
       lastSparqlQuery: app.lastSparqlQuery,
       rightPanelTab: app.rightPanelTab,
+      zoom: app.zoom,
     });
   } catch (e) {
     console.error('Failed to save UI settings:', e);

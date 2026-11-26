@@ -85,10 +85,11 @@ fn ui_settings_save(
     windowBounds: Option<cerbo_core::ui_settings::WindowBounds>,
     lastSparqlQuery: Option<String>,
     rightPanelTab: Option<String>,
+    zoom: Option<f64>,
 ) -> Result<(), String> {
     let ctx = get_context(&app)?;
     let current = cerbo_core::ui_settings::load_ui_settings(&ctx)?;
-    let merged = cerbo_core::ui_settings::merge_ui_settings(
+    let mut merged = cerbo_core::ui_settings::merge_ui_settings(
         &current,
         theme,
         fontSize,
@@ -99,6 +100,9 @@ fn ui_settings_save(
         lastSparqlQuery,
         rightPanelTab,
     );
+    if zoom.is_some() {
+        merged.zoom = zoom;
+    }
     cerbo_core::ui_settings::save_ui_settings(&ctx, &merged)
 }
 

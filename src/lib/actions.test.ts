@@ -56,6 +56,7 @@ function context(state: Partial<ActionContext> = {}): ActionContext {
     copyPageLink: vi.fn(),
     revealPage: vi.fn(),
     newFolder: vi.fn(),
+    setZoom: vi.fn(),
     quit: vi.fn(),
   };
   return {
@@ -68,6 +69,7 @@ function context(state: Partial<ActionContext> = {}): ActionContext {
     rightPanelTab: 'links',
     canGoBack: true,
     canGoForward: true,
+    zoom: 1,
     ...ops,
     ...state,
   };
@@ -296,6 +298,59 @@ describe('hotkeys', () => {
     const ctx = context({ theme: 'dark' });
     dispatchHotkey(key({ key: 't', ctrlKey: true }), previewing, ctx, ACTIONS, false);
     expect(ctx.setTheme).toHaveBeenCalledWith('light');
+  });
+});
+
+describe('interface zoom', () => {
+  const zoomKey = (code: string, key: string) => ({ code, key, ctrlKey: true, shiftKey: true });
+
+  it('maps Ctrl+Shift+Plus, Ctrl+Shift+Minus and Ctrl+Shift+0 to the zoom actions anywhere', () => {
+    const find = (init: Partial<KeyboardEvent>, where: KeyContext = previewing) =>
+      actionForKey(key(init), where, ACTIONS, false)?.id;
+    // US layout: Shift turns `=` into `+`, `-` into `_`, `0` into `)`.
+    expect(find(zoomKey('Equal', '+'))).toBe('view.zoomIn');
+    expect(find(zoomKey('Minus', '_'))).toBe('view.zoomOut');
+    expect(find(zoomKey('Digit0', ')'))).toBe('view.zoomReset');
+    // Matched on the physical key, so other layouts' characters work too.
+    expect(find(zoomKey('Digit0', '='))).toBe('view.zoomReset');
+    // Also in the editor and over dialogs.
+    expect(find(zoomKey('Equal', '+'), editing)).toBe('view.zoomIn');
+    expect(find(zoomKey('Minus', '_'), { ...editing, dialogOpen: true })).toBe('view.zoomOut');
+    // Without Shift the keys are not the zoom shortcuts.
+    expect(find({ code: 'Equal', key: '=', ctrlKey: true })).toBeUndefined();
+    expect(find({ code: 'Minus', key: '-', ctrlKey: true })).toBeUndefined();
+  });
+
+  it('uses Cmd+Shift on Mac and shows the keys', () => {
+    const zoomIn = actionById('view.zoomIn').hotkey!;
+    expect(matchesHotkey(key({ code: 'Equal', key: '+', metaKey: true, shiftKey: true }), zoomIn, true)).toBe(true);
+    expect(matchesHotkey(key({ code: 'Equal', key: '+', ctrlKey: true, shiftKey: true }), zoomIn, true)).toBe(false);
+    expect(hotkeyText(zoomIn, true)).toBe('⌘+Shift++');
+    expect(hotkeyText(actionById('view.zoomOut').hotkey!, false)).toBe('Ctrl+Shift+-');
+    expect(hotkeyText(actionById('view.zoomReset').hotkey!, false)).toBe('Ctrl+Shift+0');
+  });
+
+  it('steps, clamps and resets the zoom through setZoom', () => {
+    const run = (id: string, zoom: number) => {
+      const ctx = context({ zoom });
+      actionById(id).run(ctx);
+      return (ctx.setZoom as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    };
+    expect(run('view.zoomIn', 1)).toBe(1.1);
+    expect(run('view.zoomOut', 1)).toBe(0.9);
+    expect(run('view.zoomIn', 2)).toBe(2);
+    expect(run('view.zoomOut', 0.5)).toBe(0.5);
+    expect(run('view.zoomReset', 1.37)).toBe(1);
+  });
+
+  it('shows the current zoom in the labels and lists zoom in the ⋯ menu', () => {
+    const ctx = context({ zoom: 1.25 });
+    expect(actionLabel(actionById('view.zoomIn'), ctx)).toBe('Zoom in (125%)');
+    expect(actionLabel(actionById('view.zoomOut'), ctx)).toBe('Zoom out (125%)');
+    for (const id of ['view.zoomIn', 'view.zoomOut', 'view.zoomReset']) {
+      expect(OVERFLOW_MENU).toContain(id);
+      expect(HELP_ACTIONS).toContain(id);
+    }
   });
 });
 

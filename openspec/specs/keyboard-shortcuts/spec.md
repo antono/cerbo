@@ -42,6 +42,22 @@ The system MUST provide a global keyboard shortcut to toggle between Light and D
 - **WHEN** the user presses `Ctrl+T` (Linux/Windows) or `Cmd+T` (Mac)
 - **THEN** the application theme SHALL toggle (Light to Dark, or Dark to Light)
 
+### Requirement: Interface Zoom Shortcuts
+The system MUST provide global keyboard shortcuts that scale the whole
+interface, the same actions as Zoom in, Zoom out and Reset zoom in the toolbar
+⋯ menu and in command mode. The zoom MUST stay within 50%..200% and MUST be
+kept across restarts.
+
+#### Scenario: Zoom in and out
+- **WHEN** the user presses `Ctrl+Shift+Plus` (`Cmd+Shift+Plus` on Mac)
+- **THEN** the interface SHALL grow to the next zoom level, up to 200%
+- **WHEN** the user presses `Ctrl+Shift+Minus` (`Cmd+Shift+Minus` on Mac)
+- **THEN** the interface SHALL shrink to the previous zoom level, down to 50%
+
+#### Scenario: Reset zoom
+- **WHEN** the user presses `Ctrl+Shift+0` (`Cmd+Shift+0` on Mac)
+- **THEN** the interface SHALL return to 100%
+
 ### Requirement: Shortcuts Help Shortcut
 The system MUST provide a global keyboard shortcut to open the Shortcuts Help modal.
 

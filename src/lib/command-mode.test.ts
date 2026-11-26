@@ -21,6 +21,7 @@ function context(state: Partial<ActionContext> = {}): ActionContext {
     rightPanelTab: 'links',
     canGoBack: true,
     canGoForward: true,
+    zoom: 1,
     toggleDialog: vi.fn(),
     openSearch: vi.fn(),
     toggleSearch: vi.fn(),
@@ -41,6 +42,7 @@ function context(state: Partial<ActionContext> = {}): ActionContext {
     copyPageLink: vi.fn(),
     revealPage: vi.fn(),
     newFolder: vi.fn(),
+    setZoom: vi.fn(),
     quit: vi.fn(),
     ...state,
   };

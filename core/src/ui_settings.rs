@@ -39,6 +39,11 @@ pub struct UiSettings {
     /// in a `ui.toml` written before views existed.
     #[serde(default)]
     pub active_views: BTreeMap<String, String>,
+    /// The desktop interface zoom factor (1.0 = 100%), kept within 0.5..=2.0
+    /// by the desktop. Absent in a `ui.toml` written before zoom existed,
+    /// which means 100%.
+    #[serde(default)]
+    pub zoom: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +98,7 @@ pub fn merge_ui_settings(
         right_panel_tab: right_panel_tab.or_else(|| base.right_panel_tab.clone()),
         collapsed_folders: base.collapsed_folders.clone(),
         active_views: base.active_views.clone(),
+        zoom: base.zoom,
     }
 }
 
@@ -161,6 +167,7 @@ mod tests {
             right_panel_tab: None,
             collapsed_folders: BTreeMap::new(),
             active_views: BTreeMap::new(),
+            zoom: None,
         };
         save_ui_settings(&ctx, &settings).unwrap();
 
@@ -293,6 +300,27 @@ mod tests {
         // Saving other settings keeps the tab.
         let kept = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None, None, None);
         assert_eq!(kept.right_panel_tab.as_deref(), Some("outline"));
+    }
+
+    #[test]
+    fn zoom_round_trip_and_old_file_without_it() {
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().join("config");
+        let ctx = CerboContext { config_dir: config_dir.clone(), cache_dir: tmp.path().join("cache") };
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(config_dir.join("ui.toml"), "theme = \"dark\"\nsidebarWidth = 137\n").unwrap();
+        assert_eq!(load_ui_settings(&ctx).unwrap().zoom, None, "missing field means 100%");
+
+        let mut zoomed = load_ui_settings(&ctx).unwrap();
+        zoomed.zoom = Some(1.25);
+        save_ui_settings(&ctx, &zoomed).unwrap();
+        let loaded = load_ui_settings(&ctx).unwrap();
+        assert_eq!(loaded.zoom, Some(1.25));
+        assert_eq!(loaded.sidebar_width, Some(137), "other settings survive");
+
+        // Saving other settings keeps the zoom.
+        let kept = merge_ui_settings(&loaded, Some("light".into()), None, None, None, None, None, None, None);
+        assert_eq!(kept.zoom, Some(1.25));
     }
 
     #[test]
